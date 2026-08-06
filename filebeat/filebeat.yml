@@ -1,0 +1,136 @@
+################################################################################
+# filebeat/filebeat.yml
+#
+# PURPOSE:
+# Reads application logs (structured JSON) and Docker container stdout/stderr,
+# then ships them to Logstash for parsing, enrichment, and forwarding to
+# Elasticsearch or other observability backends.
+#
+# REQUIREMENTS:
+# - The application must write newline-delimited JSON logs to /app/logs/
+# - Docker containers must be labeled with 'logging=true' to be captured.
+# - Mount a persistent volume at /usr/share/filebeat/data so the registry
+#   survives restarts (prevents re-shipping and duplicating old logs).
+################################################################################
+
+filebeat.inputs:
+
+  # ============================================================================
+  # INPUT 1: Application JSON Log Files
+  # ============================================================================
+  # 'filestream' replaces the deprecated 'log' input in Filebeat 8.x.
+  # Parses JSON at the Filebeat level for better performance than doing it
+  # downstream in Logstash.
+  - type: filestream
+    id: service-file-logs
+    enabled: true
+    paths:
+      # Adjust this path if your container mounts logs elsewhere
+      - /app/logs/combined.log
+      - /app/logs/error.log
+
+    parsers:
+      # Each line is one JSON document (Winston/pino style ndjson).
+      - ndjson:
+          target: ""
+          add_error_key: true
+          message_key: message
+
+    # Add custom metadata to identify the source
+    fields:
+      log_source: file
+      app: api
+    fields_under_root: true
+
+    # Resource management
+    close.on_state_change.inactive: 5m
+    prospector.scanner.check_interval: 5s
+
+  # ============================================================================
+  # INPUT 2: Docker Container stdout/stderr
+  # ============================================================================
+  # Captures logs from the Docker daemon. Acts as a fallback or complement
+  # to file-based logging, capturing anything written to console.
+  - type: container
+    id: docker-container-logs
+    enabled: true
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    stream: all
+
+    processors:
+      # Enrich with Docker metadata (container name, image, etc.)
+      - add_docker_metadata:
+          host: unix:///var/run/docker.sock
+
+      # Filter: Only collect logs from containers explicitly opted-in
+      - drop_event:
+          when:
+            not:
+              equals:
+                docker.container.labels.logging: "true"
+
+      # Attempt to parse JSON if the container outputs structured logs
+      - decode_json_fields:
+          fields: ["message", "log"]
+          target: ""
+          overwrite_keys: true
+          add_error_key: false
+
+    fields:
+      log_source: docker
+      app: api
+    fields_under_root: true
+
+# ============================================================================
+# OUTPUT: Logstash
+# ============================================================================
+# Shipping to Logstash is preferred over direct Elasticsearch output because
+# Logstash can parse, filter, and enrich logs (e.g., adding geo-ip, masking
+# sensitive data) before they are indexed.
+output.logstash:
+  hosts: ["${LOGSTASH_HOSTS:logstash:5044}"]
+  bulk_max_size: 2048
+  worker: 2
+  # Back-pressure resilience: retry with backoff instead of dropping events.
+  backoff.init: 1s
+  backoff.max: 60s
+
+  # Optional: Enable SSL/TLS if Logstash is on a different network/host
+  # ssl.enabled: true
+  # ssl.certificate_authorities: ["/etc/filebeat/certs/ca.crt"]
+
+# ============================================================================
+# GLOBAL PROCESSORS
+# ============================================================================
+# Applied to every event before sending to the output.
+processors:
+  - add_host_metadata: ~
+  - add_cloud_metadata: ~
+  # Optional: Mask sensitive fields (e.g., passwords, tokens) before they leave the host
+  # - drop_fields:
+  #     fields: ["password", "token", "authorization"]
+  #     ignore_missing: true
+
+# ============================================================================
+# FILEBEAT INTERNAL LOGGING
+# ============================================================================
+# Keep Filebeat's own logs quiet to avoid polluting the system logs.
+logging.level: warning
+logging.to_files: false
+logging.to_syslog: false
+
+# ============================================================================
+# INTERNAL METRICS
+# ============================================================================
+# Disable internal monitoring to reduce overhead.
+# (Enable only if you are actively debugging Filebeat performance)
+monitoring.enabled: false
+
+# ============================================================================
+# INDEX MANAGEMENT
+# ============================================================================
+# Disable Filebeat's automatic setup. Logstash is responsible for creating
+# the index templates and managing Index Lifecycle Management (ILM).
+setup.ilm.enabled: false
+setup.template.enabled: false

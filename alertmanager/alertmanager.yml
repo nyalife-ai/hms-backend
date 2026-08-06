@@ -1,0 +1,64 @@
+################################################################################
+# alertmanager/alertmanager.yml
+#
+# PURPOSE:
+# Routes alerts fired by Prometheus to notification channels, with grouping,
+# throttling, and severity-based escalation.
+#
+# The receivers below are inert placeholders. Wire up at least one real
+# channel (Slack, PagerDuty, email, webhook, etc.) before relying on alerts
+# in production. Keep credentials out of this file — use amtool/secret
+# mounts or environment-substituted files.
+################################################################################
+
+global:
+  # How long to wait before marking an alert resolved after it stops firing.
+  resolve_timeout: 5m
+
+route:
+  # Group alerts by name and severity so one incident produces one notification.
+  group_by: ["alertname", "severity"]
+  group_wait: 30s        # Wait for other alerts in the same group before sending
+  group_interval: 5m     # Minimum time between updates for an existing group
+  repeat_interval: 4h    # Re-notify for unresolved alerts
+
+  receiver: default
+
+  routes:
+    # Critical alerts escalate on a faster cadence.
+    - matchers:
+        - severity = "critical"
+      receiver: critical
+      group_wait: 10s
+      repeat_interval: 1h
+
+    # Informational alerts are batched aggressively to avoid noise.
+    - matchers:
+        - severity = "info"
+      receiver: default
+      group_interval: 30m
+      repeat_interval: 24h
+
+# Prevent duplicate noise: if a critical alert fires, suppress warning-level
+# alerts for the same alertname/instance.
+inhibit_rules:
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal: ["alertname", "instance"]
+
+receivers:
+  # Replace with real integrations, e.g.:
+  #
+  #   - name: critical
+  #     pagerduty_configs:
+  #       - routing_key_file: /etc/alertmanager/secrets/pagerduty-key
+  #
+  #   - name: default
+  #     slack_configs:
+  #       - api_url_file: /etc/alertmanager/secrets/slack-webhook
+  #         channel: "#alerts"
+  #         send_resolved: true
+  - name: default
+  - name: critical

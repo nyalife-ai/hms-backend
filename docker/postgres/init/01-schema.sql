@@ -1,0 +1,5 @@
+-- Optional database bootstrap script.
+-- Executed by the PostgreSQL container ONLY on first initialization of the
+-- data volume (never on subsequent starts). Prefer ORM migrations for schema
+-- management; use this file for extensions or roles, e.g.:
+--   CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

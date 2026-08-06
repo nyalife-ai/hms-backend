@@ -1,0 +1,12 @@
+export const AUTH_STRATEGY = Symbol('AUTH_STRATEGY');
+export const AUTH_STRATEGIES = Symbol('AUTH_STRATEGIES');
+export const DEFAULT_AUTH_STRATEGY = Symbol('DEFAULT_AUTH_STRATEGY');
+export const TOKEN_SERVICE = Symbol('TOKEN_SERVICE');
+export const TOKEN_SIGNER = Symbol('TOKEN_SIGNER');
+export const JWT_VERIFIER = Symbol('JWT_VERIFIER');
+export const API_KEY_STORE = Symbol('API_KEY_STORE');
+export const SESSION_STORE = Symbol('SESSION_STORE');
+export const RATE_LIMIT_STORE = Symbol('RATE_LIMIT_STORE');
+export const AUDIT_SINK = Symbol('AUDIT_SINK');
+export const IDENTITY_PROVIDER = Symbol('IDENTITY_PROVIDER');
+export const AUTH_STRATEGY_METADATA = 'security:auth-strategy';

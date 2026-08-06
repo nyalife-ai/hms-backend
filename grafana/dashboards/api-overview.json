@@ -1,0 +1,152 @@
+{
+  "title": "API Overview",
+  "uid": "api-overview",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "tags": ["api", "metrics", "nodejs"],
+  "templating": {
+    "list": [
+      {
+        "name": "interval",
+        "type": "interval",
+        "options": [
+          { "text": "1m", "value": "1m" },
+          { "text": "5m", "value": "5m" },
+          { "text": "10m", "value": "10m" }
+        ],
+        "current": { "text": "5m", "value": "5m" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Request Rate (req/s)",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(http_requests_total{job='api'}[$interval]))", "legendFormat": "req/s" }],
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "reqps", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 200 }] } } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Error Rate (5xx)",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(http_requests_total{job='api',status_code=~'5..'}[$interval])) / sum(rate(http_requests_total{job='api'}[$interval]))", "legendFormat": "error %" }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.01 }, { "color": "red", "value": 0.05 }] } } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "p95 Latency",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job='api'}[$interval])) by (le))", "legendFormat": "p95" }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.5 }, { "color": "red", "value": 2 }] } } }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Transactions Completed",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{ "expr": "sum(increase(business_transactions_completed_total{job='api'}[$interval]))", "legendFormat": "completed" }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Transaction Failure Rate",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(business_transactions_failed_total{job='api'}[$interval])) / (sum(rate(business_transactions_initiated_total{job='api'}[$interval])) + 0.001)", "legendFormat": "fail %" }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.05 }, { "color": "red", "value": 0.1 }] } } }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Node.js Heap Used",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{ "expr": "nodejs_heap_size_used_bytes{job='api'}", "legendFormat": "heap" }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "bytes", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 200000000 }, { "color": "red", "value": 400000000 }] } } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "HTTP Request Rate by Route",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(http_requests_total{job='api'}[$interval])) by (route, method)", "legendFormat": "{{method}} {{route}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Response Time Percentiles",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job='api'}[$interval])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.90, sum(rate(http_request_duration_seconds_bucket{job='api'}[$interval])) by (le))", "legendFormat": "p90" },
+        { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job='api'}[$interval])) by (le))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job='api'}[$interval])) by (le))", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Business Transactions — Initiated vs Completed vs Failed",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(rate(business_transactions_initiated_total{job='api'}[$interval]))", "legendFormat": "initiated" },
+        { "expr": "sum(rate(business_transactions_completed_total{job='api'}[$interval]))", "legendFormat": "completed" },
+        { "expr": "sum(rate(business_transactions_failed_total{job='api'}[$interval]))", "legendFormat": "failed" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "cps", "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Node.js Memory & Event Loop",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [
+        { "expr": "nodejs_heap_size_used_bytes{job='api'}", "legendFormat": "heap used" },
+        { "expr": "nodejs_heap_size_total_bytes{job='api'}", "legendFormat": "heap total" },
+        { "expr": "nodejs_eventloop_lag_seconds{job='api'} * 1000", "legendFormat": "event loop lag (ms)" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "External Integrations Processed by Source",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(integration_events_total{job='api'}[$interval])) by (source, status)", "legendFormat": "{{source}} ({{status}})" }],
+      "fieldConfig": { "defaults": { "unit": "cps", "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Background Jobs Queued by Type",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(background_jobs_queued_total{job='api'}[$interval])) by (job_type)", "legendFormat": "{{job_type}}" }],
+      "fieldConfig": { "defaults": { "unit": "cps", "custom": { "lineWidth": 2 } } }
+    }
+  ]
+}

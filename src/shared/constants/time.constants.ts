@@ -1,0 +1,9 @@
+export const MS_PER_SECOND = 1_000 as const;
+export const SECONDS_PER_MINUTE = 60 as const;
+export const MINUTES_PER_HOUR = 60 as const;
+export const HOURS_PER_DAY = 24 as const;
+export const SECONDS_PER_HOUR = 3_600 as const;
+export const SECONDS_PER_DAY = 86_400 as const;
+export const MS_PER_MINUTE = 60_000 as const;
+export const MS_PER_HOUR = 3_600_000 as const;
+export const MS_PER_DAY = 86_400_000 as const;

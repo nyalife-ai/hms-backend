@@ -1,0 +1,257 @@
+/**
+ * File: prisma-patient.repository.ts
+ * Prisma adapter for patients.patients — avoids N+1 via include/select.
+ */
+
+import { Injectable } from '@nestjs/common';
+import * as bcrypt from 'bcryptjs';
+import { Prisma } from '../../../../generated/prisma';
+import { PrismaService } from '../../../../database/prisma/prisma.service';
+import type {
+  CreatePatientDto,
+  PatientsQueryDto,
+  UpdatePatientDto,
+} from '../../dto';
+import { Patient } from '../../domain/patient.entity';
+import type {
+  IPatientRepository,
+  PatientPage,
+} from '../../interfaces/patient-repository.interface';
+
+type PatientRow = Prisma.PatientsGetPayload<{
+  include: {
+    user: { include: { core_profiles_user_id: true } };
+  };
+}>;
+
+@Injectable()
+export class PrismaPatientRepository implements IPatientRepository {
+  public constructor(private readonly prisma: PrismaService) {}
+
+  public async save(entity: Patient): Promise<Patient> {
+    const existing = await this.prisma.patients.findFirst({
+      where: { id: entity.getId(), deleted_at: null },
+    });
+    if (existing) {
+      await this.prisma.$transaction([
+        this.prisma.patients.update({
+          where: { id: entity.getId() },
+          data: {
+            blood_group: entity.getBloodGroup() ?? null,
+            allergies: entity.getAllergies() ?? null,
+            chronic_diseases: entity.getChronicDiseases() ?? null,
+            occupation: entity.getOccupation() ?? null,
+            marital_status: entity.getMaritalStatus() ?? null,
+          },
+        }),
+        this.prisma.profiles.update({
+          where: { user_id: entity.getUserId() },
+          data: {
+            first_name: entity.getFirstName(),
+            last_name: entity.getLastName(),
+            phone: entity.getPhone() ?? null,
+          },
+        }),
+      ]);
+      const refreshed = await this.findById(entity.getId());
+      if (!refreshed) throw new Error('Patient missing after update');
+      return refreshed;
+    }
+    throw new Error('Use createFromDto for new patients');
+  }
+
+  /** Atomic create: User + Profile + Patient (db.sql relationships). */
+  public async createFromDto(dto: CreatePatientDto): Promise<Patient> {
+    const count = await this.prisma.patients.count();
+    const patientNumber =
+      dto.patientNumber ??
+      `MRN-${String(10000 + count + 1).padStart(5, '0')}`;
+    const email =
+      dto.email ?? `${patientNumber.toLowerCase()}@patient.nyalife.health`;
+    const passwordHash = await bcrypt.hash('nyalife123', 10);
+    const gender = dto.gender ?? null;
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          email,
+          password_hash: passwordHash,
+          is_active: true,
+          email_verified_at: new Date(),
+        },
+      });
+      await tx.profiles.create({
+        data: {
+          user_id: user.id,
+          first_name: dto.firstName,
+          last_name: dto.lastName,
+          gender,
+          phone: dto.phone ?? null,
+          date_of_birth: dto.dateOfBirth
+            ? new Date(dto.dateOfBirth)
+            : null,
+        },
+      });
+      return tx.patients.create({
+        data: {
+          user_id: user.id,
+          patient_number: patientNumber,
+          blood_group: dto.bloodGroup ?? null,
+          allergies: dto.allergies ?? null,
+          chronic_diseases: dto.chronicDiseases ?? null,
+          occupation: dto.occupation ?? null,
+          marital_status: dto.maritalStatus ?? null,
+        },
+        include: {
+          user: { include: { core_profiles_user_id: true } },
+        },
+      });
+    });
+
+    return this.toDomain(created);
+  }
+
+  public async delete(id: string): Promise<void> {
+    await this.softDelete(id);
+  }
+
+  public async findById(id: string): Promise<Patient | null> {
+    const row = await this.prisma.patients.findFirst({
+      where: { id, deleted_at: null },
+      include: {
+        user: { include: { core_profiles_user_id: true } },
+      },
+    });
+    return row ? this.toDomain(row) : null;
+  }
+
+  public async findAll(): Promise<Patient[]> {
+    const rows = await this.prisma.patients.findMany({
+      where: { deleted_at: null },
+      take: 100,
+      include: {
+        user: { include: { core_profiles_user_id: true } },
+      },
+      orderBy: { created_at: 'desc' },
+    });
+    return rows.map((r) => this.toDomain(r));
+  }
+
+  public async exists(id: string): Promise<boolean> {
+    const n = await this.prisma.patients.count({
+      where: { id, deleted_at: null },
+    });
+    return n > 0;
+  }
+
+  public async findMany(query: PatientsQueryDto): Promise<PatientPage> {
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, 100);
+    const skip = (page - 1) * limit;
+    const sortBy = query.sortBy ?? 'created_at';
+    const sortOrder = query.sortOrder ?? 'desc';
+
+    const where: Prisma.PatientsWhereInput = {
+      deleted_at: null,
+      ...(query.bloodGroup ? { blood_group: query.bloodGroup } : {}),
+      ...(query.maritalStatus ? { marital_status: query.maritalStatus } : {}),
+      ...(query.search
+        ? {
+            OR: [
+              {
+                patient_number: {
+                  contains: query.search,
+                  mode: 'insensitive',
+                },
+              },
+              {
+                user: {
+                  core_profiles_user_id: {
+                    some: {
+                      OR: [
+                        {
+                          first_name: {
+                            contains: query.search,
+                            mode: 'insensitive',
+                          },
+                        },
+                        {
+                          last_name: {
+                            contains: query.search,
+                            mode: 'insensitive',
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.patients.count({ where }),
+      this.prisma.patients.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { [sortBy]: sortOrder },
+        include: {
+          user: { include: { core_profiles_user_id: true } },
+        },
+      }),
+    ]);
+
+    return { items: rows.map((r) => this.toDomain(r)), total };
+  }
+
+  public async softDelete(id: string): Promise<void> {
+    await this.prisma.patients.update({
+      where: { id },
+      data: { deleted_at: new Date() },
+    });
+  }
+
+  public async applyUpdate(
+    id: string,
+    dto: UpdatePatientDto,
+  ): Promise<Patient | null> {
+    const current = await this.findById(id);
+    if (!current) return null;
+    current.update({
+      firstName: dto.firstName ?? current.getFirstName(),
+      lastName: dto.lastName ?? current.getLastName(),
+      phone: dto.phone ?? current.getPhone(),
+      bloodGroup: dto.bloodGroup ?? current.getBloodGroup(),
+      allergies: dto.allergies ?? current.getAllergies(),
+      chronicDiseases: dto.chronicDiseases ?? current.getChronicDiseases(),
+      occupation: dto.occupation ?? current.getOccupation(),
+      maritalStatus: dto.maritalStatus ?? current.getMaritalStatus(),
+    });
+    return this.save(current);
+  }
+
+  protected toDomain(row: PatientRow): Patient {
+    const profile = row.user.core_profiles_user_id[0];
+    return Patient.reconstitute(
+      row.id,
+      {
+        userId: row.user_id,
+        patientNumber: row.patient_number,
+        firstName: profile?.first_name ?? '',
+        lastName: profile?.last_name ?? '',
+        bloodGroup: row.blood_group,
+        allergies: row.allergies,
+        chronicDiseases: row.chronic_diseases,
+        occupation: row.occupation,
+        maritalStatus: row.marital_status,
+        phone: profile?.phone,
+        email: row.user.email,
+      },
+      row.created_at,
+      row.updated_at,
+    );
+  }
+}

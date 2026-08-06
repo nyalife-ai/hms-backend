@@ -1,0 +1,229 @@
+################################################################################
+# .github/workflows/ci.yml
+#
+# PURPOSE:
+# Triggers on pushes and pull requests. Ensures code quality, test coverage,
+# security, and build integrity before allowing a merge or deployment.
+#
+# JOBS:
+#   lint         : ESLint + Prettier validation
+#   unit         : Jest unit tests with coverage + JUnit reporting
+#   e2e          : End-to-end tests against a real database + Redis
+#   build        : TypeScript compilation check
+#   dependencies : Dependency vulnerability scanning (yarn audit)
+#   secrets      : Secret scanning (Gitleaks)
+################################################################################
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop, "feature/**", "fix/**", "hotfix/**"]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+# Least-privilege default. Individual jobs elevate only what they need.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "20"
+  NODE_ENV: test
+  PORT: 3000
+
+  # ============================================================================
+  # DATABASE CONFIGURATION (Adjust based on your ORM/DB choice)
+  # ============================================================================
+  DB_TYPE: postgres
+  DB_HOST: localhost
+  DB_PORT: 5432
+  DB_USERNAME: app_user
+  DB_PASSWORD: app_test_pass
+  DB_NAME: app_test_db
+  DB_SYNC: "false"
+  ORM_TYPE: prisma # Change to 'typeorm' if applicable
+  DATABASE_URL: "postgresql://app_user:app_test_pass@localhost:5432/app_test_db?schema=public"
+
+  # ============================================================================
+  # REDIS CONFIGURATION
+  # ============================================================================
+  REDIS_HOST: localhost
+  REDIS_PORT: 6379
+
+  # ============================================================================
+  # APPLICATION SECRETS (Dummy values for CI only — never real credentials)
+  # ============================================================================
+  JWT_SECRET: "test-jwt-secret-must-be-at-least-32-characters-long!"
+  JWT_EXPIRATION: "1d"
+  ENCRYPTION_SECRET_KEY: "abcdefghijklmnopqrstuvwxyz123456"
+
+  # Generic placeholders for any third-party integrations your service adds.
+  # Define additional EXTERNAL_SERVICE_* variables here as your modules require.
+  EXTERNAL_SERVICE_API_KEY: "test_key"
+  EXTERNAL_SERVICE_API_SECRET: "test_secret"
+
+  PUBLIC_URL: "http://localhost:3000"
+
+jobs:
+  lint:
+    name: "Lint & Format"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - run: yarn lint --max-warnings=0
+      - run: yarn prettier --check "src/**/*.ts" "test/**/*.ts"
+
+  unit:
+    name: "Unit Tests + Coverage"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - name: "Run unit tests with coverage + JUnit output"
+        run: yarn test
+        env:
+          JEST_JUNIT_OUTPUT_DIR: ./reports/junit
+          JEST_JUNIT_OUTPUT_NAME: unit-results.xml
+      - name: "Upload JUnit results"
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-unit-results
+          path: reports/junit/
+          retention-days: 14
+      - uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage/lcov.info
+          flags: unit
+          fail_ci_if_error: false
+
+  e2e:
+    name: "E2E Tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: unit
+    services:
+      # NOTE: PostgreSQL is the default. To use MySQL/MariaDB, change the image
+      # to 'mariadb:11.8' and adjust the environment variables accordingly.
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: app_user
+          POSTGRES_PASSWORD: app_test_pass
+          POSTGRES_DB: app_test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U app_user -d app_test_db"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+
+      # ========================================================================
+      # MIGRATION STEP: Choose the one that matches your ORM_TYPE
+      # ========================================================================
+      - name: "Run Prisma Migrations"
+        if: ${{ env.ORM_TYPE == 'prisma' }}
+        run: yarn prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+
+      - name: "Run TypeORM Migrations"
+        if: ${{ env.ORM_TYPE == 'typeorm' }}
+        run: yarn migration:run
+
+      - run: yarn build
+      - name: "Run E2E tests with JUnit output"
+        run: >
+          yarn test:e2e --
+          --reporters=default --reporters=jest-junit
+          --forceExit --detectOpenHandles
+        env:
+          JEST_JUNIT_OUTPUT_DIR: ./reports/junit
+          JEST_JUNIT_OUTPUT_NAME: e2e-results.xml
+      - name: "Upload JUnit results"
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-e2e-results
+          path: reports/junit/
+          retention-days: 14
+
+  build:
+    name: "TypeScript Build Check"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - run: yarn build
+      - run: test -f dist/main.js && echo "Build successful" || exit 1
+
+  dependencies:
+    name: "Dependency Audit"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - run: yarn audit --level high
+        continue-on-error: true # Advisory only; set to false to strictly block merges
+
+  secrets:
+    name: "Secret Scanning (Gitleaks)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history so leaked-then-removed secrets are still caught
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

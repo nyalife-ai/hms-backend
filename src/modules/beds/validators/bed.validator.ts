@@ -1,0 +1,16 @@
+/**
+ * File: bed.validator.ts
+ * Module: beds
+ * Purpose: Domain validation helper stub.
+ */
+
+import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class BedValidator {
+  public assertValidName(name: string): void {
+    if (!name?.trim()) {
+      throw new Error('Name is required');
+    }
+  }
+}

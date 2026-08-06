@@ -1,0 +1,38 @@
+################################################################################
+# logstash/config/logstash.yml
+#
+# PURPOSE:
+# Core Logstash settings. Configures the HTTP API, pipeline workers,
+# and queue settings for resilience against Elasticsearch backpressure.
+################################################################################
+
+# Bind the monitoring HTTP API to all interfaces (the container port is only
+# published on 127.0.0.1 by docker-compose, so this is not publicly exposed).
+api.http.host: "0.0.0.0"
+
+# Disable X-Pack monitoring if not using Elastic Stack monitoring features
+xpack.monitoring.enabled: false
+
+# ============================================================================
+# PIPELINE PERFORMANCE & RESILIENCE
+# ============================================================================
+# Number of workers to process events. A good rule of thumb is the number of CPU cores.
+pipeline.workers: 2
+
+# Number of events to retrieve from the input queue per worker thread.
+pipeline.batch.size: 250
+
+# Maximum time (in milliseconds) to wait for events to fill a batch before flushing.
+pipeline.batch.delay: 50
+
+# ============================================================================
+# QUEUE SETTINGS (PERSISTENT QUEUE)
+# ============================================================================
+# Persistent queue prevents log loss if Logstash or Elasticsearch temporarily
+# goes down: events are written to disk (the logstash-data volume) before
+# processing and replayed after recovery.
+queue.type: persisted
+queue.max_bytes: 1gb
+
+# Guarantee at-least-once delivery for in-flight batches on unclean shutdown.
+queue.drain: true

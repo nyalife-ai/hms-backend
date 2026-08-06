@@ -1,0 +1,114 @@
+################################################################################
+# prometheus/alerts.yml
+#
+# PURPOSE:
+# Defines Prometheus alerting rules to detect infrastructure issues,
+# application degradation, and runtime anomalies.
+#
+# NOTE: The 'business_logic' group contains generic examples. Adapt the
+# metric names (e.g., job_failures_total) to match your application's
+# custom domain metrics.
+################################################################################
+
+groups:
+  # ============================================================================
+  # GROUP 1: Infrastructure & API Availability
+  # ============================================================================
+  - name: infrastructure
+    rules:
+      - alert: ApiDown
+        expr: up{job="api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API instance is down"
+          description: "The API instance {{ $labels.instance }} has been unreachable for more than 1 minute."
+
+      - alert: MonitoringTargetDown
+        expr: up{job!="api"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Monitoring target is down"
+          description: "The scrape target {{ $labels.job }} ({{ $labels.instance }}) has been unreachable for more than 5 minutes. Observability coverage is degraded."
+
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{job="api", status_code=~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total{job="api"}[5m]))
+          > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP 5xx error rate"
+          description: "More than 5% of requests are returning 5xx errors over the last 5 minutes on {{ $labels.instance }}."
+
+      - alert: SlowResponses
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket{job="api"}[5m])) by (le, route)
+          ) > 2
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow API responses (p95 > 2s)"
+          description: "The 95th percentile response time for route {{ $labels.route }} exceeds 2 seconds."
+
+  # ============================================================================
+  # GROUP 2: Business Logic & Background Processing (Generic Examples)
+  # ============================================================================
+  - name: business_logic
+    rules:
+      - alert: HighJobFailureRate
+        expr: |
+          sum(rate(job_failures_total{job="api"}[10m]))
+          /
+          (sum(rate(job_initiated_total{job="api"}[10m])) + 0.001)
+          > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High background job failure rate (>10%)"
+          description: "More than 10% of initiated background jobs are failing over the last 10 minutes."
+
+      - alert: ZeroSuccessfulTransactions
+        expr: sum(rate(successful_transactions_total{job="api"}[30m])) == 0
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "No successful transactions in 30 minutes"
+          description: "Zero successful transactions have occurred in the last 30 minutes. This may indicate a systemic issue or expected off-hours downtime."
+
+  # ============================================================================
+  # GROUP 3: Node.js Runtime Health
+  # ============================================================================
+  - name: nodejs_runtime
+    rules:
+      - alert: HighHeapUsage
+        expr: |
+          nodejs_heap_size_used_bytes{job="api"}
+          /
+          nodejs_heap_size_total_bytes{job="api"}
+          > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node.js heap usage above 85%"
+          description: "The process heap on {{ $labels.instance }} is at {{ $value | humanizePercentage }}. Consider scaling or investigating memory leaks."
+
+      - alert: EventLoopLagHigh
+        expr: nodejs_eventloop_lag_seconds{job="api"} > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node.js event loop lag > 500ms"
+          description: "The Node.js event loop on {{ $labels.instance }} is lagging by {{ $value }}s. This indicates possible CPU-bound work blocking the loop."

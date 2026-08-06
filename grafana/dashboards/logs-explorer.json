@@ -1,0 +1,174 @@
+{
+  "title": "Logs Explorer",
+  "uid": "logs-explorer",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "tags": ["logs", "elk"],
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Total Log Lines (1h)",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "uid": "elasticsearch-api" },
+      "targets": [{
+        "query": "*",
+        "metrics": [{ "type": "count", "id": "1" }],
+        "bucketAggs": [],
+        "timeField": "@timestamp"
+      }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["sum"] } },
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 2, "type": "stat", "title": "ERROR Lines (1h)",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "uid": "elasticsearch-api" },
+      "targets": [{
+        "query": "log.level:error",
+        "metrics": [{ "type": "count", "id": "1" }],
+        "bucketAggs": [],
+        "timeField": "@timestamp"
+      }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["sum"] } },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 10 }] } } }
+    },
+    {
+      "id": 3, "type": "stat", "title": "HTTP Errors 4xx/5xx (1h)",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "uid": "elasticsearch-api" },
+      "targets": [{
+        "query": "type:http_request AND http.response.status_code:>=400",
+        "metrics": [{ "type": "count", "id": "1" }],
+        "bucketAggs": [],
+        "timeField": "@timestamp"
+      }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["sum"] } },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 20 }] } } }
+    },
+    {
+      "id": 4, "type": "stat", "title": "Auth Failures (1h)",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "datasource": { "uid": "elasticsearch-api" },
+      "targets": [{
+        "query": "type:auth_login AND result:failure",
+        "metrics": [{ "type": "count", "id": "1" }],
+        "bucketAggs": [],
+        "timeField": "@timestamp"
+      }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["sum"] } },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 25 }] } } }
+    },
+    {
+      "id": 5, "type": "stat", "title": "Application Logs (1h)",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "datasource": { "uid": "elasticsearch-api" },
+      "targets": [{
+        "query": "type:log",
+        "metrics": [{ "type": "count", "id": "1" }],
+        "bucketAggs": [],
+        "timeField": "@timestamp"
+      }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["sum"] } },
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 6, "type": "stat", "title": "Business Events (1h)",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "datasource": { "uid": "elasticsearch-api" },
+      "targets": [{
+        "query": "tags:business_event",
+        "metrics": [{ "type": "count", "id": "1" }],
+        "bucketAggs": [],
+        "timeField": "@timestamp"
+      }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["sum"] } },
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Log Volume by Level",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "uid": "elasticsearch-api" },
+      "targets": [{
+        "query": "*",
+        "metrics": [{ "type": "count", "id": "1" }],
+        "bucketAggs": [
+          { "type": "date_histogram", "id": "2", "settings": { "interval": "auto" }, "field": "@timestamp" },
+          { "type": "terms", "id": "3", "field": "log.level", "settings": { "size": "5", "order": "desc", "orderBy": "1" } }
+        ],
+        "timeField": "@timestamp"
+      }],
+      "fieldConfig": { "defaults": { "custom": { "lineWidth": 2 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byName", "options": "warn" },  "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] },
+          { "matcher": { "id": "byName", "options": "info" },  "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }
+        ]
+      }
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "HTTP Requests by Status",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "uid": "elasticsearch-api" },
+      "targets": [{
+        "query": "type:http_request",
+        "metrics": [{ "type": "count", "id": "1" }],
+        "bucketAggs": [
+          { "type": "date_histogram", "id": "2", "settings": { "interval": "auto" }, "field": "@timestamp" },
+          { "type": "terms", "id": "3", "field": "http.response.status_code", "settings": { "size": "5", "order": "desc", "orderBy": "1" } }
+        ],
+        "timeField": "@timestamp"
+      }],
+      "fieldConfig": { "defaults": { "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 9, "type": "logs", "title": "Recent Error Logs",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 12 },
+      "datasource": { "uid": "elasticsearch-api" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": false
+      },
+      "targets": [{
+        "query": "log.level:error OR log.level:warn",
+        "metrics": [{ "type": "logs", "id": "1" }],
+        "bucketAggs": [{ "type": "date_histogram", "id": "2", "settings": { "interval": "auto" }, "field": "@timestamp" }],
+        "timeField": "@timestamp"
+      }]
+    },
+    {
+      "id": 10, "type": "table", "title": "Top Error Messages",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "uid": "elasticsearch-api" },
+      "targets": [{
+        "query": "log.level:error",
+        "metrics": [{ "type": "count", "id": "1" }],
+        "bucketAggs": [
+          { "type": "terms", "id": "2", "field": "message.keyword", "settings": { "size": "10", "order": "desc", "orderBy": "1" } }
+        ],
+        "timeField": "@timestamp"
+      }],
+      "fieldConfig": { "defaults": { "custom": { "align": "left" } } }
+    },
+    {
+      "id": 11, "type": "table", "title": "Slowest Requests (avg duration ms)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "uid": "elasticsearch-api" },
+      "targets": [{
+        "query": "type:http_request",
+        "metrics": [{ "type": "avg", "id": "1", "field": "http.duration_ms" }],
+        "bucketAggs": [
+          { "type": "terms", "id": "2", "field": "url.path", "settings": { "size": "10", "order": "desc", "orderBy": "1" } }
+        ],
+        "timeField": "@timestamp"
+      }],
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "align": "left" } } }
+    }
+  ]
+}

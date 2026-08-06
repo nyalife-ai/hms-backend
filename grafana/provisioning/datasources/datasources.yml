@@ -1,0 +1,83 @@
+################################################################################
+# grafana/provisioning/datasources/datasources.yml
+#
+# PURPOSE:
+# Automatically configures Prometheus and Elasticsearch data sources on first boot.
+# This eliminates manual setup and ensures consistency across environments.
+#
+# SECURITY NOTE:
+# Never commit real passwords to this file. Use Grafana's environment variable 
+# substitution (e.g., ${GF_PROMETHEUS_PASSWORD}) or secureJsonData with 
+# environment variables injected via docker-compose.
+################################################################################
+
+apiVersion: 1
+
+# ============================================================================
+# DRIFT PREVENTION
+# ============================================================================
+# Delete any existing datasources that are not defined in this file.
+# This prevents "ghost" datasources from lingering after manual UI testing.
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+  - name: Elasticsearch (API Logs)
+    orgId: 1
+
+datasources:
+  # ============================================================================
+  # DATASOURCE 1: Prometheus (Metrics)
+  # ============================================================================
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: "15s"
+      httpMethod: POST
+      # Enable Grafana Alerting on this datasource
+      manageAlerts: true
+      prometheusType: Prometheus
+      # Keep in sync with the image tag in docker-compose.observability.yml
+      prometheusVersion: "2.51.2"
+    
+    # Placeholder for basic auth if Prometheus is secured in production
+    # basicAuth: true
+    # basicAuthUser: ${PROMETHEUS_USER}
+    # secureJsonData:
+    #   basicAuthPassword: ${PROMETHEUS_PASSWORD}
+
+  # ============================================================================
+  # DATASOURCE 2: Elasticsearch (Logs via Logstash)
+  # ============================================================================
+  - name: Elasticsearch (API Logs)
+    type: elasticsearch
+    uid: elasticsearch-api
+    access: proxy
+    url: http://elasticsearch:9200
+    isDefault: false
+    editable: false
+    
+    # The index pattern to query. Ensure Logstash is writing to this pattern.
+    # The [ ] syntax tells Grafana to use time-based index rotation.
+    database: "[api-logs-]YYYY.MM.DD"
+    
+    jsonData:
+      # Must match your actual Elasticsearch version
+      esVersion: "8.0.0"
+      timeField: "@timestamp"
+      maxConcurrentShardRequests: 5
+      logMessageField: "message"
+      logLevelField: "level"
+      
+      # Interval for index rotation (Daily is standard for high-volume logs)
+      interval: Daily
+      
+    # Security placeholders for production
+    # basicAuth: true
+    # basicAuthUser: ${ELASTIC_USER}
+    # secureJsonData:
+    #   basicAuthPassword: ${ELASTIC_PASSWORD}

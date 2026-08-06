@@ -1,0 +1,409 @@
+/**
+ * Laboratory HTTP API — full domain under /laboratory/*
+ */
+
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../../common/decorators/user.decorator';
+import type { AuthUserPublic, HmsRole } from '../auth/auth.types';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
+import { LabJourneyUseCase } from './use-cases/lab-journey.usecase';
+import { LabOperationsUseCase } from './use-cases/lab-operations.usecase';
+
+const LAB_READ: HmsRole[] = [
+  'ADMIN',
+  'DOCTOR',
+  'LAB_TECHNICIAN',
+  'NURSE',
+];
+const LAB_CONFIG: HmsRole[] = ['ADMIN', 'LAB_TECHNICIAN'];
+const LAB_REQUEST_CREATE: HmsRole[] = [
+  'ADMIN',
+  'DOCTOR',
+  'LAB_TECHNICIAN',
+  'NURSE',
+];
+const LAB_TECH: HmsRole[] = ['ADMIN', 'LAB_TECHNICIAN'];
+const LAB_VERIFY: HmsRole[] = ['ADMIN', 'LAB_TECHNICIAN'];
+const LAB_CORRECT: HmsRole[] = ['ADMIN'];
+
+@ApiTags('Laboratory')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Controller('laboratory')
+export class LaboratoryController {
+  public constructor(
+    private readonly ops: LabOperationsUseCase,
+    private readonly journey: LabJourneyUseCase,
+  ) {}
+
+  // ── Overview ──────────────────────────────────────────────
+  @Get('overview')
+  @Roles(...LAB_READ)
+  overview() {
+    return this.ops.overview();
+  }
+
+  // ── Test types ────────────────────────────────────────────
+  @Get('test-types')
+  @Roles(...LAB_READ)
+  listTestTypes(
+    @Query('search') search?: string,
+    @Query('category') category?: string,
+    @Query('active') active?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.ops.listTestTypes({
+      search,
+      category,
+      active:
+        active === 'true' ? true : active === 'false' ? false : undefined,
+      take: take ? Number(take) : undefined,
+      skip: skip ? Number(skip) : undefined,
+    });
+  }
+
+  @Get('test-types/:id')
+  @Roles(...LAB_READ)
+  getTestType(@Param('id', ParseUUIDPipe) id: string) {
+    return this.ops.getTestType(id);
+  }
+
+  @Post('test-types')
+  @Roles(...LAB_CONFIG)
+  createTestType(
+    @CurrentUser() user: AuthUserPublic,
+    @Body()
+    body: {
+      testName: string;
+      category?: string;
+      description?: string;
+      standardPrice?: number;
+    },
+  ) {
+    return this.ops.createTestType({ ...body, actorUserId: user.id });
+  }
+
+  @Patch('test-types/:id')
+  @Roles(...LAB_CONFIG)
+  updateTestType(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUserPublic,
+    @Body()
+    body: {
+      testName?: string;
+      category?: string | null;
+      description?: string | null;
+      standardPrice?: number;
+      isActive?: boolean;
+    },
+  ) {
+    return this.ops.updateTestType(id, { ...body, actorUserId: user.id });
+  }
+
+  @Post('test-types/:id/deactivate')
+  @Roles(...LAB_CONFIG)
+  deactivateTestType(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.ops.setTestTypeActive(id, false, user.id);
+  }
+
+  @Post('test-types/:id/activate')
+  @Roles(...LAB_CONFIG)
+  activateTestType(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.ops.setTestTypeActive(id, true, user.id);
+  }
+
+  // ── Parameters ────────────────────────────────────────────
+  @Get('parameters')
+  @Roles(...LAB_READ)
+  listParameters(
+    @Query('testTypeId') testTypeId?: string,
+    @Query('active') active?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.ops.listParameters({
+      testTypeId,
+      active:
+        active === 'true' ? true : active === 'false' ? false : undefined,
+      search,
+    });
+  }
+
+  @Get('parameters/:id')
+  @Roles(...LAB_READ)
+  getParameter(@Param('id', ParseUUIDPipe) id: string) {
+    return this.ops.getParameter(id);
+  }
+
+  @Post('parameters')
+  @Roles(...LAB_CONFIG)
+  createParameter(
+    @CurrentUser() user: AuthUserPublic,
+    @Body()
+    body: {
+      testTypeId: string;
+      parameterName: string;
+      unitOfMeasurement?: string;
+      normalReferenceRange?: string;
+      displayOrder?: number;
+    },
+  ) {
+    return this.ops.createParameter({ ...body, actorUserId: user.id });
+  }
+
+  @Patch('parameters/:id')
+  @Roles(...LAB_CONFIG)
+  updateParameter(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUserPublic,
+    @Body()
+    body: {
+      parameterName?: string;
+      unitOfMeasurement?: string | null;
+      normalReferenceRange?: string | null;
+      displayOrder?: number;
+      isActive?: boolean;
+    },
+  ) {
+    return this.ops.updateParameter(id, { ...body, actorUserId: user.id });
+  }
+
+  // ── Requests ──────────────────────────────────────────────
+  @Get('requests')
+  @Roles(...LAB_READ)
+  listRequests(
+    @Query('patientId') patientId?: string,
+    @Query('status') status?: string,
+    @Query('priority') priority?: string,
+    @Query('requestingDoctorId') requestingDoctorId?: string,
+    @Query('search') search?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.ops.listRequests({
+      patientId,
+      status,
+      priority,
+      requestingDoctorId,
+      search,
+      take: take ? Number(take) : undefined,
+      skip: skip ? Number(skip) : undefined,
+    });
+  }
+
+  @Get('requests/:id')
+  @Roles(...LAB_READ)
+  getRequest(@Param('id', ParseUUIDPipe) id: string) {
+    return this.ops.getRequest(id);
+  }
+
+  @Post('requests')
+  @Roles(...LAB_REQUEST_CREATE)
+  @ApiOperation({ summary: 'Create laboratory request' })
+  createRequest(
+    @Body()
+    body: {
+      patientId: string;
+      requestingDoctorId?: string;
+      consultationId?: string;
+      testTypeIds?: string[];
+      testTypeId?: string;
+      priority?: string;
+      notes?: string;
+    },
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.journey.createRequest({
+      ...body,
+      requestedBy: user.id,
+    });
+  }
+
+  @Post('requests/:id/cancel')
+  @Roles(...LAB_REQUEST_CREATE)
+  cancelRequest(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.journey.cancelRequest(id, user.id);
+  }
+
+  @Post('requests/:id/samples')
+  @Roles(...LAB_TECH)
+  @ApiOperation({ summary: 'Register specimen for a request' })
+  collectSample(
+    @Param('id', ParseUUIDPipe) requestId: string,
+    @Body()
+    body: {
+      collectedBy?: string;
+      sampleType?: string;
+      notes?: string;
+      collectedDate?: string;
+    },
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.journey.collectSample({
+      requestId,
+      collectedBy: body.collectedBy || user.id,
+      sampleType: body.sampleType,
+      notes: body.notes,
+      collectedDate: body.collectedDate,
+    });
+  }
+
+  @Post('requests/:id/results')
+  @Roles(...LAB_TECH)
+  @ApiOperation({ summary: 'Enter a lab result (or batch via lines[])' })
+  enterResult(
+    @Param('id', ParseUUIDPipe) requestId: string,
+    @Body()
+    body: {
+      parameterId?: string;
+      resultValue?: string;
+      interpretation?: string;
+      notes?: string;
+      lines?: Array<{
+        parameterId: string;
+        resultValue: string;
+        interpretation?: string;
+        notes?: string;
+      }>;
+    },
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    if (body.lines?.length) {
+      return this.journey.enterResultsBatch({
+        requestId,
+        performedBy: user.id,
+        lines: body.lines,
+      });
+    }
+    return this.journey.enterResult({
+      requestId,
+      parameterId: body.parameterId!,
+      resultValue: body.resultValue!,
+      interpretation: body.interpretation,
+      notes: body.notes,
+      performedBy: user.id,
+    });
+  }
+
+  @Post('requests/:id/results/:resultId/verify')
+  @Roles(...LAB_VERIFY)
+  @ApiOperation({ summary: 'Verify a result; completes request when all done' })
+  verify(
+    @Param('id', ParseUUIDPipe) requestId: string,
+    @Param('resultId', ParseUUIDPipe) resultId: string,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.journey.verifyResult({
+      requestId,
+      resultId,
+      verifiedBy: user.id,
+    });
+  }
+
+  @Post('requests/:id/results/:resultId/correct')
+  @Roles(...LAB_CORRECT)
+  @ApiOperation({ summary: 'Admin correction — clears verification' })
+  correct(
+    @Param('id', ParseUUIDPipe) requestId: string,
+    @Param('resultId', ParseUUIDPipe) resultId: string,
+    @CurrentUser() user: AuthUserPublic,
+    @Body()
+    body: {
+      resultValue: string;
+      interpretation?: string;
+      notes?: string;
+    },
+  ) {
+    return this.journey.correctResult({
+      requestId,
+      resultId,
+      resultValue: body.resultValue,
+      interpretation: body.interpretation,
+      notes: body.notes,
+      actorUserId: user.id,
+    });
+  }
+
+  // ── Samples ───────────────────────────────────────────────
+  @Get('samples')
+  @Roles(...LAB_READ)
+  listSamples(
+    @Query('requestId') requestId?: string,
+    @Query('patientId') patientId?: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.ops.listSamples({
+      requestId,
+      patientId,
+      status,
+      search,
+      take: take ? Number(take) : undefined,
+      skip: skip ? Number(skip) : undefined,
+    });
+  }
+
+  @Get('samples/:id')
+  @Roles(...LAB_READ)
+  getSample(@Param('id', ParseUUIDPipe) id: string) {
+    return this.ops.getSample(id);
+  }
+
+  @Post('samples/:id/status')
+  @Roles(...LAB_TECH)
+  updateSampleStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUserPublic,
+    @Body() body: { status: string; notes?: string },
+  ) {
+    return this.journey.updateSampleStatus({
+      sampleId: id,
+      status: body.status,
+      notes: body.notes,
+      actorUserId: user.id,
+    });
+  }
+
+  // ── Results ───────────────────────────────────────────────
+  @Get('results')
+  @Roles(...LAB_READ)
+  listResults(
+    @Query('requestId') requestId?: string,
+    @Query('criticalOnly') criticalOnly?: string,
+    @Query('unverifiedOnly') unverifiedOnly?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.ops.listResults({
+      requestId,
+      criticalOnly: criticalOnly === 'true',
+      unverifiedOnly: unverifiedOnly === 'true',
+      take: take ? Number(take) : undefined,
+      skip: skip ? Number(skip) : undefined,
+    });
+  }
+}

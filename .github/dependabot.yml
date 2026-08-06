@@ -1,0 +1,56 @@
+################################################################################
+# .github/dependabot.yml
+#
+# PURPOSE:
+# Automated dependency updates for npm packages, GitHub Actions, and Docker
+# base images. Keeps the scaffold patched against known vulnerabilities
+# without manual intervention.
+################################################################################
+
+version: 2
+
+updates:
+  # npm dependencies
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+    open-pull-requests-limit: 10
+    groups:
+      # Group non-major updates to reduce PR noise
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - dependencies
+
+  # GitHub Actions used in workflows
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+      - ci
+
+  # Docker base images (Dockerfile)
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+    commit-message:
+      prefix: "chore(docker)"
+    labels:
+      - dependencies
+      - docker

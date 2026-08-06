@@ -1,0 +1,54 @@
+################################################################################
+# .github/workflows/codeql.yml
+#
+# PURPOSE:
+# Static Application Security Testing (SAST) via GitHub CodeQL.
+# Scans TypeScript/JavaScript for injection flaws, insecure crypto, path
+# traversal, and other OWASP-class vulnerabilities. Results appear under
+# the repository's "Security" tab.
+#
+# Runs on pushes/PRs to main branches and weekly to pick up new query packs.
+################################################################################
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Weekly on Wednesdays at 03:00 UTC
+    - cron: "0 3 * * 3"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: "CodeQL Analysis"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Initialize CodeQL"
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # 'security-and-quality' adds maintainability queries on top of the
+          # default security suite. Use 'security-extended' for deeper scans.
+          queries: security-and-quality
+
+      - name: "Perform CodeQL Analysis"
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

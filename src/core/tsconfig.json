@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictBindCallApply": true,
+    "strictFunctionTypes": true,
+    "strictPropertyInitialization": true,
+    "noImplicitThis": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": false,
+    "rootDir": ".",
+    "outDir": "../../dist/core",
+    "declaration": true,
+    "experimentalDecorators": false,
+    "emitDecoratorMetadata": false
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["./**/__tests__/**", "./**/*.spec.ts"]
+}

@@ -1,0 +1,34 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "declaration": true,
+    "noEmit": false,
+    "incremental": true,
+    "tsBuildInfoFile": "./dist/tsconfig.framework.tsbuildinfo"
+  },
+  "include": [
+    "src/core/**/*.ts",
+    "src/platform/**/*.ts",
+    "src/infrastructure/**/*.ts",
+    "src/shared/**/*.ts",
+    "src/common/**/*.ts",
+    "src/config/**/*.ts",
+    "src/database/**/*.ts",
+    "src/interfaces/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test",
+    "**/*spec.ts",
+    "**/__tests__/**",
+    "src/modules/**",
+    "src/main.ts",
+    "src/app.module.ts",
+    "src/app.controller.ts",
+    "src/app.service.ts",
+    "src/data-source.ts"
+  ]
+}

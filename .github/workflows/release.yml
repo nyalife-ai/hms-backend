@@ -1,0 +1,38 @@
+################################################################################
+# .github/workflows/release.yml
+#
+# PURPOSE:
+# Automated semantic versioning and release management via release-please.
+#
+# HOW IT WORKS:
+# 1. Every merge to main is analyzed for Conventional Commit messages
+#    (feat: -> minor, fix: -> patch, feat!: / BREAKING CHANGE -> major).
+# 2. release-please maintains an open "release PR" that accumulates changes
+#    and updates CHANGELOG.md + the version field in package.json.
+# 3. Merging the release PR creates a Git tag (vX.Y.Z) and a GitHub Release.
+#
+# The tag then flows into the CD workflow's docker/metadata-action semver
+# tagging, so images are published as ghcr.io/<repo>:X.Y.Z automatically.
+################################################################################
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    name: "Release Please"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          release-type: node

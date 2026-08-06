@@ -1,0 +1,35 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": ".",
+  "testEnvironment": "node",
+  "setupFiles": ["<rootDir>/setup-e2e-env.js"],
+  "testRegex": ".e2e-spec.ts$",
+  "transform": {
+    "^.+\\.(t|j)s$": [
+      "ts-jest",
+      {
+        "tsconfig": {
+          "module": "commonjs",
+          "moduleResolution": "node"
+        }
+      }
+    ]
+  },
+  "moduleNameMapper": {
+    "^src/(.*)$": "<rootDir>/../src/$1"
+  },
+  "testTimeout": 60000,
+  "maxWorkers": 1,
+  "forceExit": true,
+  "detectOpenHandles": true,
+  "reporters": [
+    "default",
+    [
+      "jest-junit",
+      {
+        "outputDirectory": "./reports/junit",
+        "outputName": "e2e-results.xml"
+      }
+    ]
+  ]
+}

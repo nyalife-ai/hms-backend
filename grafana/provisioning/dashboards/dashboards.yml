@@ -1,0 +1,48 @@
+################################################################################
+# grafana/provisioning/dashboards/dashboards.yml
+#
+# PURPOSE:
+# Automatically provisions Grafana dashboards from JSON files located in the
+# specified directory. This ensures dashboards are version-controlled and
+# reproducible across environments.
+#
+# USAGE:
+# Place exported dashboard JSON files in grafana/dashboards/ in this repo.
+# docker-compose mounts that folder to /var/lib/grafana/dashboards, and
+# Grafana automatically detects and loads them on startup.
+#
+# NOTE: Dashboard JSON is intentionally kept OUTSIDE /etc/grafana/provisioning
+# so provider configs (this file) and dashboard content are cleanly separated.
+################################################################################
+
+apiVersion: 1
+
+providers:
+  - name: 'Service Dashboards'
+    orgId: 1
+    folder: 'Services'
+    type: file
+
+    # ============================================================================
+    # PROTECTION & UPDATE SETTINGS
+    # ============================================================================
+    # Prevent users from accidentally deleting provisioned dashboards via the UI.
+    # This ensures your Git repository remains the single source of truth.
+    disableDeletion: true
+
+    # Allow users to tweak dashboards in the UI for debugging.
+    # Note: Changes made in the UI are lost on container restart unless saved
+    # back to the JSON file in your repository.
+    allowUiUpdates: true
+
+    # How often Grafana scans the directory for new/updated JSON files (seconds)
+    updateIntervalSeconds: 30
+
+    options:
+      # Must match the volume mount in docker-compose.observability.yml:
+      #   - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      path: /var/lib/grafana/dashboards
+
+      # Automatically create folders based on the directory structure inside
+      # the 'path' directory. Keeps large numbers of dashboards organized.
+      foldersFromFilesStructure: true

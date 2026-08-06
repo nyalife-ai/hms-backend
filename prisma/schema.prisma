@@ -1,0 +1,1640 @@
+// ============================================================================
+// NyaLife HMS — Prisma schema (multi-schema PostgreSQL / Supabase)
+// ============================================================================
+// Generated from prisma/migrations/20260803120000_init_hms/migration.sql
+// Regenerate: node scripts/sql-to-prisma.mjs
+//
+// Supabase connection:
+//   DATABASE_URL  = Transaction pooler (port 6543) + ?pgbouncer=true
+//   DIRECT_URL    = Direct/session connection (port 5432) for migrations
+// ============================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+  output          = "../src/generated/prisma"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  schemas   = ["core", "patients", "clinical", "inpatient", "pharmacy", "laboratory", "radiology", "billing", "communications"]
+}
+
+model User {
+  id String @db.Uuid @id @default(uuid())
+  email String @db.VarChar(255) @unique
+  password_hash String? @db.VarChar(255)
+  is_active Boolean @default(true)
+  email_verified_at DateTime? @db.Timestamptz(6)
+  last_login DateTime? @db.Timestamptz(6)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  deleted_at DateTime? @db.Timestamptz(6)
+  core_profiles_user_id Profiles[] @relation(name: "Profiles_User_user_id")
+  core_staff_profiles_user_id StaffProfiles[] @relation(name: "StaffProfiles_User_user_id")
+  core_user_roles_user_id UserRoles[] @relation(name: "UserRoles_User_user_id")
+  core_user_roles_granted_by UserRoles[] @relation(name: "UserRoles_User_granted_by")
+  core_audit_logs_user_id AuditLogs[] @relation(name: "AuditLogs_User_user_id")
+  core_access_logs_user_id AccessLogs[] @relation(name: "AccessLogs_User_user_id")
+  core_settings_updated_by Settings[] @relation(name: "Settings_User_updated_by")
+  patients_patients_user_id Patients[] @relation(name: "Patients_User_user_id")
+  patients_documents_uploaded_by Documents[] @relation(name: "Documents_User_uploaded_by")
+  patients_data_consents_granted_by DataConsents[] @relation(name: "DataConsents_User_granted_by")
+  clinical_appointments_created_by Appointments[] @relation(name: "Appointments_User_created_by")
+  clinical_consultations_created_by Consultations[] @relation(name: "Consultations_User_created_by")
+  clinical_vital_signs_recorded_by VitalSigns[] @relation(name: "VitalSigns_User_recorded_by")
+  clinical_vital_signs_voided_by VitalSigns[] @relation(name: "VitalSigns_User_voided_by")
+  clinical_follow_ups_created_by FollowUps[] @relation(name: "FollowUps_User_created_by")
+  inpatient_bed_transfers_authorized_by BedTransfers[] @relation(name: "BedTransfers_User_authorized_by")
+  inpatient_bed_reservations_reserved_by BedReservations[] @relation(name: "BedReservations_User_reserved_by")
+  inpatient_discharge_summaries_finalized_by DischargeSummaries[] @relation(name: "DischargeSummaries_User_finalized_by")
+  pharmacy_batches_created_by Batches[] @relation(name: "Batches_User_created_by")
+  pharmacy_stock_movements_performed_by StockMovements[] @relation(name: "StockMovements_User_performed_by")
+  pharmacy_prescriptions_voided_by Prescriptions[] @relation(name: "Prescriptions_User_voided_by")
+  pharmacy_prescription_lines_dispensed_by PrescriptionLines[] @relation(name: "PrescriptionLines_User_dispensed_by")
+  pharmacy_purchase_orders_created_by PurchaseOrders[] @relation(name: "PurchaseOrders_User_created_by")
+  laboratory_requests_requested_by LaboratoryRequests[] @relation(name: "LaboratoryRequests_User_requested_by")
+  laboratory_results_performed_by Results[] @relation(name: "Results_User_performed_by")
+  laboratory_results_verified_by Results[] @relation(name: "Results_User_verified_by")
+  radiology_requests_requested_by RadiologyRequests[] @relation(name: "RadiologyRequests_User_requested_by")
+  radiology_images_uploaded_by Images[] @relation(name: "Images_User_uploaded_by")
+  billing_journal_entries_created_by JournalEntries[] @relation(name: "JournalEntries_User_created_by")
+  billing_journal_entries_posted_by JournalEntries[] @relation(name: "JournalEntries_User_posted_by")
+  billing_invoices_created_by Invoices[] @relation(name: "Invoices_User_created_by")
+  billing_credit_notes_issued_by CreditNotes[] @relation(name: "CreditNotes_User_issued_by")
+  billing_payments_received_by Payments[] @relation(name: "Payments_User_received_by")
+  billing_insurance_claims_created_by InsuranceClaims[] @relation(name: "InsuranceClaims_User_created_by")
+  billing_bank_reconciliations_performed_by BankReconciliations[] @relation(name: "BankReconciliations_User_performed_by")
+  billing_budgets_approved_by Budgets[] @relation(name: "Budgets_User_approved_by")
+  billing_budgets_created_by Budgets[] @relation(name: "Budgets_User_created_by")
+  communications_conversations_created_by Conversations[] @relation(name: "Conversations_User_created_by")
+  communications_conversation_participants_user_id ConversationParticipants[] @relation(name: "ConversationParticipants_User_user_id")
+  communications_messages_sender_id Messages[] @relation(name: "Messages_User_sender_id")
+  communications_message_delivery_receipts_recipient_id MessageDeliveryReceipts[] @relation(name: "MessageDeliveryReceipts_User_recipient_id")
+  communications_message_reactions_user_id MessageReactions[] @relation(name: "MessageReactions_User_user_id")
+  communications_message_edit_history_edited_by MessageEditHistory[] @relation(name: "MessageEditHistory_User_edited_by")
+  communications_notifications_user_id Notifications[] @relation(name: "Notifications_User_user_id")
+  core_refresh_tokens_user_id RefreshTokens[] @relation(name: "RefreshTokens_User_user_id")
+  @@map("users")
+  @@schema("core")
+}
+
+model Profiles {
+  id String @db.Uuid @id @default(uuid())
+  user_id String @db.Uuid @unique
+  first_name String @db.VarChar(100)
+  last_name String @db.VarChar(100)
+  date_of_birth DateTime? @db.Date
+  gender String? @db.VarChar(20)
+  phone String? @db.VarChar(30)
+  address String?
+  city String? @db.VarChar(100)
+  country String? @db.VarChar(100)
+  postal_code String? @db.VarChar(20)
+  profile_image String? @db.VarChar(500)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  deleted_at DateTime? @db.Timestamptz(6)
+  user User @relation(fields: [user_id], references: [id], name: "Profiles_User_user_id", onDelete: Cascade)
+  @@map("profiles")
+  @@schema("core")
+}
+
+model StaffProfiles {
+  id String @db.Uuid @id @default(uuid())
+  user_id String @db.Uuid @unique
+  employee_id String @db.VarChar(30) @unique
+  department_id String? @db.Uuid
+  position String? @db.VarChar(100)
+  specialization String? @db.VarChar(100)
+  qualification String?
+  join_date DateTime @db.Date
+  emergency_contact_name String? @db.VarChar(100)
+  emergency_contact_phone String? @db.VarChar(30)
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  deleted_at DateTime? @db.Timestamptz(6)
+  user User @relation(fields: [user_id], references: [id], name: "StaffProfiles_User_user_id", onDelete: Cascade)
+  clinical_appointments_doctor_id Appointments[] @relation(name: "Appointments_StaffProfiles_doctor_id")
+  clinical_consultations_doctor_id Consultations[] @relation(name: "Consultations_StaffProfiles_doctor_id")
+  clinical_procedures_performer_id Procedures[] @relation(name: "Procedures_StaffProfiles_performer_id")
+  clinical_unavailability_doctor_id Unavailability[] @relation(name: "Unavailability_StaffProfiles_doctor_id")
+  inpatient_admissions_admitting_doctor_id Admissions[] @relation(name: "Admissions_StaffProfiles_admitting_doctor_id")
+  inpatient_nursing_notes_nurse_id NursingNotes[] @relation(name: "NursingNotes_StaffProfiles_nurse_id")
+  inpatient_discharge_summaries_discharging_doctor_id DischargeSummaries[] @relation(name: "DischargeSummaries_StaffProfiles_discharging_doctor_id")
+  pharmacy_prescriptions_prescribed_by Prescriptions[] @relation(name: "Prescriptions_StaffProfiles_prescribed_by")
+  laboratory_requests_requesting_doctor_id LaboratoryRequests[] @relation(name: "LaboratoryRequests_StaffProfiles_requesting_doctor_id")
+  laboratory_samples_collected_by Samples[] @relation(name: "Samples_StaffProfiles_collected_by")
+  radiology_requests_requesting_doctor_id RadiologyRequests[] @relation(name: "RadiologyRequests_StaffProfiles_requesting_doctor_id")
+  radiology_findings_radiologist_id Findings[] @relation(name: "Findings_StaffProfiles_radiologist_id")
+  @@map("staff_profiles")
+  @@schema("core")
+}
+
+model Roles {
+  id String @db.Uuid @id @default(uuid())
+  name String @db.VarChar(50) @unique
+  description String?
+  is_system Boolean @default(false)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  core_user_roles_role_id UserRoles[] @relation(name: "UserRoles_Roles_role_id")
+  core_role_permissions_role_id RolePermissions[] @relation(name: "RolePermissions_Roles_role_id")
+  @@map("roles")
+  @@schema("core")
+}
+
+model Permissions {
+  id String @db.Uuid @id @default(uuid())
+  name String @db.VarChar(150) @unique
+  description String?
+  module String @db.VarChar(50)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  core_role_permissions_permission_id RolePermissions[] @relation(name: "RolePermissions_Permissions_permission_id")
+  @@map("permissions")
+  @@schema("core")
+}
+
+model UserRoles {
+  user_id String @db.Uuid
+  role_id String @db.Uuid
+  granted_at DateTime @db.Timestamptz(6) @default(now())
+  granted_by String? @db.Uuid
+  user User @relation(fields: [user_id], references: [id], name: "UserRoles_User_user_id", onDelete: Cascade)
+  role Roles @relation(fields: [role_id], references: [id], name: "UserRoles_Roles_role_id", onDelete: Cascade)
+  rel_granted_by User? @relation(fields: [granted_by], references: [id], name: "UserRoles_User_granted_by", onDelete: SetNull)
+  @@id([user_id, role_id])
+  @@map("user_roles")
+  @@schema("core")
+}
+
+model RolePermissions {
+  role_id String @db.Uuid
+  permission_id String @db.Uuid
+  role Roles @relation(fields: [role_id], references: [id], name: "RolePermissions_Roles_role_id", onDelete: Cascade)
+  permission Permissions @relation(fields: [permission_id], references: [id], name: "RolePermissions_Permissions_permission_id", onDelete: Cascade)
+  @@id([role_id, permission_id])
+  @@map("role_permissions")
+  @@schema("core")
+}
+
+model RefreshTokens {
+  id String @db.Uuid @id @default(uuid())
+  user_id String @db.Uuid
+  token_hash String @db.VarChar(64) @unique
+  expires_at DateTime @db.Timestamptz(6)
+  revoked_at DateTime? @db.Timestamptz(6)
+  replaced_by String? @db.Uuid
+  user_agent String?
+  ip_address String? @db.VarChar(45)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  user User @relation(fields: [user_id], references: [id], name: "RefreshTokens_User_user_id", onDelete: Cascade)
+  @@index([user_id])
+  @@map("refresh_tokens")
+  @@schema("core")
+}
+
+model AuditLogs {
+  id String @db.Uuid @id @default(uuid())
+  user_id String? @db.Uuid
+  action String @db.VarChar(20)
+  entity_type String @db.VarChar(100)
+  entity_id String @db.Uuid
+  old_values Json?
+  new_values Json?
+  ip_address String? @db.VarChar(45)
+  user_agent String?
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  user User? @relation(fields: [user_id], references: [id], name: "AuditLogs_User_user_id", onDelete: SetNull)
+  @@map("audit_logs")
+  @@schema("core")
+}
+
+model AccessLogs {
+  id String @db.Uuid @id @default(uuid())
+  user_id String @db.Uuid
+  patient_id String? @db.Uuid
+  entity_type String? @db.VarChar(100)
+  entity_id String? @db.Uuid
+  ip_address String? @db.VarChar(45)
+  user_agent String?
+  accessed_at DateTime @db.Timestamptz(6) @default(now())
+  user User @relation(fields: [user_id], references: [id], name: "AccessLogs_User_user_id", onDelete: Cascade)
+  @@map("access_logs")
+  @@schema("core")
+}
+
+model Settings {
+  id String @db.Uuid @id @default(uuid())
+  key String @db.VarChar(100) @unique
+  value String
+  type String @db.VarChar(20) @default("text")
+  group_name String @db.VarChar(50) @default("general")
+  label String? @db.VarChar(150)
+  description String?
+  is_public Boolean @default(false)
+  updated_by String? @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  rel_updated_by User? @relation(fields: [updated_by], references: [id], name: "Settings_User_updated_by", onDelete: SetNull)
+  @@map("settings")
+  @@schema("core")
+}
+
+model InsuranceProviders {
+  id String @db.Uuid @id @default(uuid())
+  name String @db.VarChar(150)
+  code String @db.VarChar(30) @unique
+  logo_path String? @db.VarChar(500)
+  contact_person String? @db.VarChar(100)
+  phone String? @db.VarChar(30)
+  email String? @db.VarChar(150)
+  address String?
+  claim_submission_method String? @db.VarChar(50)
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  patients_insurance_policies_provider_id InsurancePolicies[] @relation(name: "InsurancePolicies_InsuranceProviders_provider_id")
+  @@map("insurance_providers")
+  @@schema("core")
+}
+
+model Departments {
+  id String @db.Uuid @id @default(uuid())
+  name String @db.VarChar(100) @unique
+  code String @db.VarChar(10) @unique
+  type String @db.VarChar(20) @default("CLINICAL")
+  description String?
+  head_name String? @db.VarChar(100)
+  head_position String? @db.VarChar(100)
+  head_image String? @db.VarChar(500)
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  inpatient_wards_department_id Wards[] @relation(name: "Wards_Departments_department_id")
+  @@map("departments")
+  @@schema("core")
+}
+
+model Patients {
+  id String @db.Uuid @id @default(uuid())
+  user_id String @db.Uuid @unique
+  patient_number String @db.VarChar(30) @unique
+  blood_group String? @db.VarChar(5)
+  allergies String?
+  chronic_diseases String?
+  occupation String? @db.VarChar(100)
+  marital_status String? @db.VarChar(20)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  deleted_at DateTime? @db.Timestamptz(6)
+  user User @relation(fields: [user_id], references: [id], name: "Patients_User_user_id", onDelete: Cascade)
+  patients_insurance_policies_patient_id InsurancePolicies[] @relation(name: "InsurancePolicies_Patients_patient_id")
+  patients_emergency_contacts_patient_id EmergencyContacts[] @relation(name: "EmergencyContacts_Patients_patient_id")
+  patients_documents_patient_id Documents[] @relation(name: "Documents_Patients_patient_id")
+  patients_data_consents_patient_id DataConsents[] @relation(name: "DataConsents_Patients_patient_id")
+  patients_advanced_directives_patient_id AdvancedDirectives[] @relation(name: "AdvancedDirectives_Patients_patient_id")
+  clinical_appointments_patient_id Appointments[] @relation(name: "Appointments_Patients_patient_id")
+  clinical_consultations_patient_id Consultations[] @relation(name: "Consultations_Patients_patient_id")
+  clinical_diagnoses_patient_id Diagnoses[] @relation(name: "Diagnoses_Patients_patient_id")
+  clinical_procedures_patient_id Procedures[] @relation(name: "Procedures_Patients_patient_id")
+  clinical_vital_signs_patient_id VitalSigns[] @relation(name: "VitalSigns_Patients_patient_id")
+  clinical_follow_ups_patient_id FollowUps[] @relation(name: "FollowUps_Patients_patient_id")
+  clinical_telehealth_consents_patient_id TelehealthConsents[] @relation(name: "TelehealthConsents_Patients_patient_id")
+  inpatient_admissions_patient_id Admissions[] @relation(name: "Admissions_Patients_patient_id")
+  inpatient_bed_reservations_patient_id BedReservations[] @relation(name: "BedReservations_Patients_patient_id")
+  pharmacy_prescriptions_patient_id Prescriptions[] @relation(name: "Prescriptions_Patients_patient_id")
+  laboratory_requests_patient_id LaboratoryRequests[] @relation(name: "LaboratoryRequests_Patients_patient_id")
+  laboratory_samples_patient_id Samples[] @relation(name: "Samples_Patients_patient_id")
+  radiology_requests_patient_id RadiologyRequests[] @relation(name: "RadiologyRequests_Patients_patient_id")
+  billing_invoices_patient_id Invoices[] @relation(name: "Invoices_Patients_patient_id")
+  billing_credit_notes_patient_id CreditNotes[] @relation(name: "CreditNotes_Patients_patient_id")
+  billing_payments_patient_id Payments[] @relation(name: "Payments_Patients_patient_id")
+  billing_insurance_claims_patient_id InsuranceClaims[] @relation(name: "InsuranceClaims_Patients_patient_id")
+  clinical_outpatient_visits_patient_id OutpatientVisits[] @relation(name: "OutpatientVisits_Patients_patient_id")
+  @@map("patients")
+  @@schema("patients")
+}
+
+model InsurancePolicies {
+  id String @db.Uuid @id @default(uuid())
+  patient_id String @db.Uuid
+  provider_id String @db.Uuid
+  policy_number String @db.VarChar(100)
+  group_number String? @db.VarChar(50)
+  member_type String @db.VarChar(20) @default("PRINCIPAL")
+  principal_policy_id String? @db.Uuid
+  start_date DateTime @db.Date
+  expiry_date DateTime @db.Date
+  copay_amount Decimal? @db.Decimal(12, 2) @default(0)
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  patient Patients @relation(fields: [patient_id], references: [id], name: "InsurancePolicies_Patients_patient_id", onDelete: Cascade)
+  provider InsuranceProviders @relation(fields: [provider_id], references: [id], name: "InsurancePolicies_InsuranceProviders_provider_id")
+  principal_policy InsurancePolicies? @relation(fields: [principal_policy_id], references: [id], name: "InsurancePolicies_InsurancePolicies_principal_policy_id", onDelete: SetNull)
+  patients_insurance_policies_principal_policy_id InsurancePolicies[] @relation(name: "InsurancePolicies_InsurancePolicies_principal_policy_id")
+  billing_insurance_claims_insurance_policy_id InsuranceClaims[] @relation(name: "InsuranceClaims_InsurancePolicies_insurance_policy_id")
+  @@map("insurance_policies")
+  @@schema("patients")
+}
+
+model EmergencyContacts {
+  id String @db.Uuid @id @default(uuid())
+  patient_id String @db.Uuid
+  name String @db.VarChar(100)
+  phone String @db.VarChar(30)
+  relationship String? @db.VarChar(50)
+  is_primary Boolean @default(false)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  patient Patients @relation(fields: [patient_id], references: [id], name: "EmergencyContacts_Patients_patient_id", onDelete: Cascade)
+  @@map("emergency_contacts")
+  @@schema("patients")
+}
+
+model Documents {
+  id String @db.Uuid @id @default(uuid())
+  patient_id String @db.Uuid
+  document_type String @db.VarChar(50)
+  file_name String @db.VarChar(255)
+  file_path String @db.VarChar(500)
+  mime_type String? @db.VarChar(50)
+  file_size BigInt?
+  is_confidential Boolean @default(false)
+  uploaded_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  deleted_at DateTime? @db.Timestamptz(6)
+  patient Patients @relation(fields: [patient_id], references: [id], name: "Documents_Patients_patient_id", onDelete: Cascade)
+  rel_uploaded_by User @relation(fields: [uploaded_by], references: [id], name: "Documents_User_uploaded_by")
+  @@map("documents")
+  @@schema("patients")
+}
+
+model DataConsents {
+  id String @db.Uuid @id @default(uuid())
+  patient_id String @db.Uuid
+  consent_type String @db.VarChar(50)
+  version String @db.VarChar(20) @default("1.0")
+  granted_at DateTime @db.Timestamptz(6) @default(now())
+  revoked_at DateTime? @db.Timestamptz(6)
+  granted_by String @db.Uuid
+  ip_address String? @db.VarChar(45)
+  notes String?
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  patient Patients @relation(fields: [patient_id], references: [id], name: "DataConsents_Patients_patient_id", onDelete: Cascade)
+  rel_granted_by User @relation(fields: [granted_by], references: [id], name: "DataConsents_User_granted_by")
+  @@map("data_consents")
+  @@schema("patients")
+}
+
+model AdvancedDirectives {
+  id String @db.Uuid @id @default(uuid())
+  patient_id String @db.Uuid
+  directive_type String @db.VarChar(50)
+  status String @db.VarChar(20) @default("ACTIVE")
+  details String?
+  signed_at DateTime? @db.Timestamptz(6)
+  witness_name String? @db.VarChar(100)
+  witness_signature String? @db.VarChar(500)
+  document_path String? @db.VarChar(500)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  patient Patients @relation(fields: [patient_id], references: [id], name: "AdvancedDirectives_Patients_patient_id", onDelete: Cascade)
+  @@map("advanced_directives")
+  @@schema("patients")
+}
+
+model Appointments {
+  id String @db.Uuid @id @default(uuid())
+  patient_id String @db.Uuid
+  doctor_id String @db.Uuid
+  appointment_date DateTime @db.Date
+  start_time DateTime @db.Time(6)
+  end_time DateTime @db.Time(6)
+  status String @db.VarChar(20) @default("SCHEDULED")
+  appointment_type String? @db.VarChar(30)
+  reason String?
+  notes String?
+  created_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  deleted_at DateTime? @db.Timestamptz(6)
+  patient Patients @relation(fields: [patient_id], references: [id], name: "Appointments_Patients_patient_id")
+  doctor StaffProfiles @relation(fields: [doctor_id], references: [id], name: "Appointments_StaffProfiles_doctor_id")
+  rel_created_by User @relation(fields: [created_by], references: [id], name: "Appointments_User_created_by")
+  clinical_consultations_appointment_id Consultations[] @relation(name: "Consultations_Appointments_appointment_id")
+  clinical_telehealth_consents_appointment_id TelehealthConsents[] @relation(name: "TelehealthConsents_Appointments_appointment_id")
+  @@map("appointments")
+  @@schema("clinical")
+}
+
+model OutpatientVisits {
+  id String @db.Uuid @id @default(uuid())
+  patient_id String? @db.Uuid
+  patient_name String @db.VarChar(200)
+  mrn String @db.VarChar(30)
+  age Int @default(0)
+  gender String @db.VarChar(20)
+  phone String @db.VarChar(30) @default("")
+  first_visit Boolean @default(false)
+  stage String @db.VarChar(30)
+  checked_in_at DateTime @db.Timestamptz(6) @default(now())
+  payload Json @default("{}")
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  patient Patients? @relation(fields: [patient_id], references: [id], name: "OutpatientVisits_Patients_patient_id", onDelete: SetNull)
+  @@index([stage])
+  @@index([mrn])
+  @@map("outpatient_visits")
+  @@schema("clinical")
+}
+
+model Consultations {
+  id String @db.Uuid @id @default(uuid())
+  appointment_id String? @db.Uuid @unique
+  patient_id String @db.Uuid
+  doctor_id String @db.Uuid
+  consultation_date DateTime @db.Timestamptz(6) @default(now())
+  chief_complaint String?
+  history_present_illness String?
+  past_medical_history String?
+  family_history String?
+  social_history String?
+  physical_examination String?
+  treatment_plan String?
+  follow_up_instructions String?
+  notes String?
+  status String @db.VarChar(20) @default("IN_PROGRESS")
+  consultation_type String @db.VarChar(20) @default("IN_PERSON")
+  priority String @db.VarChar(20) @default("NORMAL")
+  created_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  deleted_at DateTime? @db.Timestamptz(6)
+  appointment Appointments? @relation(fields: [appointment_id], references: [id], name: "Consultations_Appointments_appointment_id", onDelete: SetNull)
+  patient Patients @relation(fields: [patient_id], references: [id], name: "Consultations_Patients_patient_id")
+  doctor StaffProfiles @relation(fields: [doctor_id], references: [id], name: "Consultations_StaffProfiles_doctor_id")
+  rel_created_by User @relation(fields: [created_by], references: [id], name: "Consultations_User_created_by")
+  clinical_diagnoses_consultation_id Diagnoses[] @relation(name: "Diagnoses_Consultations_consultation_id")
+  clinical_procedures_consultation_id Procedures[] @relation(name: "Procedures_Consultations_consultation_id")
+  clinical_vital_signs_consultation_id VitalSigns[] @relation(name: "VitalSigns_Consultations_consultation_id")
+  clinical_follow_ups_consultation_id FollowUps[] @relation(name: "FollowUps_Consultations_consultation_id")
+  pharmacy_prescriptions_consultation_id Prescriptions[] @relation(name: "Prescriptions_Consultations_consultation_id")
+  laboratory_requests_consultation_id LaboratoryRequests[] @relation(name: "LaboratoryRequests_Consultations_consultation_id")
+  radiology_requests_consultation_id RadiologyRequests[] @relation(name: "RadiologyRequests_Consultations_consultation_id")
+  billing_invoices_consultation_id Invoices[] @relation(name: "Invoices_Consultations_consultation_id")
+  @@map("consultations")
+  @@schema("clinical")
+}
+
+model Diagnoses {
+  id String @db.Uuid @id @default(uuid())
+  consultation_id String @db.Uuid
+  patient_id String @db.Uuid
+  icd10_code String? @db.VarChar(20)
+  description String
+  diagnosis_type String @db.VarChar(20) @default("PRIMARY")
+  onset_date DateTime? @db.Date
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  consultation Consultations @relation(fields: [consultation_id], references: [id], name: "Diagnoses_Consultations_consultation_id", onDelete: Cascade)
+  patient Patients @relation(fields: [patient_id], references: [id], name: "Diagnoses_Patients_patient_id")
+  @@map("diagnoses")
+  @@schema("clinical")
+}
+
+model Procedures {
+  id String @db.Uuid @id @default(uuid())
+  consultation_id String @db.Uuid
+  patient_id String @db.Uuid
+  cpt_code String? @db.VarChar(20)
+  description String
+  performer_id String? @db.Uuid
+  outcome String?
+  performed_at DateTime @db.Timestamptz(6) @default(now())
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  consultation Consultations @relation(fields: [consultation_id], references: [id], name: "Procedures_Consultations_consultation_id", onDelete: Cascade)
+  patient Patients @relation(fields: [patient_id], references: [id], name: "Procedures_Patients_patient_id")
+  performer StaffProfiles? @relation(fields: [performer_id], references: [id], name: "Procedures_StaffProfiles_performer_id")
+  @@map("procedures")
+  @@schema("clinical")
+}
+
+model VitalSigns {
+  id String @db.Uuid @id @default(uuid())
+  patient_id String @db.Uuid
+  consultation_id String? @db.Uuid
+  blood_pressure String? @db.VarChar(20)
+  heart_rate Int?
+  respiratory_rate Int?
+  temperature Decimal? @db.Decimal(4, 1)
+  weight Decimal? @db.Decimal(5, 2)
+  height Decimal? @db.Decimal(5, 2)
+  bmi Decimal? @db.Decimal(5, 2)
+  pain_level Int?
+  oxygen_saturation Int?
+  notes String?
+  measured_at DateTime @db.Timestamptz(6) @default(now())
+  recorded_by String @db.Uuid
+  is_voided Boolean @default(false)
+  void_reason String? @db.VarChar(255)
+  voided_by String? @db.Uuid
+  voided_at DateTime? @db.Timestamptz(6)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  patient Patients @relation(fields: [patient_id], references: [id], name: "VitalSigns_Patients_patient_id")
+  consultation Consultations? @relation(fields: [consultation_id], references: [id], name: "VitalSigns_Consultations_consultation_id", onDelete: SetNull)
+  rel_recorded_by User @relation(fields: [recorded_by], references: [id], name: "VitalSigns_User_recorded_by")
+  rel_voided_by User? @relation(fields: [voided_by], references: [id], name: "VitalSigns_User_voided_by")
+  @@map("vital_signs")
+  @@schema("clinical")
+}
+
+model FollowUps {
+  id String @db.Uuid @id @default(uuid())
+  patient_id String @db.Uuid
+  consultation_id String @db.Uuid
+  follow_up_date DateTime @db.Date
+  follow_up_type String? @db.VarChar(50)
+  reason String
+  status String @db.VarChar(20) @default("SCHEDULED")
+  notes String?
+  created_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  patient Patients @relation(fields: [patient_id], references: [id], name: "FollowUps_Patients_patient_id")
+  consultation Consultations @relation(fields: [consultation_id], references: [id], name: "FollowUps_Consultations_consultation_id")
+  rel_created_by User @relation(fields: [created_by], references: [id], name: "FollowUps_User_created_by")
+  @@map("follow_ups")
+  @@schema("clinical")
+}
+
+model TelehealthConsents {
+  id String @db.Uuid @id @default(uuid())
+  patient_id String @db.Uuid
+  appointment_id String? @db.Uuid
+  patient_signature_path String?
+  doctor_signature_path String?
+  verbal_consent_obtained Boolean @default(false)
+  consent_status String @db.VarChar(20) @default("PENDING")
+  signed_at DateTime? @db.Timestamptz(6)
+  ip_address String? @db.VarChar(45)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  patient Patients @relation(fields: [patient_id], references: [id], name: "TelehealthConsents_Patients_patient_id")
+  appointment Appointments? @relation(fields: [appointment_id], references: [id], name: "TelehealthConsents_Appointments_appointment_id")
+  @@map("telehealth_consents")
+  @@schema("clinical")
+}
+
+model Unavailability {
+  id String @db.Uuid @id @default(uuid())
+  doctor_id String @db.Uuid
+  block_date DateTime @db.Date
+  start_time DateTime? @db.Time(6)
+  end_time DateTime? @db.Time(6)
+  reason String? @db.VarChar(255)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  doctor StaffProfiles @relation(fields: [doctor_id], references: [id], name: "Unavailability_StaffProfiles_doctor_id")
+  @@map("unavailability")
+  @@schema("clinical")
+}
+
+model Wards {
+  id String @db.Uuid @id @default(uuid())
+  name String @db.VarChar(100) @unique
+  ward_type String @db.VarChar(20)
+  department_id String? @db.Uuid
+  daily_rate Decimal @db.Decimal(12, 2) @default(0)
+  capacity Int @default(0)
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  department Departments? @relation(fields: [department_id], references: [id], name: "Wards_Departments_department_id")
+  inpatient_beds_ward_id Beds[] @relation(name: "Beds_Wards_ward_id")
+  @@map("wards")
+  @@schema("inpatient")
+}
+
+model Beds {
+  id String @db.Uuid @id @default(uuid())
+  ward_id String @db.Uuid
+  bed_number String @db.VarChar(20)
+  status String @db.VarChar(20) @default("AVAILABLE")
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  ward Wards @relation(fields: [ward_id], references: [id], name: "Beds_Wards_ward_id", onDelete: Cascade)
+  inpatient_admissions_bed_id Admissions[] @relation(name: "Admissions_Beds_bed_id")
+  inpatient_bed_transfers_old_bed_id BedTransfers[] @relation(name: "BedTransfers_Beds_old_bed_id")
+  inpatient_bed_transfers_new_bed_id BedTransfers[] @relation(name: "BedTransfers_Beds_new_bed_id")
+  inpatient_bed_reservations_bed_id BedReservations[] @relation(name: "BedReservations_Beds_bed_id")
+  @@unique([ward_id, bed_number])
+  @@map("beds")
+  @@schema("inpatient")
+}
+
+model Admissions {
+  id String @db.Uuid @id @default(uuid())
+  patient_id String @db.Uuid
+  bed_id String? @db.Uuid
+  admitting_doctor_id String @db.Uuid
+  admission_date DateTime @db.Timestamptz(6) @default(now())
+  discharge_date DateTime? @db.Timestamptz(6)
+  primary_diagnosis String?
+  status String @db.VarChar(20) @default("ADMITTED")
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  patient Patients @relation(fields: [patient_id], references: [id], name: "Admissions_Patients_patient_id")
+  bed Beds? @relation(fields: [bed_id], references: [id], name: "Admissions_Beds_bed_id")
+  admitting_doctor StaffProfiles @relation(fields: [admitting_doctor_id], references: [id], name: "Admissions_StaffProfiles_admitting_doctor_id")
+  inpatient_bed_transfers_admission_id BedTransfers[] @relation(name: "BedTransfers_Admissions_admission_id")
+  inpatient_bed_reservations_admission_id BedReservations[] @relation(name: "BedReservations_Admissions_admission_id")
+  inpatient_nursing_notes_admission_id NursingNotes[] @relation(name: "NursingNotes_Admissions_admission_id")
+  inpatient_discharge_summaries_admission_id DischargeSummaries[] @relation(name: "DischargeSummaries_Admissions_admission_id")
+  billing_invoices_admission_id Invoices[] @relation(name: "Invoices_Admissions_admission_id")
+  @@map("admissions")
+  @@schema("inpatient")
+}
+
+model BedTransfers {
+  id String @db.Uuid @id @default(uuid())
+  admission_id String @db.Uuid
+  old_bed_id String? @db.Uuid
+  new_bed_id String @db.Uuid
+  transfer_date DateTime @db.Timestamptz(6) @default(now())
+  reason String?
+  authorized_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  admission Admissions @relation(fields: [admission_id], references: [id], name: "BedTransfers_Admissions_admission_id", onDelete: Cascade)
+  old_bed Beds? @relation(fields: [old_bed_id], references: [id], name: "BedTransfers_Beds_old_bed_id")
+  new_bed Beds @relation(fields: [new_bed_id], references: [id], name: "BedTransfers_Beds_new_bed_id")
+  rel_authorized_by User @relation(fields: [authorized_by], references: [id], name: "BedTransfers_User_authorized_by")
+  @@map("bed_transfers")
+  @@schema("inpatient")
+}
+
+model BedReservations {
+  id String @db.Uuid @id @default(uuid())
+  bed_id String @db.Uuid
+  patient_id String @db.Uuid
+  expected_admission_date DateTime @db.Date
+  reserved_by String @db.Uuid
+  expires_at DateTime @db.Timestamptz(6)
+  status String @db.VarChar(20) @default("RESERVED")
+  admission_id String? @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  bed Beds @relation(fields: [bed_id], references: [id], name: "BedReservations_Beds_bed_id")
+  patient Patients @relation(fields: [patient_id], references: [id], name: "BedReservations_Patients_patient_id")
+  rel_reserved_by User @relation(fields: [reserved_by], references: [id], name: "BedReservations_User_reserved_by")
+  admission Admissions? @relation(fields: [admission_id], references: [id], name: "BedReservations_Admissions_admission_id")
+  @@map("bed_reservations")
+  @@schema("inpatient")
+}
+
+model NursingNotes {
+  id String @db.Uuid @id @default(uuid())
+  admission_id String @db.Uuid
+  nurse_id String @db.Uuid
+  notes_text String
+  vital_signs_snapshot Json?
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  admission Admissions @relation(fields: [admission_id], references: [id], name: "NursingNotes_Admissions_admission_id", onDelete: Cascade)
+  nurse StaffProfiles @relation(fields: [nurse_id], references: [id], name: "NursingNotes_StaffProfiles_nurse_id")
+  @@map("nursing_notes")
+  @@schema("inpatient")
+}
+
+model DischargeSummaries {
+  id String @db.Uuid @id @default(uuid())
+  admission_id String @db.Uuid @unique
+  discharge_diagnosis String?
+  summary_of_treatment String?
+  discharge_medications String?
+  follow_up_instructions String?
+  discharging_doctor_id String @db.Uuid
+  finalized_at DateTime? @db.Timestamptz(6)
+  finalized_by String? @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  admission Admissions @relation(fields: [admission_id], references: [id], name: "DischargeSummaries_Admissions_admission_id", onDelete: Cascade)
+  discharging_doctor StaffProfiles @relation(fields: [discharging_doctor_id], references: [id], name: "DischargeSummaries_StaffProfiles_discharging_doctor_id")
+  rel_finalized_by User? @relation(fields: [finalized_by], references: [id], name: "DischargeSummaries_User_finalized_by")
+  @@map("discharge_summaries")
+  @@schema("inpatient")
+}
+
+model Suppliers {
+  id String @db.Uuid @id @default(uuid())
+  company_name String @db.VarChar(150)
+  contact_person String? @db.VarChar(100)
+  phone String? @db.VarChar(30)
+  email String? @db.VarChar(150)
+  address String?
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  pharmacy_batches_supplier_id Batches[] @relation(name: "Batches_Suppliers_supplier_id")
+  pharmacy_purchase_orders_supplier_id PurchaseOrders[] @relation(name: "PurchaseOrders_Suppliers_supplier_id")
+  @@map("suppliers")
+  @@schema("pharmacy")
+}
+
+model Categories {
+  id String @db.Uuid @id @default(uuid())
+  category_name String @db.VarChar(100) @unique
+  description String?
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  pharmacy_medications_category_id Medications[] @relation(name: "Medications_Categories_category_id")
+  @@map("categories")
+  @@schema("pharmacy")
+}
+
+model Medications {
+  id String @db.Uuid @id @default(uuid())
+  medication_name String @db.VarChar(150) @unique
+  generic_name String? @db.VarChar(150)
+  category_id String? @db.Uuid
+  form String? @db.VarChar(30)
+  strength String? @db.VarChar(50)
+  unit String? @db.VarChar(20)
+  standard_selling_price Decimal @db.Decimal(12, 2) @default(0)
+  description String?
+  side_effects String?
+  contraindications String?
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  deleted_at DateTime? @db.Timestamptz(6)
+  category Categories? @relation(fields: [category_id], references: [id], name: "Medications_Categories_category_id")
+  pharmacy_batches_medication_id Batches[] @relation(name: "Batches_Medications_medication_id")
+  pharmacy_prescription_lines_medication_id PrescriptionLines[] @relation(name: "PrescriptionLines_Medications_medication_id")
+  pharmacy_purchase_order_lines_medication_id PurchaseOrderLines[] @relation(name: "PurchaseOrderLines_Medications_medication_id")
+  @@map("medications")
+  @@schema("pharmacy")
+}
+
+model Batches {
+  id String @db.Uuid @id @default(uuid())
+  medication_id String @db.Uuid
+  batch_number String @db.VarChar(50)
+  quantity_on_hand Decimal @db.Decimal(12, 2) @default(0)
+  unit_cost Decimal @db.Decimal(12, 2) @default(0)
+  selling_price Decimal @db.Decimal(12, 2) @default(0)
+  manufacturing_date DateTime? @db.Date
+  expiry_date DateTime @db.Date
+  supplier_id String? @db.Uuid
+  notes String?
+  created_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  medication Medications @relation(fields: [medication_id], references: [id], name: "Batches_Medications_medication_id")
+  supplier Suppliers? @relation(fields: [supplier_id], references: [id], name: "Batches_Suppliers_supplier_id")
+  rel_created_by User @relation(fields: [created_by], references: [id], name: "Batches_User_created_by")
+  pharmacy_stock_movements_batch_id StockMovements[] @relation(name: "StockMovements_Batches_batch_id")
+  @@unique([medication_id, batch_number])
+  @@map("batches")
+  @@schema("pharmacy")
+}
+
+model StockMovements {
+  id String @db.Uuid @id @default(uuid())
+  batch_id String @db.Uuid
+  movement_type String @db.VarChar(20)
+  quantity_change Decimal @db.Decimal(12, 2)
+  reference_type String? @db.VarChar(30)
+  reference_id String? @db.Uuid
+  notes String?
+  performed_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  batch Batches @relation(fields: [batch_id], references: [id], name: "StockMovements_Batches_batch_id")
+  rel_performed_by User @relation(fields: [performed_by], references: [id], name: "StockMovements_User_performed_by")
+  @@map("stock_movements")
+  @@schema("pharmacy")
+}
+
+model Prescriptions {
+  id String @db.Uuid @id @default(uuid())
+  patient_id String @db.Uuid
+  consultation_id String? @db.Uuid
+  prescription_number String? @db.VarChar(64) @unique
+  prescribed_by String @db.Uuid
+  prescription_date DateTime @db.Timestamptz(6) @default(now())
+  status String @db.VarChar(25) @default("PENDING")
+  notes String?
+  is_voided Boolean @default(false)
+  void_reason String? @db.VarChar(255)
+  voided_by String? @db.Uuid
+  voided_at DateTime? @db.Timestamptz(6)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  deleted_at DateTime? @db.Timestamptz(6)
+  patient Patients @relation(fields: [patient_id], references: [id], name: "Prescriptions_Patients_patient_id")
+  consultation Consultations? @relation(fields: [consultation_id], references: [id], name: "Prescriptions_Consultations_consultation_id", onDelete: SetNull)
+  rel_prescribed_by StaffProfiles @relation(fields: [prescribed_by], references: [id], name: "Prescriptions_StaffProfiles_prescribed_by")
+  rel_voided_by User? @relation(fields: [voided_by], references: [id], name: "Prescriptions_User_voided_by")
+  pharmacy_prescription_lines_prescription_id PrescriptionLines[] @relation(name: "PrescriptionLines_Prescriptions_prescription_id")
+  @@map("prescriptions")
+  @@schema("pharmacy")
+}
+
+model PrescriptionLines {
+  id String @db.Uuid @id @default(uuid())
+  prescription_id String @db.Uuid
+  medication_id String @db.Uuid
+  dosage String @db.VarChar(50)
+  frequency String @db.VarChar(50)
+  duration String @db.VarChar(50)
+  quantity Int
+  instructions String?
+  status String @db.VarChar(20) @default("PENDING")
+  dispensed_by String? @db.Uuid
+  dispensed_at DateTime? @db.Timestamptz(6)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  prescription Prescriptions @relation(fields: [prescription_id], references: [id], name: "PrescriptionLines_Prescriptions_prescription_id", onDelete: Cascade)
+  medication Medications @relation(fields: [medication_id], references: [id], name: "PrescriptionLines_Medications_medication_id")
+  rel_dispensed_by User? @relation(fields: [dispensed_by], references: [id], name: "PrescriptionLines_User_dispensed_by")
+  @@map("prescription_lines")
+  @@schema("pharmacy")
+}
+
+model PurchaseOrders {
+  id String @db.Uuid @id @default(uuid())
+  order_number String @db.VarChar(50) @unique
+  supplier_id String @db.Uuid
+  order_date DateTime @db.Date
+  expected_delivery_date DateTime? @db.Date
+  status String @db.VarChar(20) @default("DRAFT")
+  notes String?
+  created_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  supplier Suppliers @relation(fields: [supplier_id], references: [id], name: "PurchaseOrders_Suppliers_supplier_id")
+  rel_created_by User @relation(fields: [created_by], references: [id], name: "PurchaseOrders_User_created_by")
+  pharmacy_purchase_order_lines_purchase_order_id PurchaseOrderLines[] @relation(name: "PurchaseOrderLines_PurchaseOrders_purchase_order_id")
+  @@map("purchase_orders")
+  @@schema("pharmacy")
+}
+
+model PurchaseOrderLines {
+  id String @db.Uuid @id @default(uuid())
+  purchase_order_id String @db.Uuid
+  medication_id String @db.Uuid
+  quantity_ordered Decimal @db.Decimal(12, 2)
+  unit_cost Decimal @db.Decimal(12, 2)
+  received_quantity Decimal? @db.Decimal(12, 2) @default(0)
+  received_at DateTime? @db.Timestamptz(6)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  purchase_order PurchaseOrders @relation(fields: [purchase_order_id], references: [id], name: "PurchaseOrderLines_PurchaseOrders_purchase_order_id", onDelete: Cascade)
+  medication Medications @relation(fields: [medication_id], references: [id], name: "PurchaseOrderLines_Medications_medication_id")
+  @@map("purchase_order_lines")
+  @@schema("pharmacy")
+}
+
+model TestTypes {
+  id String @db.Uuid @id @default(uuid())
+  test_name String @db.VarChar(100) @unique
+  category String? @db.VarChar(50)
+  description String?
+  standard_price Decimal @db.Decimal(12, 2) @default(0)
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  laboratory_test_parameters_test_type_id TestParameters[] @relation(name: "TestParameters_TestTypes_test_type_id")
+  @@map("test_types")
+  @@schema("laboratory")
+}
+
+model TestParameters {
+  id String @db.Uuid @id @default(uuid())
+  test_type_id String @db.Uuid
+  parameter_name String @db.VarChar(100)
+  unit_of_measurement String? @db.VarChar(30)
+  normal_reference_range String? @db.VarChar(100)
+  display_order Int @default(0)
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  test_type TestTypes @relation(fields: [test_type_id], references: [id], name: "TestParameters_TestTypes_test_type_id", onDelete: Cascade)
+  laboratory_results_parameter_id Results[] @relation(name: "Results_TestParameters_parameter_id")
+  @@map("test_parameters")
+  @@schema("laboratory")
+}
+
+model LaboratoryRequests {
+  id String @db.Uuid @id @default(uuid())
+  request_number String? @db.VarChar(50) @unique
+  patient_id String @db.Uuid
+  requesting_doctor_id String? @db.Uuid
+  consultation_id String? @db.Uuid
+  priority String @db.VarChar(20) @default("NORMAL")
+  request_date DateTime @db.Timestamptz(6) @default(now())
+  status String @db.VarChar(20) @default("PENDING")
+  notes String?
+  requested_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  patient Patients @relation(fields: [patient_id], references: [id], name: "LaboratoryRequests_Patients_patient_id")
+  requesting_doctor StaffProfiles? @relation(fields: [requesting_doctor_id], references: [id], name: "LaboratoryRequests_StaffProfiles_requesting_doctor_id")
+  consultation Consultations? @relation(fields: [consultation_id], references: [id], name: "LaboratoryRequests_Consultations_consultation_id", onDelete: SetNull)
+  rel_requested_by User @relation(fields: [requested_by], references: [id], name: "LaboratoryRequests_User_requested_by")
+  laboratory_samples_request_id Samples[] @relation(name: "Samples_LaboratoryRequests_request_id")
+  laboratory_results_request_id Results[] @relation(name: "Results_LaboratoryRequests_request_id")
+  @@map("requests")
+  @@schema("laboratory")
+}
+
+model Samples {
+  id String @db.Uuid @id @default(uuid())
+  sample_id String @db.VarChar(30) @unique
+  request_id String @db.Uuid
+  patient_id String @db.Uuid
+  sample_type String @db.VarChar(50)
+  collected_date DateTime @db.Date
+  collected_at DateTime @db.Timestamptz(6) @default(now())
+  collected_by String @db.Uuid
+  status String @db.VarChar(20) @default("REGISTERED")
+  notes String?
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  request LaboratoryRequests @relation(fields: [request_id], references: [id], name: "Samples_LaboratoryRequests_request_id", onDelete: Cascade)
+  patient Patients @relation(fields: [patient_id], references: [id], name: "Samples_Patients_patient_id")
+  rel_collected_by StaffProfiles @relation(fields: [collected_by], references: [id], name: "Samples_StaffProfiles_collected_by")
+  @@map("samples")
+  @@schema("laboratory")
+}
+
+model Results {
+  id String @db.Uuid @id @default(uuid())
+  request_id String @db.Uuid
+  parameter_id String @db.Uuid
+  result_value String? @db.VarChar(100)
+  interpretation String? @db.VarChar(20)
+  notes String?
+  performed_by String? @db.Uuid
+  performed_at DateTime? @db.Timestamptz(6)
+  verified_by String? @db.Uuid
+  verified_at DateTime? @db.Timestamptz(6)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  request LaboratoryRequests @relation(fields: [request_id], references: [id], name: "Results_LaboratoryRequests_request_id", onDelete: Cascade)
+  parameter TestParameters @relation(fields: [parameter_id], references: [id], name: "Results_TestParameters_parameter_id")
+  rel_performed_by User? @relation(fields: [performed_by], references: [id], name: "Results_User_performed_by")
+  rel_verified_by User? @relation(fields: [verified_by], references: [id], name: "Results_User_verified_by")
+  @@map("results")
+  @@schema("laboratory")
+}
+
+model ScanTypes {
+  id String @db.Uuid @id @default(uuid())
+  scan_type String @db.VarChar(50) @unique
+  category String? @db.VarChar(50)
+  description String?
+  standard_price Decimal @db.Decimal(12, 2) @default(0)
+  typical_duration_minutes Int?
+  contrast_required Boolean @default(false)
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  radiology_requests_scan_type_id RadiologyRequests[] @relation(name: "RadiologyRequests_ScanTypes_scan_type_id")
+  @@map("scan_types")
+  @@schema("radiology")
+}
+
+model RadiologyRequests {
+  id String @db.Uuid @id @default(uuid())
+  request_number String @db.VarChar(50) @unique
+  patient_id String @db.Uuid
+  requesting_doctor_id String? @db.Uuid
+  consultation_id String? @db.Uuid
+  scan_type_id String @db.Uuid
+  clinical_indication String?
+  priority String @db.VarChar(20) @default("ROUTINE")
+  status String @db.VarChar(20) @default("PENDING")
+  requested_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  patient Patients @relation(fields: [patient_id], references: [id], name: "RadiologyRequests_Patients_patient_id")
+  requesting_doctor StaffProfiles? @relation(fields: [requesting_doctor_id], references: [id], name: "RadiologyRequests_StaffProfiles_requesting_doctor_id")
+  consultation Consultations? @relation(fields: [consultation_id], references: [id], name: "RadiologyRequests_Consultations_consultation_id", onDelete: SetNull)
+  scan_type ScanTypes @relation(fields: [scan_type_id], references: [id], name: "RadiologyRequests_ScanTypes_scan_type_id")
+  rel_requested_by User @relation(fields: [requested_by], references: [id], name: "RadiologyRequests_User_requested_by")
+  radiology_findings_request_id Findings[] @relation(name: "Findings_RadiologyRequests_request_id")
+  radiology_reports_request_id Reports[] @relation(name: "Reports_RadiologyRequests_request_id")
+  radiology_images_request_id Images[] @relation(name: "Images_RadiologyRequests_request_id")
+  @@map("requests")
+  @@schema("radiology")
+}
+
+model Findings {
+  id String @db.Uuid @id @default(uuid())
+  request_id String @db.Uuid @unique
+  radiologist_id String @db.Uuid
+  findings_text String?
+  status String @db.VarChar(20) @default("DRAFT")
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  request RadiologyRequests @relation(fields: [request_id], references: [id], name: "Findings_RadiologyRequests_request_id", onDelete: Cascade)
+  radiologist StaffProfiles @relation(fields: [radiologist_id], references: [id], name: "Findings_StaffProfiles_radiologist_id")
+  radiology_reports_findings_id Reports[] @relation(name: "Reports_Findings_findings_id")
+  @@map("findings")
+  @@schema("radiology")
+}
+
+model Reports {
+  id String @db.Uuid @id @default(uuid())
+  findings_id String @db.Uuid @unique
+  request_id String @db.Uuid
+  final_impression String?
+  conclusion String?
+  recommendations String?
+  radiologist_signature String?
+  signed_at DateTime? @db.Timestamptz(6)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  findings Findings @relation(fields: [findings_id], references: [id], name: "Reports_Findings_findings_id", onDelete: Cascade)
+  request RadiologyRequests @relation(fields: [request_id], references: [id], name: "Reports_RadiologyRequests_request_id", onDelete: Cascade)
+  @@map("reports")
+  @@schema("radiology")
+}
+
+model Images {
+  id String @db.Uuid @id @default(uuid())
+  request_id String @db.Uuid
+  file_path String @db.VarChar(500)
+  modality String? @db.VarChar(30)
+  series_description String? @db.VarChar(255)
+  number_of_images Int? @default(1)
+  file_size BigInt?
+  uploaded_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  request RadiologyRequests @relation(fields: [request_id], references: [id], name: "Images_RadiologyRequests_request_id", onDelete: Cascade)
+  rel_uploaded_by User @relation(fields: [uploaded_by], references: [id], name: "Images_User_uploaded_by")
+  @@map("images")
+  @@schema("radiology")
+}
+
+model Services {
+  id String @db.Uuid @id @default(uuid())
+  service_code String @db.VarChar(30) @unique
+  service_name String @db.VarChar(150)
+  category String? @db.VarChar(50)
+  description String?
+  standard_price Decimal @db.Decimal(12, 2) @default(0)
+  revenue_account_id String? @db.Uuid
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  billing_invoice_items_service_id InvoiceItems[] @relation(name: "InvoiceItems_Services_service_id")
+  @@map("services")
+  @@schema("billing")
+}
+
+model Accounts {
+  id String @db.Uuid @id @default(uuid())
+  account_code String @db.VarChar(30) @unique
+  account_name String @db.VarChar(150)
+  parent_id String? @db.Uuid
+  account_type String @db.VarChar(20)
+  normal_balance String @db.VarChar(10)
+  is_postable Boolean @default(true)
+  is_active Boolean @default(true)
+  description String?
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  parent Accounts? @relation(fields: [parent_id], references: [id], name: "Accounts_Accounts_parent_id", onDelete: SetNull)
+  billing_accounts_parent_id Accounts[] @relation(name: "Accounts_Accounts_parent_id")
+  billing_journal_lines_account_id JournalLines[] @relation(name: "JournalLines_Accounts_account_id")
+  billing_bank_accounts_gl_account_id BankAccounts[] @relation(name: "BankAccounts_Accounts_gl_account_id")
+  billing_budget_items_account_id BudgetItems[] @relation(name: "BudgetItems_Accounts_account_id")
+  billing_payment_methods_gl_account_id PaymentMethods[] @relation(name: "PaymentMethods_Accounts_gl_account_id")
+  billing_tax_rates_liability_account_id TaxRates[] @relation(name: "TaxRates_Accounts_liability_account_id")
+  @@map("accounts")
+  @@schema("billing")
+}
+
+model PostingPeriods {
+  id String @db.Uuid @id @default(uuid())
+  period_name String @db.VarChar(50)
+  start_date DateTime @db.Date
+  end_date DateTime @db.Date
+  status String @db.VarChar(20) @default("OPEN")
+  fiscal_year Int
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  billing_journal_entries_posting_period_id JournalEntries[] @relation(name: "JournalEntries_PostingPeriods_posting_period_id")
+  @@map("posting_periods")
+  @@schema("billing")
+}
+
+model JournalEntries {
+  id String @db.Uuid @id @default(uuid())
+  entry_number String @db.VarChar(30) @unique
+  posting_period_id String @db.Uuid
+  entry_date DateTime @db.Date
+  status String @db.VarChar(20) @default("DRAFT")
+  reference_type String? @db.VarChar(30)
+  reference_id String? @db.Uuid
+  description String?
+  reversal_of_id String? @db.Uuid
+  created_by String @db.Uuid
+  posted_by String? @db.Uuid
+  posted_at DateTime? @db.Timestamptz(6)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  posting_period PostingPeriods @relation(fields: [posting_period_id], references: [id], name: "JournalEntries_PostingPeriods_posting_period_id")
+  reversal_of JournalEntries? @relation(fields: [reversal_of_id], references: [id], name: "JournalEntries_JournalEntries_reversal_of_id")
+  rel_created_by User @relation(fields: [created_by], references: [id], name: "JournalEntries_User_created_by")
+  rel_posted_by User? @relation(fields: [posted_by], references: [id], name: "JournalEntries_User_posted_by")
+  billing_journal_entries_reversal_of_id JournalEntries[] @relation(name: "JournalEntries_JournalEntries_reversal_of_id")
+  billing_journal_lines_journal_entry_id JournalLines[] @relation(name: "JournalLines_JournalEntries_journal_entry_id")
+  billing_credit_notes_journal_entry_id CreditNotes[] @relation(name: "CreditNotes_JournalEntries_journal_entry_id")
+  billing_payments_journal_entry_id Payments[] @relation(name: "Payments_JournalEntries_journal_entry_id")
+  @@map("journal_entries")
+  @@schema("billing")
+}
+
+model JournalLines {
+  id String @db.Uuid @id @default(uuid())
+  journal_entry_id String @db.Uuid
+  account_id String @db.Uuid
+  direction String @db.VarChar(10)
+  amount Decimal @db.Decimal(15, 2)
+  description String?
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  journal_entry JournalEntries @relation(fields: [journal_entry_id], references: [id], name: "JournalLines_JournalEntries_journal_entry_id", onDelete: Cascade)
+  account Accounts @relation(fields: [account_id], references: [id], name: "JournalLines_Accounts_account_id")
+  @@map("journal_lines")
+  @@schema("billing")
+}
+
+model Invoices {
+  id String @db.Uuid @id @default(uuid())
+  invoice_number String @db.VarChar(30) @unique
+  patient_id String @db.Uuid
+  consultation_id String? @db.Uuid
+  admission_id String? @db.Uuid
+  invoice_date DateTime @db.Date
+  due_date DateTime @db.Date
+  subtotal Decimal @db.Decimal(15, 2) @default(0)
+  discount Decimal @db.Decimal(15, 2) @default(0)
+  tax Decimal @db.Decimal(15, 2) @default(0)
+  total_amount Decimal @db.Decimal(15, 2) @default(0)
+  status String @db.VarChar(20) @default("DRAFT")
+  is_voided Boolean @default(false)
+  void_reason String?
+  notes String?
+  created_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  deleted_at DateTime? @db.Timestamptz(6)
+  patient Patients @relation(fields: [patient_id], references: [id], name: "Invoices_Patients_patient_id")
+  consultation Consultations? @relation(fields: [consultation_id], references: [id], name: "Invoices_Consultations_consultation_id", onDelete: SetNull)
+  admission Admissions? @relation(fields: [admission_id], references: [id], name: "Invoices_Admissions_admission_id", onDelete: SetNull)
+  rel_created_by User @relation(fields: [created_by], references: [id], name: "Invoices_User_created_by")
+  billing_invoice_items_invoice_id InvoiceItems[] @relation(name: "InvoiceItems_Invoices_invoice_id")
+  billing_credit_notes_invoice_id CreditNotes[] @relation(name: "CreditNotes_Invoices_invoice_id")
+  billing_payment_allocations_invoice_id PaymentAllocations[] @relation(name: "PaymentAllocations_Invoices_invoice_id")
+  billing_insurance_claims_invoice_id InsuranceClaims[] @relation(name: "InsuranceClaims_Invoices_invoice_id")
+  @@map("invoices")
+  @@schema("billing")
+}
+
+model InvoiceItems {
+  id String @db.Uuid @id @default(uuid())
+  invoice_id String @db.Uuid
+  service_id String? @db.Uuid
+  description String @db.VarChar(255)
+  quantity Decimal @db.Decimal(12, 2) @default(1)
+  unit_price Decimal @db.Decimal(12, 2)
+  total_price Decimal @db.Decimal(15, 2)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  invoice Invoices @relation(fields: [invoice_id], references: [id], name: "InvoiceItems_Invoices_invoice_id", onDelete: Cascade)
+  service Services? @relation(fields: [service_id], references: [id], name: "InvoiceItems_Services_service_id")
+  @@map("invoice_items")
+  @@schema("billing")
+}
+
+model CreditNotes {
+  id String @db.Uuid @id @default(uuid())
+  credit_note_number String @db.VarChar(30) @unique
+  invoice_id String @db.Uuid
+  patient_id String @db.Uuid
+  reason String
+  amount Decimal @db.Decimal(15, 2)
+  issued_by String @db.Uuid
+  issued_at DateTime @db.Timestamptz(6) @default(now())
+  journal_entry_id String? @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  invoice Invoices @relation(fields: [invoice_id], references: [id], name: "CreditNotes_Invoices_invoice_id")
+  patient Patients @relation(fields: [patient_id], references: [id], name: "CreditNotes_Patients_patient_id")
+  rel_issued_by User @relation(fields: [issued_by], references: [id], name: "CreditNotes_User_issued_by")
+  journal_entry JournalEntries? @relation(fields: [journal_entry_id], references: [id], name: "CreditNotes_JournalEntries_journal_entry_id")
+  @@map("credit_notes")
+  @@schema("billing")
+}
+
+model Payments {
+  id String @db.Uuid @id @default(uuid())
+  payment_number String @db.VarChar(30) @unique
+  patient_id String @db.Uuid
+  amount Decimal @db.Decimal(15, 2)
+  payment_method_id String? @db.Uuid
+  transaction_reference String? @db.VarChar(100)
+  payment_date DateTime @db.Timestamptz(6) @default(now())
+  status String @db.VarChar(20) @default("COMPLETED")
+  notes String?
+  received_by String @db.Uuid
+  journal_entry_id String? @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  patient Patients @relation(fields: [patient_id], references: [id], name: "Payments_Patients_patient_id")
+  payment_method PaymentMethods? @relation(fields: [payment_method_id], references: [id], name: "Payments_PaymentMethods_payment_method_id")
+  rel_received_by User @relation(fields: [received_by], references: [id], name: "Payments_User_received_by")
+  journal_entry JournalEntries? @relation(fields: [journal_entry_id], references: [id], name: "Payments_JournalEntries_journal_entry_id")
+  billing_payment_allocations_payment_id PaymentAllocations[] @relation(name: "PaymentAllocations_Payments_payment_id")
+  @@map("payments")
+  @@schema("billing")
+}
+
+model PaymentAllocations {
+  id String @db.Uuid @id @default(uuid())
+  payment_id String @db.Uuid
+  invoice_id String @db.Uuid
+  allocated_amount Decimal @db.Decimal(15, 2)
+  allocated_at DateTime @db.Timestamptz(6) @default(now())
+  payment Payments @relation(fields: [payment_id], references: [id], name: "PaymentAllocations_Payments_payment_id", onDelete: Cascade)
+  invoice Invoices @relation(fields: [invoice_id], references: [id], name: "PaymentAllocations_Invoices_invoice_id", onDelete: Cascade)
+  @@unique([payment_id, invoice_id])
+  @@map("payment_allocations")
+  @@schema("billing")
+}
+
+model InsuranceClaims {
+  id String @db.Uuid @id @default(uuid())
+  claim_number String @db.VarChar(50) @unique
+  invoice_id String @db.Uuid
+  patient_id String @db.Uuid
+  insurance_policy_id String? @db.Uuid
+  amount_claimed Decimal @db.Decimal(15, 2)
+  amount_approved Decimal? @db.Decimal(15, 2) @default(0)
+  amount_paid Decimal? @db.Decimal(15, 2) @default(0)
+  status String @db.VarChar(25) @default("DRAFT")
+  submission_date DateTime? @db.Timestamptz(6)
+  denial_reason String?
+  notes String?
+  created_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  invoice Invoices @relation(fields: [invoice_id], references: [id], name: "InsuranceClaims_Invoices_invoice_id")
+  patient Patients @relation(fields: [patient_id], references: [id], name: "InsuranceClaims_Patients_patient_id")
+  insurance_policy InsurancePolicies? @relation(fields: [insurance_policy_id], references: [id], name: "InsuranceClaims_InsurancePolicies_insurance_policy_id")
+  rel_created_by User @relation(fields: [created_by], references: [id], name: "InsuranceClaims_User_created_by")
+  @@map("insurance_claims")
+  @@schema("billing")
+}
+
+model BankAccounts {
+  id String @db.Uuid @id @default(uuid())
+  bank_name String @db.VarChar(100)
+  account_number String @db.VarChar(50)
+  account_name String @db.VarChar(150)
+  currency String @db.VarChar(10) @default("KES")
+  gl_account_id String @db.Uuid
+  current_balance Decimal @db.Decimal(15, 2) @default(0)
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  gl_account Accounts @relation(fields: [gl_account_id], references: [id], name: "BankAccounts_Accounts_gl_account_id")
+  billing_bank_transactions_bank_account_id BankTransactions[] @relation(name: "BankTransactions_BankAccounts_bank_account_id")
+  billing_bank_reconciliations_bank_account_id BankReconciliations[] @relation(name: "BankReconciliations_BankAccounts_bank_account_id")
+  @@map("bank_accounts")
+  @@schema("billing")
+}
+
+model BankTransactions {
+  id String @db.Uuid @id @default(uuid())
+  bank_account_id String @db.Uuid
+  transaction_date DateTime @db.Date
+  amount Decimal @db.Decimal(15, 2)
+  transaction_type String @db.VarChar(20)
+  reference String? @db.VarChar(100)
+  description String?
+  is_reconciled Boolean @default(false)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  bank_account BankAccounts @relation(fields: [bank_account_id], references: [id], name: "BankTransactions_BankAccounts_bank_account_id")
+  @@map("bank_transactions")
+  @@schema("billing")
+}
+
+model BankReconciliations {
+  id String @db.Uuid @id @default(uuid())
+  bank_account_id String @db.Uuid
+  reconciliation_date DateTime @db.Date
+  opening_balance Decimal @db.Decimal(15, 2)
+  closing_balance Decimal @db.Decimal(15, 2)
+  statement_balance Decimal @db.Decimal(15, 2)
+  performed_by String @db.Uuid
+  notes String?
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  bank_account BankAccounts @relation(fields: [bank_account_id], references: [id], name: "BankReconciliations_BankAccounts_bank_account_id")
+  rel_performed_by User @relation(fields: [performed_by], references: [id], name: "BankReconciliations_User_performed_by")
+  @@map("bank_reconciliations")
+  @@schema("billing")
+}
+
+model Budgets {
+  id String @db.Uuid @id @default(uuid())
+  budget_name String @db.VarChar(150)
+  fiscal_year Int
+  status String @db.VarChar(20) @default("DRAFT")
+  approved_by String? @db.Uuid
+  approved_at DateTime? @db.Timestamptz(6)
+  notes String?
+  created_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  rel_approved_by User? @relation(fields: [approved_by], references: [id], name: "Budgets_User_approved_by")
+  rel_created_by User @relation(fields: [created_by], references: [id], name: "Budgets_User_created_by")
+  billing_budget_items_budget_id BudgetItems[] @relation(name: "BudgetItems_Budgets_budget_id")
+  @@map("budgets")
+  @@schema("billing")
+}
+
+model BudgetItems {
+  id String @db.Uuid @id @default(uuid())
+  budget_id String @db.Uuid
+  account_id String @db.Uuid
+  period_month Int
+  planned_amount Decimal @db.Decimal(15, 2) @default(0)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  budget Budgets @relation(fields: [budget_id], references: [id], name: "BudgetItems_Budgets_budget_id", onDelete: Cascade)
+  account Accounts @relation(fields: [account_id], references: [id], name: "BudgetItems_Accounts_account_id")
+  @@unique([budget_id, account_id, period_month])
+  @@map("budget_items")
+  @@schema("billing")
+}
+
+model PaymentMethods {
+  id String @db.Uuid @id @default(uuid())
+  method_name String @db.VarChar(50) @unique
+  method_code String @db.VarChar(20) @unique
+  gl_account_id String @db.Uuid
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  gl_account Accounts @relation(fields: [gl_account_id], references: [id], name: "PaymentMethods_Accounts_gl_account_id")
+  billing_payments_payment_method_id Payments[] @relation(name: "Payments_PaymentMethods_payment_method_id")
+  @@map("payment_methods")
+  @@schema("billing")
+}
+
+model TaxRates {
+  id String @db.Uuid @id @default(uuid())
+  tax_name String @db.VarChar(50)
+  tax_code String @db.VarChar(20) @unique
+  rate_percentage Decimal @db.Decimal(5, 2)
+  liability_account_id String @db.Uuid
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  liability_account Accounts @relation(fields: [liability_account_id], references: [id], name: "TaxRates_Accounts_liability_account_id")
+  @@map("tax_rates")
+  @@schema("billing")
+}
+
+model Conversations {
+  id String @db.Uuid @id @default(uuid())
+  conversation_type String @db.VarChar(20)
+  name String? @db.VarChar(150)
+  avatar String? @db.VarChar(500)
+  created_by String @db.Uuid
+  metadata Json?
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  deleted_at DateTime? @db.Timestamptz(6)
+  rel_created_by User @relation(fields: [created_by], references: [id], name: "Conversations_User_created_by")
+  communications_conversation_participants_conversation_id ConversationParticipants[] @relation(name: "ConversationParticipants_Conversations_conversation_id")
+  communications_messages_conversation_id Messages[] @relation(name: "Messages_Conversations_conversation_id")
+  @@map("conversations")
+  @@schema("communications")
+}
+
+model ConversationParticipants {
+  id String @db.Uuid @id @default(uuid())
+  conversation_id String @db.Uuid
+  user_id String @db.Uuid
+  role String @db.VarChar(20) @default("MEMBER")
+  joined_at DateTime @db.Timestamptz(6) @default(now())
+  last_read_message_id String? @db.Uuid
+  is_muted Boolean @default(false)
+  left_at DateTime? @db.Timestamptz(6)
+  conversation Conversations @relation(fields: [conversation_id], references: [id], name: "ConversationParticipants_Conversations_conversation_id", onDelete: Cascade)
+  user User @relation(fields: [user_id], references: [id], name: "ConversationParticipants_User_user_id", onDelete: Cascade)
+  @@unique([conversation_id, user_id])
+  @@map("conversation_participants")
+  @@schema("communications")
+}
+
+model Messages {
+  id String @db.Uuid @id @default(uuid())
+  conversation_id String @db.Uuid
+  sender_id String @db.Uuid
+  parent_message_id String? @db.Uuid
+  message_type String @db.VarChar(20)
+  encrypted_payload String
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  edited_at DateTime? @db.Timestamptz(6)
+  is_deleted Boolean @default(false)
+  view_once_expires_at DateTime? @db.Timestamptz(6)
+  conversation Conversations @relation(fields: [conversation_id], references: [id], name: "Messages_Conversations_conversation_id", onDelete: Cascade)
+  sender User @relation(fields: [sender_id], references: [id], name: "Messages_User_sender_id")
+  parent_message Messages? @relation(fields: [parent_message_id], references: [id], name: "Messages_Messages_parent_message_id", onDelete: SetNull)
+  communications_messages_parent_message_id Messages[] @relation(name: "Messages_Messages_parent_message_id")
+  communications_message_attachments_message_id MessageAttachments[] @relation(name: "MessageAttachments_Messages_message_id")
+  communications_message_delivery_receipts_message_id MessageDeliveryReceipts[] @relation(name: "MessageDeliveryReceipts_Messages_message_id")
+  communications_message_reactions_message_id MessageReactions[] @relation(name: "MessageReactions_Messages_message_id")
+  communications_message_edit_history_message_id MessageEditHistory[] @relation(name: "MessageEditHistory_Messages_message_id")
+  @@map("messages")
+  @@schema("communications")
+}
+
+model MessageAttachments {
+  id String @db.Uuid @id @default(uuid())
+  message_id String @db.Uuid
+  file_path String @db.VarChar(500)
+  file_name String @db.VarChar(255)
+  mime_type String? @db.VarChar(50)
+  file_size BigInt?
+  thumbnail_path String? @db.VarChar(500)
+  encryption_key_hash String? @db.VarChar(255)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  message Messages @relation(fields: [message_id], references: [id], name: "MessageAttachments_Messages_message_id", onDelete: Cascade)
+  @@map("message_attachments")
+  @@schema("communications")
+}
+
+model MessageDeliveryReceipts {
+  id String @db.Uuid @id @default(uuid())
+  message_id String @db.Uuid
+  recipient_id String @db.Uuid
+  delivery_status String @db.VarChar(20) @default("SENT")
+  delivered_at DateTime? @db.Timestamptz(6)
+  read_at DateTime? @db.Timestamptz(6)
+  viewed_at DateTime? @db.Timestamptz(6)
+  message Messages @relation(fields: [message_id], references: [id], name: "MessageDeliveryReceipts_Messages_message_id", onDelete: Cascade)
+  recipient User @relation(fields: [recipient_id], references: [id], name: "MessageDeliveryReceipts_User_recipient_id", onDelete: Cascade)
+  @@unique([message_id, recipient_id])
+  @@map("message_delivery_receipts")
+  @@schema("communications")
+}
+
+model MessageReactions {
+  id String @db.Uuid @id @default(uuid())
+  message_id String @db.Uuid
+  user_id String @db.Uuid
+  reaction_type String @db.VarChar(30)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  message Messages @relation(fields: [message_id], references: [id], name: "MessageReactions_Messages_message_id", onDelete: Cascade)
+  user User @relation(fields: [user_id], references: [id], name: "MessageReactions_User_user_id", onDelete: Cascade)
+  @@unique([message_id, user_id, reaction_type])
+  @@map("message_reactions")
+  @@schema("communications")
+}
+
+model MessageEditHistory {
+  id String @db.Uuid @id @default(uuid())
+  message_id String @db.Uuid
+  original_encrypted_payload String
+  edited_at DateTime @db.Timestamptz(6) @default(now())
+  edited_by String @db.Uuid
+  message Messages @relation(fields: [message_id], references: [id], name: "MessageEditHistory_Messages_message_id", onDelete: Cascade)
+  rel_edited_by User @relation(fields: [edited_by], references: [id], name: "MessageEditHistory_User_edited_by")
+  @@map("message_edit_history")
+  @@schema("communications")
+}
+
+model NotificationProviders {
+  id String @db.Uuid @id @default(uuid())
+  provider_name String @db.VarChar(100)
+  provider_type String @db.VarChar(30)
+  credentials Json
+  is_active Boolean @default(true)
+  priority Int @default(10)
+  rate_limit_per_minute Int? @default(60)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  communications_notification_delivery_logs_provider_id NotificationDeliveryLogs[] @relation(name: "NotificationDeliveryLogs_NotificationProviders_provider_id")
+  @@map("notification_providers")
+  @@schema("communications")
+}
+
+model NotificationTemplates {
+  id String @db.Uuid @id @default(uuid())
+  template_key String @db.VarChar(100) @unique
+  channel String @db.VarChar(20)
+  subject String? @db.VarChar(255)
+  body_template String
+  locale String @db.VarChar(10) @default("en")
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  @@unique([template_key, channel, locale])
+  @@map("notification_templates")
+  @@schema("communications")
+}
+
+model Notifications {
+  id String @db.Uuid @id @default(uuid())
+  user_id String @db.Uuid
+  notification_type String @db.VarChar(50)
+  title String @db.VarChar(255)
+  encrypted_body String?
+  priority String @db.VarChar(20) @default("NORMAL")
+  is_read Boolean @default(false)
+  read_at DateTime? @db.Timestamptz(6)
+  expires_at DateTime? @db.Timestamptz(6)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  user User @relation(fields: [user_id], references: [id], name: "Notifications_User_user_id", onDelete: Cascade)
+  communications_notification_delivery_logs_notification_id NotificationDeliveryLogs[] @relation(name: "NotificationDeliveryLogs_Notifications_notification_id")
+  @@map("notifications")
+  @@schema("communications")
+}
+
+model NotificationDeliveryLogs {
+  id String @db.Uuid @id @default(uuid())
+  notification_id String @db.Uuid
+  provider_id String @db.Uuid
+  channel String @db.VarChar(20)
+  status String @db.VarChar(20) @default("PENDING")
+  sent_at DateTime? @db.Timestamptz(6)
+  delivered_at DateTime? @db.Timestamptz(6)
+  error_message String?
+  retry_count Int @default(0)
+  external_id String? @db.VarChar(100)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  notification Notifications @relation(fields: [notification_id], references: [id], name: "NotificationDeliveryLogs_Notifications_notification_id", onDelete: Cascade)
+  provider NotificationProviders @relation(fields: [provider_id], references: [id], name: "NotificationDeliveryLogs_NotificationProviders_provider_id")
+  @@map("notification_delivery_logs")
+  @@schema("communications")
+}
+
+/// Daraja STK Push checkout sessions (pending → success/fail)
+model MpesaTransactions {
+  id                   String    @id @default(uuid()) @db.Uuid
+  checkout_request_id  String    @unique @db.VarChar(100)
+  merchant_request_id  String?   @db.VarChar(100)
+  phone                String    @db.VarChar(20)
+  amount               Decimal   @db.Decimal(15, 2)
+  account_reference    String    @db.VarChar(50)
+  description          String?   @db.VarChar(200)
+  status               String    @default("PENDING") @db.VarChar(20)
+  result_code          String?   @db.VarChar(20)
+  result_desc          String?
+  mpesa_receipt_number String?   @db.VarChar(50)
+  visit_id             String?   @db.Uuid
+  patient_id           String?   @db.Uuid
+  source               String    @default("RECEPTION") @db.VarChar(30)
+  initiated_by         String    @db.Uuid
+  payload              Json      @default("{}")
+  created_at           DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime  @updatedAt @db.Timestamptz(6)
+  receipts             Receipts[]
+
+  @@index([status])
+  @@index([visit_id])
+  @@map("mpesa_transactions")
+  @@schema("billing")
+}
+
+/// Printable / stored facility receipts after successful checkout
+model Receipts {
+  id                    String    @id @default(uuid()) @db.Uuid
+  receipt_number        String    @unique @db.VarChar(40)
+  patient_id            String    @db.Uuid
+  visit_id              String?   @db.Uuid
+  invoice_id            String?   @db.Uuid
+  payment_id            String?   @db.Uuid
+  mpesa_transaction_id  String?   @db.Uuid
+  channel               String    @db.VarChar(20)
+  amount                Decimal   @db.Decimal(15, 2)
+  issued_by             String    @db.Uuid
+  issued_at             DateTime  @default(now()) @db.Timestamptz(6)
+  line_items            Json      @default("[]")
+  meta                  Json      @default("{}")
+  created_at            DateTime  @default(now()) @db.Timestamptz(6)
+  mpesa_transaction     MpesaTransactions? @relation(fields: [mpesa_transaction_id], references: [id], onDelete: SetNull)
+
+  @@index([patient_id])
+  @@index([visit_id])
+  @@map("receipts")
+  @@schema("billing")
+}
