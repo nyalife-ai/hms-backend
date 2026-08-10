@@ -14,7 +14,7 @@
 # STAGE 1: Dependencies
 # Install only production dependencies to cache this layer effectively.
 # ============================================================================
-FROM node:20-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
 
 RUN corepack enable
@@ -25,7 +25,7 @@ RUN yarn install --frozen-lockfile --production=true --ignore-scripts
 # STAGE 2: Builder
 # Install all dependencies (including dev) and compile TypeScript.
 # ============================================================================
-FROM node:20-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
 
 RUN corepack enable
@@ -47,7 +47,7 @@ RUN yarn build
 # STAGE 3: Production
 # Lean runtime image with compiled output and production dependencies only.
 # ============================================================================
-FROM node:20-alpine AS production
+FROM node:26-alpine AS production
 WORKDIR /app
 
 # OCI image metadata (populated further by docker/metadata-action in CI)
