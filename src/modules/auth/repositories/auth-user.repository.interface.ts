@@ -19,6 +19,7 @@ export interface IAuthUserRepository {
   listActiveUsers(): Promise<AuthUser[]>;
   touchLastLogin(userId: string): Promise<void>;
   updatePasswordHash(userId: string, passwordHash: string): Promise<void>;
+  updateTwoFactorEnabled(userId: string, enabled: boolean): Promise<void>;
   createRefreshToken(input: {
     userId: string;
     tokenHash: string;
@@ -41,6 +42,13 @@ export interface IAuthUserRepository {
   findPasswordResetByHash(
     tokenHash: string,
   ): Promise<{ userId: string; expiresAt: Date; revokedAt?: Date | null } | null>;
+  /** Find a challenge/token row by hash + exact user_agent marker. */
+  findChallengeByHash(
+    tokenHash: string,
+    userAgent: string,
+  ): Promise<{ userId: string; expiresAt: Date; revokedAt?: Date | null } | null>;
+  /** Revoke outstanding reset/OTP challenges for a user. */
+  revokeUserChallenges(userId: string, userAgents: string[]): Promise<void>;
   /** Align core.role_permissions with ROLE_MODULE_ACCESS (add + remove). */
   syncRoleModulePermissions(): Promise<void>;
 }

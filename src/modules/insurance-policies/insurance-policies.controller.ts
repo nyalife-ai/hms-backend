@@ -4,14 +4,29 @@
  * Purpose: HTTP controller with Swagger + pagination query.
  */
 
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
-// import { Public } from '../../common/decorators/public.decorator';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import type { CreateInsurancePolicyDto, InsurancePoliciesQueryDto, UpdateInsurancePolicyDto } from './dto';
 import { InsurancePoliciesService } from './insurance-policies.service';
 
 @ApiTags('InsurancePolicies')
+@ApiBearerAuth()
 @Controller('insurance-policies')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
 export class InsurancePoliciesController {
   public constructor(private readonly service: InsurancePoliciesService) {}
 
@@ -23,7 +38,6 @@ export class InsurancePoliciesController {
 
   @Get()
   @ApiOperation({ summary: 'List insurance-policies (paginated)' })
-  // @Public()
   findAll(@Query() query: InsurancePoliciesQueryDto) {
     return this.service.findAll(query);
   }
@@ -41,6 +55,7 @@ export class InsurancePoliciesController {
   }
 
   @Delete(':id')
+  @Roles('ADMIN')
   @ApiOperation({ summary: 'Soft-delete insurance-policy' })
   remove(@Param('id') id: string) {
     return this.service.softDelete(id);

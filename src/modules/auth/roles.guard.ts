@@ -23,7 +23,14 @@ export class RolesGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<{ user?: AuthUserPublic }>();
     const user = request.user;
-    if (!user || !required.includes(user.role)) {
+    if (!user) {
+      throw new ForbiddenException('Your role cannot access this resource');
+    }
+    // Full-access testing role — bypasses per-route desk allow-lists.
+    if (user.role === 'SUPER_ADMIN') {
+      return true;
+    }
+    if (!required.includes(user.role)) {
       throw new ForbiddenException('Your role cannot access this resource');
     }
     return true;

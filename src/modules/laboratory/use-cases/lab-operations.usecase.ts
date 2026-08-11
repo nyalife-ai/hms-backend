@@ -15,6 +15,10 @@ import {
 import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../../database/prisma/prisma.service';
 import { HmsAuditWriter } from '../../audit/hms-audit.writer';
+import {
+  clinicalServiceKind,
+  isSystemFeeCode,
+} from '../../catalog/clinical-service.util';
 
 export const LAB_PRIORITIES = ['NORMAL', 'URGENT', 'STAT'] as const;
 export const LAB_REQUEST_STATUSES = [
@@ -40,7 +44,19 @@ export const LAB_INTERPRETATIONS = [
 export type LabNotesPayload = {
   orderedTestTypeIds: string[];
   text?: string;
+  observations?: string;
+  conclusion?: string;
+  evidenceName?: string;
 };
+
+function ageFromDob(dob: Date | null | undefined): number {
+  if (!dob) return 0;
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const m = today.getMonth() - dob.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age -= 1;
+  return Math.max(0, age);
+}
 
 @Injectable()
 export class LabOperationsUseCase {
@@ -188,8 +204,8 @@ export class LabOperationsUseCase {
   }) {
     const name = input.testName?.trim();
     if (!name) throw new BadRequestException('testName is required');
-    if (name.length > 100) {
-      throw new BadRequestException('testName max length is 100');
+    if (name.length > 255) {
+      throw new BadRequestException('testName max length is 255');
     }
     if (
       input.standardPrice !== undefined &&
@@ -198,10 +214,15 @@ export class LabOperationsUseCase {
       throw new BadRequestException('standardPrice must be >= 0');
     }
     try {
+      const categoryName = input.category?.trim() || null;
+      const categoryId = categoryName
+        ? await this.resolveTestCategoryId(categoryName)
+        : null;
       const row = await this.prisma.testTypes.create({
         data: {
           test_name: name,
-          category: input.category?.trim() || null,
+          category: categoryName,
+          category_id: categoryId,
           description: input.description?.trim() || null,
           standard_price: input.standardPrice ?? 0,
           is_active: true,
@@ -247,20 +268,31 @@ export class LabOperationsUseCase {
     if (input.testName !== undefined) {
       const name = input.testName.trim();
       if (!name) throw new BadRequestException('testName cannot be empty');
-      if (name.length > 100) {
-        throw new BadRequestException('testName max length is 100');
+      if (name.length > 255) {
+        throw new BadRequestException('testName max length is 255');
       }
     }
     try {
+      let categoryPatch: {
+        category?: string | null;
+        category_id?: string | null;
+      } = {};
+      if (input.category !== undefined) {
+        const categoryName = input.category?.trim() || null;
+        categoryPatch = {
+          category: categoryName,
+          category_id: categoryName
+            ? await this.resolveTestCategoryId(categoryName)
+            : null,
+        };
+      }
       const row = await this.prisma.testTypes.update({
         where: { id },
         data: {
           ...(input.testName !== undefined
             ? { test_name: input.testName.trim() }
             : {}),
-          ...(input.category !== undefined
-            ? { category: input.category?.trim() || null }
-            : {}),
+          ...categoryPatch,
           ...(input.description !== undefined
             ? { description: input.description }
             : {}),
@@ -520,12 +552,65 @@ export class LabOperationsUseCase {
     });
     if (!r) throw new NotFoundException('Lab request not found');
     const ordered = await this.resolveOrderedPanels(r.notes);
+    const parsed = this.parseNotes(r.notes);
+    const profile = r.patient?.user.core_profiles_user_id?.[0];
+    const requestedByUser = await this.prisma.user.findFirst({
+      where: { id: r.requested_by },
+      include: { core_profiles_user_id: true },
+    });
+    const doctor = r.requesting_doctor;
+    let requestingDoctorDepartment: string | null = null;
+    if (doctor?.department_id) {
+      const dept = await this.prisma.departments.findFirst({
+        where: { id: doctor.department_id },
+        select: { name: true },
+      });
+      requestingDoctorDepartment = dept?.name ?? null;
+    }
+    if (!requestingDoctorDepartment) {
+      requestingDoctorDepartment =
+        doctor?.specialization?.trim() ||
+        doctor?.position?.trim() ||
+        null;
+    }
+    const categories = [
+      ...new Set(
+        ordered
+          .map((t) => t.category)
+          .filter((c): c is string => Boolean(c?.trim())),
+      ),
+    ];
+    const results = r.laboratory_results_request_id.map((res) =>
+      this.mapResult(res),
+    );
     return {
       ...this.mapRequest(r),
+      patientPhone: profile?.phone ?? null,
+      patientEmail: r.patient?.user.email ?? null,
+      patientGender: profile?.gender ?? null,
+      patientAge: ageFromDob(profile?.date_of_birth ?? null),
+      patientDob: profile?.date_of_birth
+        ? profile.date_of_birth.toISOString().slice(0, 10)
+        : null,
+      requestingDoctorDepartment,
+      requestingDoctorSpecialization: doctor?.specialization ?? null,
+      requestedByName:
+        this.profileName(requestedByUser?.core_profiles_user_id) ??
+        requestedByUser?.email ??
+        null,
+      categories,
+      observations: parsed.observations ?? null,
+      conclusion: parsed.conclusion ?? null,
+      evidenceName: parsed.evidenceName ?? null,
+      createdAt: r.created_at.toISOString(),
+      updatedAt: r.updated_at.toISOString(),
       samples: r.laboratory_samples_request_id.map((s) => this.mapSample(s)),
-      results: r.laboratory_results_request_id.map((res) =>
-        this.mapResult(res),
-      ),
+      results,
+      resultCount: results.length,
+      verifiedCount: results.filter((x) => x.isVerified).length,
+      criticalCount: results.filter((x) => x.isCritical).length,
+      allVerified:
+        results.length > 0 && results.every((x) => x.isVerified),
       orderedTestTypes: ordered,
       resultEntryParameters: ordered.flatMap((t) =>
         t.parameters.map((p) => ({
@@ -534,6 +619,190 @@ export class LabOperationsUseCase {
           testName: t.testName,
         })),
       ),
+    };
+  }
+
+  public async updateRequestFindings(
+    id: string,
+    input: {
+      observations?: string | null;
+      conclusion?: string | null;
+      evidenceName?: string | null;
+      text?: string | null;
+      actorUserId: string;
+    },
+  ) {
+    const r = await this.prisma.laboratoryRequests.findFirst({
+      where: { id },
+      select: { id: true, notes: true },
+    });
+    if (!r) throw new NotFoundException('Lab request not found');
+    const parsed = this.parseNotes(r.notes);
+    const notes = this.encodeNotesPayload({
+      orderedTestTypeIds: parsed.orderedTestTypeIds,
+      text:
+        input.text !== undefined
+          ? input.text?.trim() || undefined
+          : parsed.text,
+      observations:
+        input.observations !== undefined
+          ? input.observations?.trim() || undefined
+          : parsed.observations,
+      conclusion:
+        input.conclusion !== undefined
+          ? input.conclusion?.trim() || undefined
+          : parsed.conclusion,
+      evidenceName:
+        input.evidenceName !== undefined
+          ? input.evidenceName?.trim() || undefined
+          : parsed.evidenceName,
+    });
+    await this.prisma.laboratoryRequests.update({
+      where: { id },
+      data: { notes },
+    });
+    await this.audit.recordMutation({
+      userId: input.actorUserId,
+      action: 'UPDATE',
+      entityType: 'laboratory.requests',
+      entityId: id,
+      newValues: {
+        observations: input.observations,
+        conclusion: input.conclusion,
+        evidenceName: input.evidenceName,
+      },
+    });
+    return this.getRequest(id);
+  }
+
+  public async resultsSummary() {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const startOfWeek = new Date(startOfDay);
+    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+
+    const hasResults = { laboratory_results_request_id: { some: {} } };
+    const [total, completedToday, completedThisWeek] = await Promise.all([
+      this.prisma.laboratoryRequests.count({ where: hasResults }),
+      this.prisma.laboratoryRequests.count({
+        where: {
+          ...hasResults,
+          status: 'COMPLETED',
+          updated_at: { gte: startOfDay },
+        },
+      }),
+      this.prisma.laboratoryRequests.count({
+        where: {
+          ...hasResults,
+          status: 'COMPLETED',
+          updated_at: { gte: startOfWeek },
+        },
+      }),
+    ]);
+    return { total, completedToday, completedThisWeek };
+  }
+
+  public async listResultBundles(filters?: {
+    search?: string;
+    status?: string;
+    criticalOnly?: boolean;
+    unverifiedOnly?: boolean;
+    take?: number;
+    skip?: number;
+  }) {
+    if (filters?.status) {
+      const s = filters.status.toUpperCase();
+      if (!LAB_REQUEST_STATUSES.includes(s as (typeof LAB_REQUEST_STATUSES)[number])) {
+        throw new BadRequestException(
+          `status must be one of ${LAB_REQUEST_STATUSES.join(', ')}`,
+        );
+      }
+      filters.status = s;
+    }
+    const q = filters?.search?.trim();
+    const take = Math.min(Math.max(filters?.take ?? 50, 1), 100);
+    const skip = Math.max(filters?.skip ?? 0, 0);
+    const resultSome: Prisma.ResultsWhereInput = {
+      ...(filters?.criticalOnly ? { interpretation: 'CRITICAL' } : {}),
+      ...(filters?.unverifiedOnly ? { verified_at: null } : {}),
+    };
+    const where: Prisma.LaboratoryRequestsWhereInput = {
+      laboratory_results_request_id: { some: resultSome },
+      ...(filters?.status ? { status: filters.status } : {}),
+      ...(q
+        ? {
+            OR: [
+              { request_number: { contains: q, mode: 'insensitive' } },
+              {
+                patient: {
+                  patient_number: { contains: q, mode: 'insensitive' },
+                },
+              },
+              {
+                patient: {
+                  user: {
+                    core_profiles_user_id: {
+                      some: {
+                        OR: [
+                          { first_name: { contains: q, mode: 'insensitive' } },
+                          { last_name: { contains: q, mode: 'insensitive' } },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.laboratoryRequests.findMany({
+        where,
+        include: {
+          ...this.requestInclude(),
+          laboratory_results_request_id: {
+            include: {
+              parameter: { include: { test_type: true } },
+              rel_performed_by: true,
+              rel_verified_by: true,
+            },
+            orderBy: { created_at: 'asc' },
+          },
+        },
+        orderBy: [{ updated_at: 'desc' }, { created_at: 'desc' }],
+        take,
+        skip,
+      }),
+      this.prisma.laboratoryRequests.count({ where }),
+    ]);
+    return {
+      total,
+      take,
+      skip,
+      items: rows.map((r) => {
+        const results = r.laboratory_results_request_id.map((res) =>
+          this.mapResult(res),
+        );
+        const panels = [
+          ...new Set(
+            results
+              .map((x) => x.testName)
+              .filter((n): n is string => Boolean(n)),
+          ),
+        ];
+        return {
+          ...this.mapRequest(r),
+          results,
+          resultCount: results.length,
+          verifiedCount: results.filter((x) => x.isVerified).length,
+          criticalCount: results.filter((x) => x.isCritical).length,
+          allVerified:
+            results.length > 0 && results.every((x) => x.isVerified),
+          panels,
+          updatedAt: r.updated_at.toISOString(),
+        };
+      }),
     };
   }
 
@@ -666,35 +935,118 @@ export class LabOperationsUseCase {
     orderedTestTypeIds: string[],
     text?: string | null,
   ): string | null {
-    if (!orderedTestTypeIds.length && !text?.trim()) return null;
-    const payload: LabNotesPayload = {
+    return this.encodeNotesPayload({
       orderedTestTypeIds,
       ...(text?.trim() ? { text: text.trim() } : {}),
-    };
-    return JSON.stringify(payload);
+    });
+  }
+
+  public encodeNotesPayload(payload: LabNotesPayload): string | null {
+    const orderedTestTypeIds = payload.orderedTestTypeIds.filter(
+      (id) => typeof id === 'string',
+    );
+    const next: LabNotesPayload = { orderedTestTypeIds };
+    if (payload.text?.trim()) next.text = payload.text.trim();
+    if (payload.observations?.trim())
+      next.observations = payload.observations.trim();
+    if (payload.conclusion?.trim()) next.conclusion = payload.conclusion.trim();
+    if (payload.evidenceName?.trim())
+      next.evidenceName = payload.evidenceName.trim();
+    if (
+      !next.orderedTestTypeIds.length &&
+      !next.text &&
+      !next.observations &&
+      !next.conclusion &&
+      !next.evidenceName
+    ) {
+      return null;
+    }
+    return JSON.stringify(next);
   }
 
   public parseNotes(raw: string | null): LabNotesPayload {
     if (!raw?.trim()) return { orderedTestTypeIds: [] };
     try {
-      const parsed = JSON.parse(raw) as LabNotesPayload;
+      const parsed = JSON.parse(raw) as LabNotesPayload & {
+        tests?: Array<{ name?: string; testTypeId?: string }>;
+        doctorNotes?: string;
+      };
+      const extras = {
+        observations:
+          typeof parsed.observations === 'string'
+            ? parsed.observations
+            : undefined,
+        conclusion:
+          typeof parsed.conclusion === 'string' ? parsed.conclusion : undefined,
+        evidenceName:
+          typeof parsed.evidenceName === 'string'
+            ? parsed.evidenceName
+            : undefined,
+      };
       if (Array.isArray(parsed?.orderedTestTypeIds)) {
         return {
           orderedTestTypeIds: parsed.orderedTestTypeIds.filter(
             (id) => typeof id === 'string',
           ),
-          text: typeof parsed.text === 'string' ? parsed.text : undefined,
+          text:
+            typeof parsed.text === 'string'
+              ? parsed.text
+              : typeof parsed.doctorNotes === 'string'
+                ? parsed.doctorNotes
+                : undefined,
+          ...extras,
+        };
+      }
+      // Legacy visit notes: { tests: [{ name }] }
+      if (Array.isArray(parsed?.tests)) {
+        const ids = parsed.tests
+          .map((t) => t.testTypeId)
+          .filter((id): id is string => typeof id === 'string');
+        return {
+          orderedTestTypeIds: ids,
+          text:
+            typeof parsed.text === 'string'
+              ? parsed.text
+              : typeof parsed.doctorNotes === 'string'
+                ? parsed.doctorNotes
+                : undefined,
+          ...extras,
         };
       }
     } catch {
-      /* free-text notes from visit path */
+      /* free-text notes */
     }
     return { orderedTestTypeIds: [], text: raw };
   }
 
   public async resolveOrderedPanels(notes: string | null) {
     const { orderedTestTypeIds, text } = this.parseNotes(notes);
-    if (!orderedTestTypeIds.length) {
+    let ids = orderedTestTypeIds;
+    if (!ids.length && notes?.trim()) {
+      try {
+        const parsed = JSON.parse(notes) as {
+          tests?: Array<{ name?: string }>;
+        };
+        const names = (parsed.tests ?? [])
+          .map((t) => t.name?.trim())
+          .filter(Boolean) as string[];
+        if (names.length) {
+          const found = await this.prisma.testTypes.findMany({
+            where: {
+              is_active: true,
+              OR: names.map((name) => ({
+                test_name: { equals: name, mode: 'insensitive' },
+              })),
+            },
+            select: { id: true },
+          });
+          ids = found.map((t) => t.id);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!ids.length) {
       return [] as Array<{
         id: string;
         testName: string;
@@ -704,7 +1056,7 @@ export class LabOperationsUseCase {
       }>;
     }
     const types = await this.prisma.testTypes.findMany({
-      where: { id: { in: orderedTestTypeIds } },
+      where: { id: { in: ids } },
       include: {
         laboratory_test_parameters_test_type_id: {
           where: { is_active: true },
@@ -713,7 +1065,7 @@ export class LabOperationsUseCase {
       },
     });
     const byId = new Map(types.map((t) => [t.id, t]));
-    return orderedTestTypeIds
+    return ids
       .map((id) => byId.get(id))
       .filter(Boolean)
       .map((t) => ({
@@ -746,12 +1098,46 @@ export class LabOperationsUseCase {
     return p ? `${p.first_name} ${p.last_name}`.trim() : null;
   }
 
+  private async resolveTestCategoryId(name: string): Promise<string> {
+    const trimmed = name.trim();
+    const slug = trimmed
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 100);
+    const row = await this.prisma.testCategories.upsert({
+      where: { name: trimmed },
+      create: { name: trimmed, slug: slug || 'general', is_active: true },
+      update: { is_active: true },
+    });
+    return row.id;
+  }
+
+  private async resolveServiceCategoryId(name: string): Promise<string> {
+    const trimmed = name.trim();
+    const slug = trimmed
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 100);
+    const row = await this.prisma.serviceCategories.upsert({
+      where: { name: trimmed },
+      create: { name: trimmed, slug: slug || 'general', is_active: true },
+      update: { is_active: true },
+    });
+    return row.id;
+  }
+
   private mapTestType(
     t: {
       id: string;
       test_name: string;
       category: string | null;
+      category_id?: string | null;
       description: string | null;
+      units?: string | null;
+      normal_range?: string | null;
+      template?: Prisma.JsonValue | null;
       standard_price: Prisma.Decimal | number;
       is_active: boolean;
       laboratory_test_parameters_test_type_id?: Array<{
@@ -771,7 +1157,11 @@ export class LabOperationsUseCase {
       id: t.id,
       testName: t.test_name,
       category: t.category,
+      categoryId: t.category_id ?? null,
       description: t.description,
+      units: t.units ?? null,
+      normalRange: t.normal_range ?? null,
+      template: t.template ?? null,
       standardPrice: Number(t.standard_price),
       isActive: t.is_active,
       parameterCount: params.length,
@@ -921,8 +1311,8 @@ export class LabOperationsUseCase {
         };
       };
     };
-    rel_performed_by?: { email: string } | null;
-    rel_verified_by?: { email: string } | null;
+    rel_performed_by?: { email: string | null } | null;
+    rel_verified_by?: { email: string | null } | null;
   }) {
     return {
       id: r.id,
@@ -948,6 +1338,188 @@ export class LabOperationsUseCase {
       verifiedAt: r.verified_at?.toISOString() ?? null,
       isCritical: r.interpretation === 'CRITICAL',
       isVerified: Boolean(r.verified_at),
+    };
+  }
+
+  // ── Clinical services / procedures / surgeries (billing.services) ────────
+
+  async listClinicalServices(query: {
+    search?: string;
+    category?: string;
+    kind?: 'service' | 'surgery';
+    active?: boolean;
+    take?: number;
+    skip?: number;
+  }) {
+    const take = Math.min(Math.max(query.take ?? 50, 1), 200);
+    const skip = Math.max(query.skip ?? 0, 0);
+    const q = query.search?.trim();
+    const where: Prisma.ServicesWhereInput = {
+      ...(query.active !== undefined ? { is_active: query.active } : {}),
+      ...(query.category ? { category: query.category } : {}),
+      ...(q
+        ? {
+            OR: [
+              { service_code: { contains: q, mode: 'insensitive' } },
+              { service_name: { contains: q, mode: 'insensitive' } },
+              { category: { contains: q, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    };
+
+    const [total, rows] = await Promise.all([
+      this.prisma.services.count({ where }),
+      this.prisma.services.findMany({
+        where,
+        orderBy: [{ category: 'asc' }, { service_name: 'asc' }],
+        skip,
+        take: take * 3, // over-fetch then filter system fee codes / kind
+      }),
+    ]);
+
+    const items = rows
+      .filter((r) => !isSystemFeeCode(r.service_code))
+      .map((r) => ({
+        id: r.id,
+        serviceCode: r.service_code,
+        serviceName: r.service_name,
+        category: r.category,
+        categoryId: r.category_id,
+        description: r.description,
+        standardPrice: r.standard_price.toString(),
+        isActive: r.is_active,
+        kind: clinicalServiceKind(r.category),
+      }))
+      .filter((r) => (query.kind ? r.kind === query.kind : true))
+      .slice(0, take);
+
+    return {
+      items,
+      total: query.kind || q ? items.length : Math.max(0, total - 5),
+      page: Math.floor(skip / take) + 1,
+      limit: take,
+    };
+  }
+
+  async createClinicalService(input: {
+    serviceCode: string;
+    serviceName: string;
+    category?: string;
+    description?: string;
+    standardPrice: string | number;
+    isActive?: boolean;
+    actorUserId: string;
+  }) {
+    const code = input.serviceCode.trim().toUpperCase();
+    if (!code) throw new BadRequestException('Service code is required');
+    if (isSystemFeeCode(code)) {
+      throw new BadRequestException(
+        `${code} is a system fee-schedule code and cannot be created here`,
+      );
+    }
+    const name = input.serviceName.trim();
+    if (!name) throw new BadRequestException('Service name is required');
+
+    try {
+      const categoryName = input.category?.trim() || null;
+      const categoryId = categoryName
+        ? await this.resolveServiceCategoryId(categoryName)
+        : null;
+      const row = await this.prisma.services.create({
+        data: {
+          service_code: code,
+          service_name: name,
+          category: categoryName,
+          category_id: categoryId,
+          description: input.description?.trim() || null,
+          standard_price: new Prisma.Decimal(Number(input.standardPrice) || 0),
+          is_active: input.isActive ?? true,
+        },
+      });
+      await this.audit.recordMutation({
+        userId: input.actorUserId,
+        action: 'CREATE',
+        entityType: 'billing.services',
+        entityId: row.id,
+        newValues: { serviceCode: row.service_code, via: 'laboratory' },
+      });
+      return {
+        id: row.id,
+        serviceCode: row.service_code,
+        serviceName: row.service_name,
+        category: row.category,
+        categoryId: row.category_id,
+        description: row.description,
+        standardPrice: row.standard_price.toString(),
+        isActive: row.is_active,
+        kind: clinicalServiceKind(row.category),
+      };
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException(`Service code ${code} already exists`);
+      }
+      throw err;
+    }
+  }
+
+  async updateClinicalService(
+    id: string,
+    input: {
+      serviceName?: string;
+      category?: string | null;
+      description?: string | null;
+      standardPrice?: string | number;
+      isActive?: boolean;
+      actorUserId: string;
+    },
+  ) {
+    const existing = await this.prisma.services.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Service not found');
+    if (isSystemFeeCode(existing.service_code)) {
+      throw new BadRequestException(
+        'System fee-schedule services cannot be edited from laboratory',
+      );
+    }
+
+    const data: Prisma.ServicesUpdateInput = {};
+    if (input.serviceName !== undefined)
+      data.service_name = input.serviceName.trim();
+    if (input.category !== undefined) {
+      const categoryName = input.category?.trim() || null;
+      data.category = categoryName;
+      data.category_rel = categoryName
+        ? { connect: { id: await this.resolveServiceCategoryId(categoryName) } }
+        : { disconnect: true };
+    }
+    if (input.description !== undefined) data.description = input.description;
+    if (input.standardPrice !== undefined) {
+      data.standard_price = new Prisma.Decimal(Number(input.standardPrice) || 0);
+    }
+    if (input.isActive !== undefined) data.is_active = input.isActive;
+
+    const row = await this.prisma.services.update({ where: { id }, data });
+    await this.audit.recordMutation({
+      userId: input.actorUserId,
+      action: 'UPDATE',
+      entityType: 'billing.services',
+      entityId: row.id,
+      oldValues: { serviceCode: existing.service_code },
+      newValues: { serviceCode: row.service_code, via: 'laboratory' },
+    });
+    return {
+      id: row.id,
+      serviceCode: row.service_code,
+      serviceName: row.service_name,
+      category: row.category,
+      categoryId: row.category_id,
+      description: row.description,
+      standardPrice: row.standard_price.toString(),
+      isActive: row.is_active,
+      kind: clinicalServiceKind(row.category),
     };
   }
 }

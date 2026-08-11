@@ -6,6 +6,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma';
 import { PrismaService } from '../../database/prisma/prisma.service';
+import { getAuditRequestStore } from './audit-request.context';
+import { diffAuditFields, maskAuditRecord } from './audit-masking';
 
 export type AuditAction = 'CREATE' | 'UPDATE' | 'DELETE' | 'RESTORE';
 
@@ -37,27 +39,36 @@ export class HmsAuditWriter {
 
   public async recordMutation(input: RecordMutationInput): Promise<void> {
     if (!this.prisma.isConnected) return;
+    const store = getAuditRequestStore();
+    if (store) store.skipDepth += 1;
     try {
+      const oldMasked = maskAuditRecord(input.oldValues ?? null);
+      const newMasked = maskAuditRecord(input.newValues ?? null);
+      const changes = diffAuditFields(oldMasked, newMasked);
       await this.prisma.auditLogs.create({
         data: {
-          user_id: input.userId || null,
+          user_id: input.userId || store?.userId || null,
           action: input.action,
           entity_type: input.entityType.slice(0, 100),
           entity_id: input.entityId,
-          old_values: (input.oldValues ?? undefined) as
+          old_values: (oldMasked ?? undefined) as
             | Prisma.InputJsonValue
             | undefined,
-          new_values: (input.newValues ?? undefined) as
-            | Prisma.InputJsonValue
-            | undefined,
-          ip_address: input.ipAddress?.slice(0, 45) || null,
-          user_agent: input.userAgent || null,
+          new_values: {
+            ...(newMasked ?? {}),
+            __changedFields: changes,
+          } as Prisma.InputJsonValue,
+          ip_address:
+            (input.ipAddress || store?.ipAddress)?.slice(0, 45) || null,
+          user_agent: input.userAgent || store?.userAgent || null,
         },
       });
     } catch (err) {
       this.logger.warn(
         `audit_logs write failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+    } finally {
+      if (store) store.skipDepth = Math.max(0, store.skipDepth - 1);
     }
   }
 

@@ -6,6 +6,7 @@ import { PassportModule } from '@nestjs/passport';
 import { PrismaModule } from '../../database/prisma/prisma.module';
 import { AuditModule } from '../audit/audit.module';
 import { AuthController } from './auth.controller';
+import { AuthMailService } from './auth-mail.service';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { JwtAuthGuard } from './jwt-auth.guard';
@@ -37,6 +38,7 @@ import { PrismaAuthUserRepository } from './repositories/prisma-auth-user.reposi
   controllers: [AuthController],
   providers: [
     AuthService,
+    AuthMailService,
     PrismaAuthUserRepository,
     { provide: AUTH_USER_REPOSITORY, useExisting: PrismaAuthUserRepository },
     JwtStrategy,

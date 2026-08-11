@@ -36,6 +36,7 @@ export class CreateVitalSignUseCase {
         painLevel: dto.painLevel,
         oxygenSaturation: dto.oxygenSaturation,
         notes: dto.notes,
+        urgencyLevel: dto.urgencyLevel,
         measuredAt: dto.measuredAt,
       });
       const saved = await this.repository.save(entity);

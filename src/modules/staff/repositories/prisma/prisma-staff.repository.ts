@@ -31,7 +31,7 @@ type StaffRow = {
   created_at: Date;
   updated_at: Date;
   user?: {
-    email: string;
+    email: string | null;
     core_profiles_user_id: Array<{
       first_name: string;
       last_name: string;

@@ -6,6 +6,7 @@ import { UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
+import { AuthMailService } from '../auth-mail.service';
 import { AuthService } from '../auth.service';
 import type { IAuthUserRepository } from '../repositories/auth-user.repository.interface';
 import type { AuthUser } from '../auth.types';
@@ -19,6 +20,7 @@ describe('AuthService', () => {
     position: 'Admin',
     passwordHash: '',
     permissions: ['admin'],
+    twoFactorEnabled: false,
   };
 
   let users: jest.Mocked<IAuthUserRepository>;
@@ -33,12 +35,15 @@ describe('AuthService', () => {
       listActiveUsers: jest.fn(),
       touchLastLogin: jest.fn(),
       updatePasswordHash: jest.fn(),
+      updateTwoFactorEnabled: jest.fn(),
       createRefreshToken: jest.fn(),
       findRefreshByHash: jest.fn(),
       revokeRefreshByHash: jest.fn(),
       revokeAllForUser: jest.fn(),
       registerPatient: jest.fn(),
       findPasswordResetByHash: jest.fn(),
+      findChallengeByHash: jest.fn(),
+      revokeUserChallenges: jest.fn(),
       syncRoleModulePermissions: jest.fn().mockResolvedValue(undefined),
     };
     service = new AuthService(
@@ -46,6 +51,7 @@ describe('AuthService', () => {
       {
         get: jest.fn((key: string, def?: string) => {
           if (key === 'jwt.expiration') return '15m';
+          if (key === 'jwt.secret') return 'test-secret-at-least-32-chars-long!!';
           if (key === 'JWT_REFRESH_DAYS') return '7';
           if (key === 'ENABLE_DEMO_AUTH') return 'false';
           if (key === 'app.environment') return 'test';
@@ -57,15 +63,35 @@ describe('AuthService', () => {
         recordMutation: jest.fn().mockResolvedValue(undefined),
         recordAccess: jest.fn().mockResolvedValue(undefined),
       } as any,
+      {
+        sendPasswordResetOtp: jest
+          .fn()
+          .mockResolvedValue({ delivered: false, mode: 'log' }),
+        sendLoginOtp: jest
+          .fn()
+          .mockResolvedValue({ delivered: false, mode: 'log' }),
+      } as unknown as AuthMailService,
     );
   });
 
   it('logs in with valid credentials', async () => {
     users.findByEmail.mockResolvedValue(user);
     const res = await service.login('a@test.com', 'secret123');
-    expect(res.accessToken).toBe('access');
+    expect('accessToken' in res && res.accessToken).toBe('access');
     expect(users.createRefreshToken).toHaveBeenCalled();
     expect(users.touchLastLogin).toHaveBeenCalledWith('u1');
+  });
+
+  it('requires 2FA when enabled', async () => {
+    users.findByEmail.mockResolvedValue({ ...user, twoFactorEnabled: true });
+    const res = await service.login('a@test.com', 'secret123');
+    expect(res).toEqual(
+      expect.objectContaining({
+        twoFactorRequired: true,
+        hash: expect.any(String),
+      }),
+    );
+    expect(users.touchLastLogin).not.toHaveBeenCalled();
   });
 
   it('rejects bad password', async () => {

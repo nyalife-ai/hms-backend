@@ -23,6 +23,7 @@ export class InsuranceController {
   constructor(private readonly insurance: InsuranceService) {}
 
   @Get('providers')
+  @Roles('ADMIN', 'RECEPTIONIST', 'ACCOUNTANT')
   @ApiOperation({ summary: 'List insurance providers and integration channels' })
   providers() {
     return this.insurance.listProviders();

@@ -4,14 +4,29 @@
  * Purpose: HTTP controller with Swagger + pagination query.
  */
 
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
-// import { Public } from '../../common/decorators/public.decorator';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import type { CreateVitalSignDto, VitalSignsQueryDto, UpdateVitalSignDto } from './dto';
 import { VitalSignsService } from './vital-signs.service';
 
 @ApiTags('VitalSigns')
+@ApiBearerAuth()
 @Controller('vital-signs')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('ADMIN', 'DOCTOR', 'NURSE', 'RECEPTIONIST')
 export class VitalSignsController {
   public constructor(private readonly service: VitalSignsService) {}
 
@@ -23,7 +38,6 @@ export class VitalSignsController {
 
   @Get()
   @ApiOperation({ summary: 'List vital-signs (paginated)' })
-  // @Public()
   findAll(@Query() query: VitalSignsQueryDto) {
     return this.service.findAll(query);
   }
@@ -41,6 +55,7 @@ export class VitalSignsController {
   }
 
   @Delete(':id')
+  @Roles('ADMIN')
   @ApiOperation({ summary: 'Soft-delete vital-sign' })
   remove(@Param('id') id: string) {
     return this.service.softDelete(id);

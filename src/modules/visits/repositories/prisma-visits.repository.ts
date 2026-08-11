@@ -19,10 +19,27 @@ export class PrismaVisitsRepository implements IVisitsRepository {
   }
 
   public async findAllOrdered(): Promise<VisitRow[]> {
-    return this.prisma.outpatientVisits.findMany({
-      orderBy: { checked_in_at: 'desc' },
-      take: 200,
-    });
+    // Active pipeline (FIFO) + today's completed (for billing receipts / sign-off list).
+    // Completed visits must not fill the active cap or new work disappears.
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const [active, completedToday] = await Promise.all([
+      this.prisma.outpatientVisits.findMany({
+        where: { stage: { not: 'COMPLETED' } },
+        orderBy: { checked_in_at: 'asc' },
+        take: 300,
+      }),
+      this.prisma.outpatientVisits.findMany({
+        where: {
+          stage: 'COMPLETED',
+          checked_in_at: { gte: today },
+        },
+        orderBy: { checked_in_at: 'desc' },
+        take: 80,
+      }),
+    ]);
+    const seen = new Set(active.map((r) => r.id));
+    return [...active, ...completedToday.filter((r) => !seen.has(r.id))];
   }
 
   public async findById(id: string): Promise<VisitRow | null> {
@@ -40,6 +57,8 @@ export class PrismaVisitsRepository implements IVisitsRepository {
     firstVisit: boolean;
     stage: string;
     checkedInAt: Date;
+    reasonForVisit?: string | null;
+    additionalNotes?: string | null;
     payload: unknown;
   }): Promise<VisitRow> {
     return this.prisma.outpatientVisits.create({
@@ -54,6 +73,8 @@ export class PrismaVisitsRepository implements IVisitsRepository {
         first_visit: data.firstVisit,
         stage: data.stage,
         checked_in_at: data.checkedInAt,
+        reason_for_visit: data.reasonForVisit ?? null,
+        additional_notes: data.additionalNotes ?? null,
         payload: data.payload as Prisma.InputJsonValue,
       },
     });
@@ -69,6 +90,8 @@ export class PrismaVisitsRepository implements IVisitsRepository {
       gender: string;
       phone: string;
       firstVisit: boolean;
+      reasonForVisit?: string | null;
+      additionalNotes?: string | null;
       payload: unknown;
     },
   ): Promise<VisitRow> {
@@ -82,6 +105,8 @@ export class PrismaVisitsRepository implements IVisitsRepository {
         gender: data.gender,
         phone: data.phone,
         first_visit: data.firstVisit,
+        reason_for_visit: data.reasonForVisit ?? null,
+        additional_notes: data.additionalNotes ?? null,
         payload: data.payload as Prisma.InputJsonValue,
       },
     });

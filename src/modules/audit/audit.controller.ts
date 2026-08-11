@@ -4,14 +4,29 @@
  * Purpose: HTTP controller with Swagger + pagination query.
  */
 
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
-// import { Public } from '../../common/decorators/public.decorator';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import type { CreateAuditDto, AuditQueryDto, UpdateAuditDto } from './dto';
 import { AuditService } from './audit.service';
 
 @ApiTags('Audit')
+@ApiBearerAuth()
 @Controller('audit')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('ADMIN')
 export class AuditController {
   public constructor(private readonly service: AuditService) {}
 
@@ -23,7 +38,6 @@ export class AuditController {
 
   @Get()
   @ApiOperation({ summary: 'List audit (paginated)' })
-  // @Public()
   findAll(@Query() query: AuditQueryDto) {
     return this.service.findAll(query);
   }
@@ -41,6 +55,7 @@ export class AuditController {
   }
 
   @Delete(':id')
+  @Roles('ADMIN')
   @ApiOperation({ summary: 'Soft-delete audit' })
   remove(@Param('id') id: string) {
     return this.service.softDelete(id);

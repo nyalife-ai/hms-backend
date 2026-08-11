@@ -39,6 +39,7 @@ export class UpdateVitalSignUseCase {
         painLevel: dto.painLevel,
         oxygenSaturation: dto.oxygenSaturation,
         notes: dto.notes,
+        urgencyLevel: dto.urgencyLevel,
         measuredAt: dto.measuredAt,
         consultationId: dto.consultationId,
       });

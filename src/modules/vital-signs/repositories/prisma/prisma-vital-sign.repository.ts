@@ -41,6 +41,7 @@ export class PrismaVitalSignRepository implements IVitalSignRepository {
       pain_level: entity.getPainLevel() ?? null,
       oxygen_saturation: entity.getOxygenSaturation() ?? null,
       notes: entity.getNotes() ?? entity.getDescription() ?? null,
+      urgency_level: entity.getUrgencyLevel(),
       measured_at: entity.getMeasuredAt() ?? undefined,
     };
 
@@ -152,6 +153,7 @@ export class PrismaVitalSignRepository implements IVitalSignRepository {
     pain_level: number | null;
     oxygen_saturation: number | null;
     notes: string | null;
+    urgency_level?: string | null;
     measured_at: Date;
     recorded_by: string;
     is_voided: boolean;
@@ -180,6 +182,8 @@ export class PrismaVitalSignRepository implements IVitalSignRepository {
         painLevel: row.pain_level,
         oxygenSaturation: row.oxygen_saturation,
         notes: row.notes,
+        urgencyLevel:
+          row.urgency_level === 'EMERGENCY' ? 'EMERGENCY' : 'NORMAL',
         measuredAt: row.measured_at,
         isVoided: row.is_voided,
       },

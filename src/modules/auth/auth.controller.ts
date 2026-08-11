@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Patch,
   Post,
   Req,
   UseGuards,
@@ -20,6 +21,9 @@ import {
   RefreshTokenDto,
   RegisterPatientDto,
   ResetPasswordDto,
+  SetTwoFactorDto,
+  VerifyLoginOtpDto,
+  VerifyResetOtpDto,
 } from './dto/login.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 
@@ -38,14 +42,27 @@ export class AuthController {
       passwordLogin: true,
       patientRegistration: true,
       passwordReset: true,
+      twoFactorLogin: true,
     };
   }
 
   @Public()
   @Post('login')
-  @ApiOperation({ summary: 'Email/password login' })
+  @ApiOperation({
+    summary:
+      'Email/password login (returns tokens, or twoFactorRequired + hash when 2FA is on)',
+  })
   login(@Body() body: LoginDto, @Req() req: Request) {
     return this.auth.login(body.email, body.password, this.meta(req));
+  }
+
+  @Public()
+  @Post('verify-login-otp')
+  @ApiOperation({
+    summary: 'Complete 2FA login with email OTP and challenge hash from /login',
+  })
+  verifyLoginOtp(@Body() body: VerifyLoginOtpDto, @Req() req: Request) {
+    return this.auth.verifyLoginOtp(body.hash, body.otp, this.meta(req));
   }
 
   @Public()
@@ -59,15 +76,27 @@ export class AuthController {
   @Post('forgot-password')
   @ApiOperation({
     summary:
-      'Request password reset (always ok; resetToken returned only outside production)',
+      'Request password-reset OTP by email (always ok; no email enumeration)',
   })
   forgotPassword(@Body() body: ForgotPasswordDto, @Req() req: Request) {
     return this.auth.forgotPassword(body.email, this.meta(req));
   }
 
   @Public()
+  @Post('verify-reset-otp')
+  @ApiOperation({
+    summary:
+      'Verify password-reset OTP and receive a short-lived reset session token',
+  })
+  verifyResetOtp(@Body() body: VerifyResetOtpDto, @Req() req: Request) {
+    return this.auth.verifyResetOtp(body.email, body.otp, this.meta(req));
+  }
+
+  @Public()
   @Post('reset-password')
-  @ApiOperation({ summary: 'Reset password using reset token' })
+  @ApiOperation({
+    summary: 'Set a new password using the post-OTP reset session token',
+  })
   resetPassword(@Body() body: ResetPasswordDto, @Req() req: Request) {
     return this.auth.resetPassword(
       body.resetToken,
@@ -109,6 +138,18 @@ export class AuthController {
   @ApiOperation({ summary: 'Current authenticated user + permissions' })
   me(@Req() req: { user: AuthUserPublic }) {
     return this.auth.me(req.user.id);
+  }
+
+  @Patch('me/two-factor')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Enable or disable email OTP 2FA for the signed-in account',
+  })
+  setTwoFactor(
+    @Req() req: { user: AuthUserPublic },
+    @Body() body: SetTwoFactorDto,
+  ) {
+    return this.auth.setTwoFactorEnabled(req.user.id, body.enabled);
   }
 
   @Post('logout')

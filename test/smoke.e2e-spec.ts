@@ -71,6 +71,58 @@ describe('Smoke Tests — Critical Flows', () => {
     it('GET /ops/lab-requests without auth should return 401', async () => {
       await request(http()).get('/ops/lab-requests').expect(401);
     });
+
+    it('GET /audit-logs without auth should return 401', async () => {
+      await request(http()).get('/audit-logs').expect(401);
+    });
+
+    it('GET /audit-logs/actors without auth should return 401', async () => {
+      await request(http()).get('/audit-logs/actors').expect(401);
+    });
+
+    it('POST /visits/check-in without auth should return 401', async () => {
+      await request(http())
+        .post('/visits/check-in')
+        .send({
+          patientName: 'Smoke Patient',
+          mrn: 'MRN-SMOKE',
+          age: 30,
+          gender: 'Female',
+          phone: '+254700000000',
+          firstVisit: true,
+          payment: { method: 'CASH' },
+          reasonForVisit: 'Smoke check',
+          additionalNotes: 'no-auth probe',
+        })
+        .expect(401);
+    });
+
+    it('POST /ops/patients without auth should return 401', async () => {
+      await request(http())
+        .post('/ops/patients')
+        .send({
+          firstName: 'Smoke',
+          lastName: 'Patient',
+          gender: 'Female',
+          phone: '+254700000001',
+        })
+        .expect(401);
+    });
+
+    it('GET /catalog/clinical-services without auth should return 401', async () => {
+      await request(http()).get('/catalog/clinical-services').expect(401);
+    });
+
+    it('GET /laboratory/clinical-services without auth should return 401', async () => {
+      await request(http()).get('/laboratory/clinical-services').expect(401);
+    });
+
+    it('POST /visits/:id/clinical-orders without auth should return 401', async () => {
+      await request(http())
+        .post('/visits/00000000-0000-4000-8000-000000000099/clinical-orders')
+        .send({ orderedServices: [], orderedSurgeries: [] })
+        .expect(401);
+    });
   });
 
   describe('Validation', () => {

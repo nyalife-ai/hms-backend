@@ -3,7 +3,7 @@
  * Prisma adapter for patients.patients — avoids N+1 via include/select.
  */
 
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { Prisma } from '../../../../generated/prisma';
 import { PrismaService } from '../../../../database/prisma/prisma.service';
@@ -66,49 +66,76 @@ export class PrismaPatientRepository implements IPatientRepository {
     const patientNumber =
       dto.patientNumber ??
       `MRN-${String(10000 + count + 1).padStart(5, '0')}`;
-    const email =
-      dto.email ?? `${patientNumber.toLowerCase()}@patient.nyalife.health`;
+
+    const email = dto.email?.trim() || null;
+    if (email) {
+      const emailTaken = await this.prisma.user.findFirst({
+        where: { email: { equals: email, mode: 'insensitive' }, deleted_at: null },
+        select: { id: true },
+      });
+      if (emailTaken) {
+        throw new ConflictException(
+          `A user with email ${email} already exists. Use a different email or look up the existing patient.`,
+        );
+      }
+    }
+
     const passwordHash = await bcrypt.hash('nyalife123', 10);
     const gender = dto.gender ?? null;
 
-    const created = await this.prisma.$transaction(async (tx) => {
-      const user = await tx.user.create({
-        data: {
-          email,
-          password_hash: passwordHash,
-          is_active: true,
-          email_verified_at: new Date(),
-        },
+    try {
+      const created = await this.prisma.$transaction(async (tx) => {
+        const user = await tx.user.create({
+          data: {
+            email,
+            password_hash: passwordHash,
+            is_active: true,
+            email_verified_at: email ? new Date() : null,
+          },
+        });
+        await tx.profiles.create({
+          data: {
+            user_id: user.id,
+            first_name: dto.firstName,
+            last_name: dto.lastName,
+            gender,
+            phone: dto.phone ?? null,
+            date_of_birth: dto.dateOfBirth
+              ? new Date(dto.dateOfBirth)
+              : null,
+          },
+        });
+        return tx.patients.create({
+          data: {
+            user_id: user.id,
+            patient_number: patientNumber,
+            blood_group: dto.bloodGroup ?? null,
+            allergies: dto.allergies ?? null,
+            chronic_diseases: dto.chronicDiseases ?? null,
+            occupation: dto.occupation ?? null,
+            marital_status: dto.maritalStatus ?? null,
+          },
+          include: {
+            user: { include: { core_profiles_user_id: true } },
+          },
+        });
       });
-      await tx.profiles.create({
-        data: {
-          user_id: user.id,
-          first_name: dto.firstName,
-          last_name: dto.lastName,
-          gender,
-          phone: dto.phone ?? null,
-          date_of_birth: dto.dateOfBirth
-            ? new Date(dto.dateOfBirth)
-            : null,
-        },
-      });
-      return tx.patients.create({
-        data: {
-          user_id: user.id,
-          patient_number: patientNumber,
-          blood_group: dto.bloodGroup ?? null,
-          allergies: dto.allergies ?? null,
-          chronic_diseases: dto.chronicDiseases ?? null,
-          occupation: dto.occupation ?? null,
-          marital_status: dto.maritalStatus ?? null,
-        },
-        include: {
-          user: { include: { core_profiles_user_id: true } },
-        },
-      });
-    });
 
-    return this.toDomain(created);
+      return this.toDomain(created);
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const target = Array.isArray(err.meta?.target)
+          ? (err.meta?.target as string[]).join(', ')
+          : String(err.meta?.target ?? 'unique field');
+        throw new ConflictException(
+          `Patient could not be created — ${target} is already in use.`,
+        );
+      }
+      throw err;
+    }
   }
 
   public async delete(id: string): Promise<void> {
@@ -248,7 +275,7 @@ export class PrismaPatientRepository implements IPatientRepository {
         occupation: row.occupation,
         maritalStatus: row.marital_status,
         phone: profile?.phone,
-        email: row.user.email,
+        email: row.user.email ?? null,
       },
       row.created_at,
       row.updated_at,

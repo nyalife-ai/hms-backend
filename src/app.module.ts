@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { BullModule } from '@nestjs/bull';
+import { AuditContextInterceptor } from './modules/audit/audit-context.interceptor';
 
 import { ConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
@@ -123,7 +125,11 @@ import { PatientPortalModule } from './modules/patient-portal/patient-portal.mod
     }),
   ],
   controllers: [AppController, PublicController],
-  providers: [AppService, EncryptionService],
+  providers: [
+    AppService,
+    EncryptionService,
+    { provide: APP_INTERCEPTOR, useClass: AuditContextInterceptor },
+  ],
   exports: [EncryptionService],
 })
 export class AppModule {}

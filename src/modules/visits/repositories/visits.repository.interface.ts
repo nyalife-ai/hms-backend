@@ -17,6 +17,8 @@ export type VisitRow = {
   first_visit: boolean;
   stage: string;
   checked_in_at: Date;
+  reason_for_visit?: string | null;
+  additional_notes?: string | null;
   payload: unknown;
 };
 
@@ -35,6 +37,8 @@ export interface IVisitsRepository {
     firstVisit: boolean;
     stage: VisitStage | string;
     checkedInAt: Date;
+    reasonForVisit?: string | null;
+    additionalNotes?: string | null;
     payload: unknown;
   }): Promise<VisitRow>;
   update(
@@ -47,6 +51,8 @@ export interface IVisitsRepository {
       gender: string;
       phone: string;
       firstVisit: boolean;
+      reasonForVisit?: string | null;
+      additionalNotes?: string | null;
       payload: unknown;
     },
   ): Promise<VisitRow>;

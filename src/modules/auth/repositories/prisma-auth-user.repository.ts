@@ -20,6 +20,7 @@ interface MemoryRefresh {
   userId: string;
   expiresAt: Date;
   revokedAt?: Date;
+  userAgent?: string;
 }
 
 @Injectable()
@@ -121,6 +122,21 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
     if (mem) mem.passwordHash = passwordHash;
   }
 
+  public async updateTwoFactorEnabled(
+    userId: string,
+    enabled: boolean,
+  ): Promise<void> {
+    if (this.prisma.isConnected) {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { two_factor_enabled: enabled },
+      });
+      return;
+    }
+    const mem = AUTH_USERS.find((u) => u.id === userId);
+    if (mem) mem.twoFactorEnabled = enabled;
+  }
+
   public async createRefreshToken(input: {
     userId: string;
     tokenHash: string;
@@ -143,6 +159,7 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
     this.memoryRefresh.set(input.tokenHash, {
       userId: input.userId,
       expiresAt: input.expiresAt,
+      userAgent: input.userAgent,
     });
   }
 
@@ -262,11 +279,18 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
   public async findPasswordResetByHash(
     tokenHash: string,
   ): Promise<{ userId: string; expiresAt: Date; revokedAt?: Date | null } | null> {
+    return this.findChallengeByHash(tokenHash, 'password-reset');
+  }
+
+  public async findChallengeByHash(
+    tokenHash: string,
+    userAgent: string,
+  ): Promise<{ userId: string; expiresAt: Date; revokedAt?: Date | null } | null> {
     if (this.prisma.isConnected) {
       const row = await this.prisma.refreshTokens.findFirst({
         where: {
           token_hash: tokenHash,
-          user_agent: 'password-reset',
+          user_agent: userAgent,
         },
       });
       if (!row) return null;
@@ -276,7 +300,44 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
         revokedAt: row.revoked_at,
       };
     }
-    return null;
+    const mem = this.memoryRefresh.get(tokenHash);
+    if (!mem || mem.userAgent !== userAgent) return null;
+    return {
+      userId: mem.userId,
+      expiresAt: mem.expiresAt,
+      revokedAt: mem.revokedAt,
+    };
+  }
+
+  public async revokeUserChallenges(
+    userId: string,
+    userAgents: string[],
+  ): Promise<void> {
+    if (!userAgents.length) return;
+    if (this.prisma.isConnected) {
+      await this.prisma.refreshTokens
+        .updateMany({
+          where: {
+            user_id: userId,
+            revoked_at: null,
+            user_agent: { in: userAgents },
+          },
+          data: { revoked_at: new Date() },
+        })
+        .catch(() => undefined);
+      return;
+    }
+    for (const [hash, mem] of this.memoryRefresh.entries()) {
+      if (
+        mem.userId === userId &&
+        !mem.revokedAt &&
+        mem.userAgent &&
+        userAgents.includes(mem.userAgent)
+      ) {
+        mem.revokedAt = new Date();
+        this.memoryRefresh.set(hash, mem);
+      }
+    }
   }
 
   public async syncRoleModulePermissions(): Promise<void> {
@@ -352,6 +413,7 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
     const modules = ROLE_MODULE_ACCESS[user.role] ?? [];
     return {
       ...user,
+      twoFactorEnabled: user.twoFactorEnabled ?? false,
       permissions: modules.map(modulePermission),
     };
   }
@@ -359,8 +421,9 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
   private mapDbUser(
     row: {
       id: string;
-      email: string;
+      email: string | null;
       password_hash: string | null;
+      two_factor_enabled?: boolean | null;
       core_profiles_user_id: { first_name: string; last_name: string }[];
       core_staff_profiles_user_id: {
         position: string | null;
@@ -406,12 +469,13 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
 
     return {
       id: row.id,
-      email: row.email,
-      name: displayName,
+      email: row.email ?? '',
+      name: displayName || row.email || 'User',
       role: roleName,
       position: staff?.position ?? roleName,
       passwordHash: row.password_hash ?? '',
       permissions,
+      twoFactorEnabled: Boolean(row.two_factor_enabled),
     };
   }
 }

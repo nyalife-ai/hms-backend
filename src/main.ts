@@ -7,6 +7,7 @@ import { AppModule } from './app.module';
 import { HttpMetricsInterceptor } from './common/interceptors/http-metrics.interceptor';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
+import { auditContextMiddleware } from './modules/audit/audit-context.middleware';
 import { AppLogger } from './modules/logger/logger.service';
 import { MetricsService } from './modules/metrics/metrics.service';
 
@@ -40,6 +41,8 @@ async function bootstrap(): Promise<void> {
   app.use((req: Request, res: Response, next: NextFunction) =>
     requestIdMiddleware.use(req, res, next),
   );
+  // Opens AsyncLocalStorage so Prisma audit middleware can attach actor/IP.
+  app.use(auditContextMiddleware);
 
   const globalPrefix = config.get<string>('app.globalPrefix', '');
   if (globalPrefix) {
@@ -85,10 +88,18 @@ async function bootstrap(): Promise<void> {
 
   if (config.get<string>('app.environment') !== 'production') {
     const swaggerConfig = new DocumentBuilder()
-      .setTitle(config.get<string>('app.name', 'API'))
-      .setDescription('Reusable NestJS API scaffold')
+      .setTitle('NyaLife HMS API')
+      .setDescription(
+        'Hospital management API — visits, pharmacy, IPD, laboratory, billing, auth, and operations. ' +
+          'Pharmacy domain lives under /pharmacy/* (suppliers, categories, medications, batches, stock, prescriptions, purchase orders). ' +
+          'Legacy /pharmacy, /medications, and /prescriptions aliases are deprecated.',
+      )
       .setVersion(process.env.npm_package_version || '1.0.0')
       .addBearerAuth()
+      .addTag('Pharmacy', 'Formulary, stock, prescriptions, and purchase orders')
+      .addTag('IPD Journey', 'Wards, beds, admissions, discharge')
+      .addTag('visits', 'Outpatient visit pipeline')
+      .addTag('Billing', 'Invoices, payments, claims, M-Pesa')
       .build();
 
     const document = SwaggerModule.createDocument(app, swaggerConfig);

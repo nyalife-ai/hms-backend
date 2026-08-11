@@ -5,6 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaClient } from '../../generated/prisma';
+import { registerPrismaAuditMiddleware } from '../../modules/audit/prisma-audit.middleware';
 
 /**
  * Ensure Prisma's client-side pool settings play nicely with Supabase.
@@ -75,6 +76,8 @@ export class PrismaService
         /* ignore */
       }
     }
+    // Register before any queries so every mutation is audited.
+    registerPrismaAuditMiddleware(this);
   }
 
   async onModuleInit(): Promise<void> {

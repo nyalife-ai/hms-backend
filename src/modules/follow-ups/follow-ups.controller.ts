@@ -4,14 +4,29 @@
  * Purpose: HTTP controller with Swagger + pagination query.
  */
 
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
-// import { Public } from '../../common/decorators/public.decorator';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import type { CreateFollowUpDto, FollowUpsQueryDto, UpdateFollowUpDto } from './dto';
 import { FollowUpsService } from './follow-ups.service';
 
 @ApiTags('FollowUps')
+@ApiBearerAuth()
 @Controller('follow-ups')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('ADMIN', 'DOCTOR', 'NURSE', 'RECEPTIONIST')
 export class FollowUpsController {
   public constructor(private readonly service: FollowUpsService) {}
 
@@ -23,7 +38,6 @@ export class FollowUpsController {
 
   @Get()
   @ApiOperation({ summary: 'List follow-ups (paginated)' })
-  // @Public()
   findAll(@Query() query: FollowUpsQueryDto) {
     return this.service.findAll(query);
   }
@@ -41,6 +55,7 @@ export class FollowUpsController {
   }
 
   @Delete(':id')
+  @Roles('ADMIN')
   @ApiOperation({ summary: 'Soft-delete follow-up' })
   remove(@Param('id') id: string) {
     return this.service.softDelete(id);

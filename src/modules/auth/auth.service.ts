@@ -16,8 +16,9 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, createHmac, randomBytes, randomInt } from 'crypto';
 import { HmsAuditWriter } from '../audit/hms-audit.writer';
+import { AuthMailService } from './auth-mail.service';
 import type {
   AuthTokens,
   AuthUser,
@@ -31,6 +32,24 @@ import {
   type IAuthUserRepository,
 } from './repositories/auth-user.repository.interface';
 
+const OTP_UA = 'password-reset-otp';
+const RESET_UA = 'password-reset';
+const LOGIN_2FA_UA = 'login-2fa-otp';
+const OTP_TTL_MINUTES = 10;
+const RESET_TTL_MINUTES = 15;
+const OTP_MAX_ATTEMPTS = 5;
+const FORGOT_MAX_PER_EMAIL = 3;
+const FORGOT_WINDOW_MS = 15 * 60_000;
+
+export type LoginResult =
+  | AuthResponseDto
+  | {
+      twoFactorRequired: true;
+      hash: string;
+      expiresInMinutes: number;
+      message: string;
+    };
+
 @Injectable()
 export class AuthService implements OnModuleInit {
   private readonly logger = new Logger(AuthService.name);
@@ -41,12 +60,22 @@ export class AuthService implements OnModuleInit {
     { user: AuthUserPublic; expiresAt: number }
   >();
 
+  /** In-memory OTP attempt counters (per user). */
+  private readonly otpAttempts = new Map<
+    string,
+    { count: number; windowStarted: number }
+  >();
+
+  /** In-memory forgot-password rate limits (per email + per IP). */
+  private readonly forgotHits = new Map<string, number[]>();
+
   constructor(
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     @Inject(AUTH_USER_REPOSITORY)
     private readonly users: IAuthUserRepository,
     private readonly audit: HmsAuditWriter,
+    private readonly mail: AuthMailService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -75,7 +104,7 @@ export class AuthService implements OnModuleInit {
     email: string,
     password: string,
     meta?: { userAgent?: string; ip?: string },
-  ): Promise<AuthResponseDto> {
+  ): Promise<LoginResult> {
     const user = await this.users.findByEmail(email);
     if (!user?.passwordHash) {
       throw new UnauthorizedException('Invalid email or password');
@@ -84,6 +113,45 @@ export class AuthService implements OnModuleInit {
     if (!ok) {
       throw new UnauthorizedException('Invalid email or password');
     }
+
+    if (user.twoFactorEnabled) {
+      await this.users.revokeUserChallenges(user.id, [LOGIN_2FA_UA]);
+      this.otpAttempts.delete(user.id);
+
+      const otp = String(randomInt(0, 1_000_000)).padStart(6, '0');
+      const otpHash = this.hashOtp(user.id, otp);
+      await this.users.createRefreshToken({
+        userId: user.id,
+        tokenHash: otpHash,
+        expiresAt: new Date(Date.now() + OTP_TTL_MINUTES * 60_000),
+        userAgent: LOGIN_2FA_UA,
+        ip: meta?.ip,
+      });
+
+      await this.mail.sendLoginOtp({
+        to: user.email,
+        otp,
+        expiresInMinutes: OTP_TTL_MINUTES,
+      });
+
+      await this.audit.recordMutation({
+        userId: user.id,
+        action: 'UPDATE',
+        entityType: 'auth.session',
+        entityId: user.id,
+        newValues: { event: 'LOGIN_2FA_CHALLENGE' },
+        ipAddress: meta?.ip,
+        userAgent: meta?.userAgent,
+      });
+
+      return {
+        twoFactorRequired: true,
+        hash: otpHash,
+        expiresInMinutes: OTP_TTL_MINUTES,
+        message: 'Enter the verification code sent to your email.',
+      };
+    }
+
     await this.users.touchLastLogin(user.id);
     const session = await this.issueSession(user, meta);
     await this.audit.recordMutation({
@@ -96,6 +164,99 @@ export class AuthService implements OnModuleInit {
       userAgent: meta?.userAgent,
     });
     return session;
+  }
+
+  /**
+   * Complete login when 2FA is enabled — verifies email OTP against challenge hash.
+   */
+  async verifyLoginOtp(
+    hash: string,
+    otp: string,
+    meta?: { userAgent?: string; ip?: string },
+  ): Promise<AuthResponseDto> {
+    const code = otp.trim();
+    if (!/^\d{6}$/.test(code)) {
+      throw new BadRequestException('Enter the 6-digit code from your email');
+    }
+    const challengeHash = hash.trim();
+    if (!challengeHash || challengeHash.length < 32) {
+      throw new BadRequestException('Invalid verification challenge');
+    }
+
+    const record = await this.users.findChallengeByHash(
+      challengeHash,
+      LOGIN_2FA_UA,
+    );
+    if (
+      !record ||
+      record.revokedAt ||
+      record.expiresAt.getTime() < Date.now()
+    ) {
+      throw new UnauthorizedException('Invalid or expired verification code');
+    }
+
+    const attempts = this.otpAttempts.get(record.userId);
+    if (attempts && attempts.count >= OTP_MAX_ATTEMPTS) {
+      if (Date.now() - attempts.windowStarted < FORGOT_WINDOW_MS) {
+        throw new UnauthorizedException(
+          'Too many incorrect codes. Sign in again to request a new code.',
+        );
+      }
+      this.otpAttempts.delete(record.userId);
+    }
+
+    const expected = this.hashOtp(record.userId, code);
+    if (expected !== challengeHash) {
+      this.bumpOtpAttempt(record.userId);
+      throw new UnauthorizedException('Invalid or expired verification code');
+    }
+
+    const user = await this.users.findById(record.userId);
+    if (!user?.passwordHash) {
+      throw new UnauthorizedException('User not found or inactive');
+    }
+
+    await this.users.revokeRefreshByHash(challengeHash);
+    this.otpAttempts.delete(user.id);
+    await this.users.touchLastLogin(user.id);
+    const session = await this.issueSession(user, meta);
+    await this.audit.recordMutation({
+      userId: user.id,
+      action: 'UPDATE',
+      entityType: 'auth.session',
+      entityId: user.id,
+      newValues: { event: 'LOGIN_2FA_VERIFIED' },
+      ipAddress: meta?.ip,
+      userAgent: meta?.userAgent,
+    });
+    return session;
+  }
+
+  async setTwoFactorEnabled(
+    userId: string,
+    enabled: boolean,
+  ): Promise<AuthUserPublic> {
+    this.accessUserCache.delete(userId);
+    const user = await this.users.findById(userId);
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+    await this.users.updateTwoFactorEnabled(userId, enabled);
+    if (!enabled) {
+      await this.users.revokeUserChallenges(userId, [LOGIN_2FA_UA]);
+    }
+    await this.audit.recordMutation({
+      userId,
+      action: 'UPDATE',
+      entityType: 'auth.two_factor',
+      entityId: userId,
+      newValues: { enabled },
+    });
+    const refreshed = await this.users.findById(userId);
+    if (!refreshed) {
+      throw new UnauthorizedException('User not found');
+    }
+    return this.toPublic(refreshed);
   }
 
   async registerPatient(
@@ -153,44 +314,145 @@ export class AuthService implements OnModuleInit {
     return this.issueSession(user, meta);
   }
 
+  /**
+   * Step 1 — request OTP. Always returns a generic success payload
+   * (no email enumeration). OTP is hashed at rest; plaintext is emailed
+   * (or logged in dev when SMTP is absent).
+   */
   async forgotPassword(
     email: string,
     meta?: { userAgent?: string; ip?: string },
-  ): Promise<{ ok: true; resetToken?: string; expiresInMinutes: number }> {
-    const expiresInMinutes = 60;
-    const generic = { ok: true as const, expiresInMinutes };
-    const user = await this.users.findByEmail(email);
+  ): Promise<{
+    ok: true;
+    expiresInMinutes: number;
+    message: string;
+  }> {
+    const normalized = email.trim().toLowerCase();
+    const message =
+      'If an account exists for that email, a one-time code has been sent.';
+    const generic = {
+      ok: true as const,
+      expiresInMinutes: OTP_TTL_MINUTES,
+      message,
+    };
+
+    this.assertForgotRateLimit(`email:${normalized}`);
+    if (meta?.ip) this.assertForgotRateLimit(`ip:${meta.ip}`);
+
+    const user = await this.users.findByEmail(normalized);
     if (!user) {
+      // Constant-ish delay to reduce timing oracle
+      await this.sleep(80 + randomInt(40));
       return generic;
     }
-    const resetToken = randomBytes(32).toString('base64url');
-    const tokenHash = this.hashToken(resetToken);
+
+    await this.users.revokeUserChallenges(user.id, [OTP_UA, RESET_UA]);
+    this.otpAttempts.delete(user.id);
+
+    const otp = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const otpHash = this.hashOtp(user.id, otp);
     await this.users.createRefreshToken({
       userId: user.id,
-      tokenHash,
-      expiresAt: new Date(Date.now() + expiresInMinutes * 60_000),
-      userAgent: 'password-reset',
+      tokenHash: otpHash,
+      expiresAt: new Date(Date.now() + OTP_TTL_MINUTES * 60_000),
+      userAgent: OTP_UA,
       ip: meta?.ip,
     });
+
+    await this.mail.sendPasswordResetOtp({
+      to: user.email,
+      otp,
+      expiresInMinutes: OTP_TTL_MINUTES,
+    });
+
     await this.audit.recordMutation({
       userId: user.id,
       action: 'UPDATE',
       entityType: 'auth.password_reset',
       entityId: user.id,
-      newValues: { event: 'FORGOT_REQUESTED' },
+      newValues: { event: 'OTP_REQUESTED' },
       ipAddress: meta?.ip,
       userAgent: meta?.userAgent,
     });
-    const env =
-      this.config.get<string>('app.environment') ||
-      process.env.NODE_ENV ||
-      'development';
-    if (env === 'production') {
-      return generic;
-    }
-    return { ...generic, resetToken };
+
+    return generic;
   }
 
+  /**
+   * Step 2 — verify OTP. On success, issues a short-lived one-time reset
+   * session token (hashed at rest) used by reset-password.
+   */
+  async verifyResetOtp(
+    email: string,
+    otp: string,
+    meta?: { userAgent?: string; ip?: string },
+  ): Promise<{ ok: true; resetToken: string; expiresInMinutes: number }> {
+    const normalized = email.trim().toLowerCase();
+    const code = otp.trim();
+    if (!/^\d{6}$/.test(code)) {
+      throw new BadRequestException('Enter the 6-digit code from your email');
+    }
+
+    const user = await this.users.findByEmail(normalized);
+    if (!user) {
+      throw new UnauthorizedException('Invalid or expired code');
+    }
+
+    const attempts = this.otpAttempts.get(user.id);
+    if (attempts && attempts.count >= OTP_MAX_ATTEMPTS) {
+      if (Date.now() - attempts.windowStarted < FORGOT_WINDOW_MS) {
+        throw new UnauthorizedException(
+          'Too many incorrect codes. Request a new code and try again later.',
+        );
+      }
+      this.otpAttempts.delete(user.id);
+    }
+
+    const otpHash = this.hashOtp(user.id, code);
+    const record = await this.users.findChallengeByHash(otpHash, OTP_UA);
+    const valid =
+      record &&
+      !record.revokedAt &&
+      record.expiresAt.getTime() >= Date.now() &&
+      record.userId === user.id;
+
+    if (!valid) {
+      this.bumpOtpAttempt(user.id);
+      throw new UnauthorizedException('Invalid or expired code');
+    }
+
+    await this.users.revokeRefreshByHash(otpHash);
+    this.otpAttempts.delete(user.id);
+
+    const resetToken = randomBytes(32).toString('base64url');
+    const resetHash = this.hashToken(resetToken);
+    await this.users.revokeUserChallenges(user.id, [RESET_UA]);
+    await this.users.createRefreshToken({
+      userId: user.id,
+      tokenHash: resetHash,
+      expiresAt: new Date(Date.now() + RESET_TTL_MINUTES * 60_000),
+      userAgent: RESET_UA,
+      ip: meta?.ip,
+    });
+
+    await this.audit.recordMutation({
+      userId: user.id,
+      action: 'UPDATE',
+      entityType: 'auth.password_reset',
+      entityId: user.id,
+      newValues: { event: 'OTP_VERIFIED' },
+      ipAddress: meta?.ip,
+      userAgent: meta?.userAgent,
+    });
+
+    return {
+      ok: true,
+      resetToken,
+      expiresInMinutes: RESET_TTL_MINUTES,
+    };
+  }
+
+  /** Step 3 — set a new password using the post-OTP reset session token. */
   async resetPassword(
     resetToken: string,
     newPassword: string,
@@ -199,12 +461,14 @@ export class AuthService implements OnModuleInit {
     const hash = this.hashToken(resetToken);
     const record = await this.users.findPasswordResetByHash(hash);
     if (!record || record.revokedAt || record.expiresAt.getTime() < Date.now()) {
-      throw new UnauthorizedException('Invalid or expired reset token');
+      throw new UnauthorizedException('Invalid or expired reset session');
     }
     const passwordHash = await bcrypt.hash(newPassword, 10);
     await this.users.updatePasswordHash(record.userId, passwordHash);
     await this.users.revokeRefreshByHash(hash);
+    await this.users.revokeUserChallenges(record.userId, [OTP_UA, RESET_UA]);
     await this.users.revokeAllForUser(record.userId);
+    this.otpAttempts.delete(record.userId);
     await this.audit.recordMutation({
       userId: record.userId,
       action: 'UPDATE',
@@ -396,6 +660,46 @@ export class AuthService implements OnModuleInit {
     return createHash('sha256').update(token).digest('hex');
   }
 
+  /** HMAC-SHA256 of userId:otp with JWT secret as pepper — OTP never stored plaintext. */
+  private hashOtp(userId: string, otp: string): string {
+    const pepper =
+      this.config.get<string>('jwt.secret') ||
+      process.env.JWT_SECRET ||
+      'default-dev-secret-change-in-production';
+    return createHmac('sha256', pepper).update(`${userId}:${otp}`).digest('hex');
+  }
+
+  private assertForgotRateLimit(key: string): void {
+    const now = Date.now();
+    const hits = (this.forgotHits.get(key) ?? []).filter(
+      (t) => now - t < FORGOT_WINDOW_MS,
+    );
+    if (hits.length >= FORGOT_MAX_PER_EMAIL) {
+      throw new BadRequestException(
+        'Too many reset requests. Please wait a few minutes and try again.',
+      );
+    }
+    hits.push(now);
+    this.forgotHits.set(key, hits);
+  }
+
+  private bumpOtpAttempt(userId: string): void {
+    const now = Date.now();
+    const prev = this.otpAttempts.get(userId);
+    if (!prev || now - prev.windowStarted >= FORGOT_WINDOW_MS) {
+      this.otpAttempts.set(userId, { count: 1, windowStarted: now });
+      return;
+    }
+    this.otpAttempts.set(userId, {
+      count: prev.count + 1,
+      windowStarted: prev.windowStarted,
+    });
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   private toPublic(user: AuthUser): AuthUserPublic {
     return {
       id: user.id,
@@ -404,6 +708,7 @@ export class AuthService implements OnModuleInit {
       role: user.role,
       position: user.position,
       permissions: user.permissions,
+      twoFactorEnabled: Boolean(user.twoFactorEnabled),
     };
   }
 }

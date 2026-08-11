@@ -5,6 +5,7 @@ import {
   IsBoolean,
   IsIn,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
   Min,
@@ -117,6 +118,16 @@ export class CheckInDto {
   @IsOptional()
   @IsString()
   appointmentId?: string;
+
+  @ApiPropertyOptional({ description: 'Chief reason for this visit (reception)' })
+  @IsOptional()
+  @IsString()
+  reasonForVisit?: string;
+
+  @ApiPropertyOptional({ description: 'Additional reception notes' })
+  @IsOptional()
+  @IsString()
+  additionalNotes?: string;
 }
 
 export class VitalsDto {
@@ -183,6 +194,11 @@ export class PrescriptionDto {
   @ApiProperty() @IsString() dosage!: string;
   @ApiProperty() @IsString() frequency!: string;
   @ApiProperty() @IsString() duration!: string;
+  @ApiPropertyOptional({ example: 1 })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  quantity?: number;
 }
 
 export class CompleteConsultationDto {
@@ -200,6 +216,43 @@ export class CompleteConsultationDto {
   @IsOptional()
   @IsString()
   followUpDate?: string;
+
+  @ApiPropertyOptional({
+    description: 'Full clinical consultation narrative (SOAP, gyn/obs, exam)',
+  })
+  @IsOptional()
+  @IsObject()
+  clinicalRecord?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ type: [Object] })
+  @IsOptional()
+  @IsArray()
+  orderedServices?: Array<Record<string, unknown>>;
+
+  @ApiPropertyOptional({ type: [Object] })
+  @IsOptional()
+  @IsArray()
+  orderedSurgeries?: Array<Record<string, unknown>>;
+}
+
+export class SaveClinicalRecordDto {
+  @ApiProperty({
+    description: 'Full clinical consultation narrative saved mid-consult',
+  })
+  @IsObject()
+  clinicalRecord!: Record<string, unknown>;
+}
+
+export class SaveClinicalOrdersDto {
+  @ApiPropertyOptional({ type: [Object] })
+  @IsOptional()
+  @IsArray()
+  orderedServices?: Array<Record<string, unknown>>;
+
+  @ApiPropertyOptional({ type: [Object] })
+  @IsOptional()
+  @IsArray()
+  orderedSurgeries?: Array<Record<string, unknown>>;
 }
 
 export class FinalizeBillingDto {
@@ -218,4 +271,20 @@ export class ClaimStatusDto {
   @ApiProperty({ enum: ['SUBMITTED', 'ACCEPTED', 'REJECTED'] })
   @IsIn(['SUBMITTED', 'ACCEPTED', 'REJECTED'])
   status!: 'SUBMITTED' | 'ACCEPTED' | 'REJECTED';
+}
+
+export class CollectConsultFeeDto {
+  @ApiProperty({ enum: ['CASH', 'MPESA'] })
+  @IsIn(['CASH', 'MPESA'])
+  mode!: 'CASH' | 'MPESA';
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  transactionReference?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  mpesaReceipt?: string;
 }

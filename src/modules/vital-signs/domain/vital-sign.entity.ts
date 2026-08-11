@@ -23,6 +23,7 @@ export type VitalSignProps = {
   painLevel?: number | null;
   oxygenSaturation?: number | null;
   notes?: string | null;
+  urgencyLevel?: string | null;
   measuredAt?: Date | null;
   isVoided: boolean;
 };
@@ -56,6 +57,7 @@ export class VitalSign extends Entity<string> {
     painLevel?: number;
     oxygenSaturation?: number;
     notes?: string;
+    urgencyLevel?: string;
     measuredAt?: Date | string | null;
   }): VitalSign {
     const now = new Date();
@@ -81,6 +83,8 @@ export class VitalSign extends Entity<string> {
         painLevel: input.painLevel ?? null,
         oxygenSaturation: input.oxygenSaturation ?? null,
         notes: input.notes ?? input.description ?? null,
+        urgencyLevel:
+          input.urgencyLevel === 'EMERGENCY' ? 'EMERGENCY' : 'NORMAL',
         measuredAt: input.measuredAt ? new Date(input.measuredAt) : now,
         isVoided: false,
       },
@@ -111,6 +115,7 @@ export class VitalSign extends Entity<string> {
     painLevel?: number | null;
     oxygenSaturation?: number | null;
     notes?: string | null;
+    urgencyLevel?: string | null;
     measuredAt?: Date | string | null;
     consultationId?: string | null;
   }): void {
@@ -132,6 +137,10 @@ export class VitalSign extends Entity<string> {
       this.props.oxygenSaturation = patch.oxygenSaturation;
     }
     if (patch.notes !== undefined) this.props.notes = patch.notes;
+    if (patch.urgencyLevel !== undefined) {
+      this.props.urgencyLevel =
+        patch.urgencyLevel === 'EMERGENCY' ? 'EMERGENCY' : 'NORMAL';
+    }
     if (patch.description !== undefined) {
       this.props.description = patch.description;
       this.props.notes = patch.description;
@@ -198,6 +207,9 @@ export class VitalSign extends Entity<string> {
   }
   public getNotes(): string | null | undefined {
     return this.props.notes;
+  }
+  public getUrgencyLevel(): string {
+    return this.props.urgencyLevel === 'EMERGENCY' ? 'EMERGENCY' : 'NORMAL';
   }
   public getMeasuredAt(): Date | null | undefined {
     return this.props.measuredAt;

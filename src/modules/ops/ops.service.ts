@@ -32,6 +32,8 @@ export class OpsService {
     date: string;
     time: string;
     type?: string;
+    reason?: string;
+    notes?: string;
     createdBy: string;
   }) {
     this.requireDb();
@@ -57,6 +59,8 @@ export class OpsService {
       endTime: end.toISOString(),
       createdBy: input.createdBy,
       name: type,
+      description: input.reason?.trim() || undefined,
+      notes: input.notes?.trim() || undefined,
       status: 'SCHEDULED',
     });
   }
@@ -226,6 +230,10 @@ export class OpsService {
     gender: 'Male' | 'Female' | 'Other';
     phone: string;
     dateOfBirth?: string;
+    allergies?: string;
+    chronicDiseases?: string;
+    emergencyContactName?: string;
+    emergencyContactPhone?: string;
     createdBy: string;
   }) {
     this.requireDb();
@@ -242,8 +250,24 @@ export class OpsService {
       phone: input.phone,
       gender: genderDb,
       dateOfBirth: input.dateOfBirth,
+      allergies: input.allergies,
+      chronicDiseases: input.chronicDiseases,
     });
-    // Preserve legacy ops response shape for frontend
+
+    const kinName = input.emergencyContactName?.trim();
+    const kinPhone = input.emergencyContactPhone?.trim();
+    if (kinName || kinPhone) {
+      await this.prisma.emergencyContacts.create({
+        data: {
+          patient_id: created.id,
+          name: kinName || 'Next of kin',
+          phone: kinPhone || '—',
+          relationship: 'NEXT_OF_KIN',
+          is_primary: true,
+        },
+      });
+    }
+
     return this.prisma.patients.findFirstOrThrow({
       where: { id: created.id },
     });
@@ -572,6 +596,412 @@ export class OpsService {
     return this.getHospitalSettings();
   }
 
+  /** Catalog defaults for general / about / contact settings groups. */
+  private settingsCatalog(): Array<{
+    key: string;
+    label: string;
+    value: string;
+    type: string;
+    group_name: string;
+    is_public: boolean;
+  }> {
+    return [
+      {
+        key: 'appointment_interval',
+        label: 'Appointment Interval (minutes)',
+        value: '30',
+        type: 'number',
+        group_name: 'general',
+        is_public: false,
+      },
+      {
+        key: 'consultation_fee_service_code',
+        label: 'Triage Consultation Fee Service',
+        value: '',
+        type: 'text',
+        group_name: 'general',
+        is_public: false,
+      },
+      {
+        key: 'consultation_fee_enabled',
+        label: 'Charge Consultation Fee on Check-in',
+        value: 'true',
+        type: 'boolean',
+        group_name: 'general',
+        is_public: true,
+      },
+      {
+        key: 'currency',
+        label: 'Currency',
+        value: 'KES',
+        type: 'text',
+        group_name: 'general',
+        is_public: true,
+      },
+      {
+        key: 'hospital_address',
+        label: 'Hospital Address',
+        value: '7514-00200, Nairobi',
+        type: 'text',
+        group_name: 'general',
+        is_public: true,
+      },
+      {
+        key: 'hospital_email',
+        label: 'Hospital Email',
+        value: 'info@nyalifewomensclinic.com',
+        type: 'text',
+        group_name: 'general',
+        is_public: true,
+      },
+      {
+        key: 'hospital_name',
+        label: 'Hospital Name',
+        value: 'Nyalife HMS',
+        type: 'text',
+        group_name: 'general',
+        is_public: true,
+      },
+      {
+        key: 'hospital_phone',
+        label: 'Hospital Phone',
+        value: '+254746516514',
+        type: 'text',
+        group_name: 'general',
+        is_public: true,
+      },
+      {
+        key: 'logo',
+        label: 'Clinic Logo',
+        value: '',
+        type: 'text',
+        group_name: 'general',
+        is_public: true,
+      },
+      {
+        key: 'primary_color',
+        label: 'Primary Color',
+        value: '#058b7c',
+        type: 'text',
+        group_name: 'general',
+        is_public: true,
+      },
+      {
+        key: 'secondary_color',
+        label: 'Secondary Color',
+        value: '#d41559',
+        type: 'text',
+        group_name: 'general',
+        is_public: true,
+      },
+      {
+        key: 'tax_rate',
+        label: 'Standard Tax Rate (%)',
+        value: '16',
+        type: 'number',
+        group_name: 'general',
+        is_public: false,
+      },
+      {
+        key: 'working_days',
+        label: 'Working Days',
+        value: 'Monday,Tuesday,Wednesday,Thursday,Friday',
+        type: 'text',
+        group_name: 'general',
+        is_public: true,
+      },
+      {
+        key: 'working_hours_end',
+        label: 'Working Hours End',
+        value: '17:00:00',
+        type: 'text',
+        group_name: 'general',
+        is_public: true,
+      },
+      {
+        key: 'working_hours_start',
+        label: 'Working Hours Start',
+        value: '08:00:00',
+        type: 'text',
+        group_name: 'general',
+        is_public: true,
+      },
+      {
+        key: 'about_description',
+        label: 'Detailed About Description',
+        value:
+          "Nyalife Women's Clinic is a specialized healthcare facility dedicated to providing comprehensive obstetrics and gynecology services to women at every stage of life.",
+        type: 'text',
+        group_name: 'about',
+        is_public: true,
+      },
+      {
+        key: 'contact_address',
+        label: 'Clinic Physical Address',
+        value:
+          'JemPark Complex building suite A5 in Sabaki, About 500meters from Mlolongo in Athi River, Machakos',
+        type: 'text',
+        group_name: 'contact',
+        is_public: true,
+      },
+      {
+        key: 'contact_email',
+        label: 'Contact Email Address',
+        value: 'info@nyalifewomensclinic.com',
+        type: 'text',
+        group_name: 'contact',
+        is_public: true,
+      },
+      {
+        key: 'contact_hours',
+        label: 'Clinic Hours',
+        value: 'Mon – Sat: 8:00 AM – 6:00 PM',
+        type: 'text',
+        group_name: 'contact',
+        is_public: true,
+      },
+      {
+        key: 'contact_maps_url',
+        label: 'Google Maps Directions URL',
+        value: "https://maps.google.com/?q=Nyalife+Women%27s+Clinic+Athi+River",
+        type: 'text',
+        group_name: 'contact',
+        is_public: true,
+      },
+      {
+        key: 'contact_phone',
+        label: 'Contact Phone Number',
+        value: '+254746516514',
+        type: 'text',
+        group_name: 'contact',
+        is_public: true,
+      },
+      {
+        key: 'instagram_url',
+        label: 'Instagram Profile URL',
+        value: 'https://www.instagram.com/nyalife_womenshealth',
+        type: 'text',
+        group_name: 'contact',
+        is_public: true,
+      },
+      {
+        key: 'linkedin_url',
+        label: 'LinkedIn Profile URL',
+        value: 'https://www.linkedin.com/company/nyalife-women-s-health/',
+        type: 'text',
+        group_name: 'contact',
+        is_public: true,
+      },
+    ];
+  }
+
+  private async ensureSettingsSeeded(updatedBy?: string): Promise<void> {
+    const catalog = this.settingsCatalog();
+    const keys = catalog.map((c) => c.key);
+    const existing = await this.prisma.settings.findMany({
+      where: { key: { in: keys } },
+      select: { key: true },
+    });
+    const have = new Set(existing.map((r) => r.key));
+    for (const item of catalog) {
+      if (have.has(item.key)) continue;
+      await this.prisma.settings.create({
+        data: {
+          key: item.key,
+          value: item.value,
+          type: item.type,
+          group_name: item.group_name,
+          label: item.label,
+          is_public: item.is_public,
+          updated_by: updatedBy ?? null,
+        },
+      });
+    }
+  }
+
+  async listSystemSettings(group?: string) {
+    this.requireDb();
+    await this.ensureSettingsSeeded();
+    const groups = group
+      ? [group]
+      : ['general', 'about', 'contact'];
+    const rows = await this.prisma.settings.findMany({
+      where: { group_name: { in: groups } },
+      orderBy: [{ group_name: 'asc' }, { key: 'asc' }],
+    });
+    return {
+      groups: groups.map((g) => ({
+        name: g,
+        items: rows
+          .filter((r) => r.group_name === g)
+          .map((r) => ({
+            key: r.key,
+            label: r.label || r.key,
+            value: r.value,
+            type: r.type,
+            groupName: r.group_name,
+            isPublic: r.is_public,
+            updatedAt: r.updated_at.toISOString(),
+          })),
+      })),
+    };
+  }
+
+  async upsertSystemSettings(
+    items: Array<{
+      key: string;
+      value: string;
+      label?: string;
+      type?: string;
+      groupName?: string;
+    }>,
+    updatedBy: string,
+  ) {
+    this.requireDb();
+    if (!items?.length) {
+      throw new BadRequestException('Provide at least one setting to update');
+    }
+    await this.ensureSettingsSeeded(updatedBy);
+    const catalog = this.settingsCatalog();
+    const byKey = new Map(catalog.map((c) => [c.key, c]));
+
+    for (const item of items) {
+      const key = item.key?.trim();
+      if (!key) continue;
+      const def = byKey.get(key);
+      if (!def && !item.groupName) {
+        throw new BadRequestException(`Unknown setting key: ${key}`);
+      }
+      const value = String(item.value ?? '');
+      if (key === 'logo' && value.length > 1_500_000) {
+        throw new BadRequestException('Logo is too large (max ~1MB encoded)');
+      }
+      const groupName = item.groupName || def?.group_name || 'general';
+      const label = item.label || def?.label || key;
+      const type = item.type || def?.type || 'text';
+      const isPublic = def?.is_public ?? false;
+
+      await this.prisma.settings.upsert({
+        where: { key },
+        create: {
+          key,
+          value,
+          type,
+          group_name: groupName,
+          label,
+          is_public: isPublic,
+          updated_by: updatedBy,
+        },
+        update: {
+          value,
+          type,
+          group_name: groupName,
+          label,
+          updated_by: updatedBy,
+        },
+      });
+
+      // Keep legacy hospital.* keys in sync for older consumers
+      const legacy: Record<string, string> = {
+        hospital_name: 'hospital.name',
+        hospital_phone: 'hospital.phone',
+        hospital_email: 'hospital.email',
+        hospital_address: 'hospital.address',
+      };
+      const legacyKey = legacy[key];
+      if (legacyKey) {
+        await this.prisma.settings.upsert({
+          where: { key: legacyKey },
+          create: {
+            key: legacyKey,
+            value,
+            type: 'text',
+            group_name: 'hospital',
+            label,
+            is_public: true,
+            updated_by: updatedBy,
+          },
+          update: { value, updated_by: updatedBy },
+        });
+      }
+    }
+
+    const groupNames = [
+      ...new Set(
+        items
+          .map((i) => i.groupName || byKey.get(i.key)?.group_name)
+          .filter((g): g is string => Boolean(g)),
+      ),
+    ];
+    if (groupNames.length === 1) {
+      return this.listSystemSettings(groupNames[0]);
+    }
+    return this.listSystemSettings();
+  }
+
+  async updateStaff(
+    staffId: string,
+    input: {
+      firstName?: string;
+      lastName?: string;
+      phone?: string;
+      departmentId?: string | null;
+      position?: string;
+      specialty?: string;
+    },
+  ) {
+    this.requireDb();
+    const staff = await this.prisma.staffProfiles.findFirst({
+      where: { id: staffId, deleted_at: null },
+    });
+    if (!staff) throw new NotFoundException('Staff member not found');
+
+    if (input.firstName || input.lastName || input.phone !== undefined) {
+      const profile = await this.prisma.profiles.findFirst({
+        where: { user_id: staff.user_id },
+      });
+      if (profile) {
+        await this.prisma.profiles.update({
+          where: { id: profile.id },
+          data: {
+            ...(input.firstName?.trim()
+              ? { first_name: input.firstName.trim() }
+              : {}),
+            ...(input.lastName?.trim()
+              ? { last_name: input.lastName.trim() }
+              : {}),
+            ...(input.phone !== undefined
+              ? { phone: input.phone?.trim() || null }
+              : {}),
+          },
+        });
+      }
+    }
+
+    const updated = await this.prisma.staffProfiles.update({
+      where: { id: staffId },
+      data: {
+        ...(input.departmentId !== undefined
+          ? { department_id: input.departmentId || null }
+          : {}),
+        ...(input.position !== undefined
+          ? { position: input.position?.trim() || null }
+          : {}),
+        ...(input.specialty !== undefined
+          ? { specialization: input.specialty?.trim() || null }
+          : {}),
+      },
+    });
+    return {
+      id: updated.id,
+      userId: updated.user_id,
+      employeeId: updated.employee_id,
+      departmentId: updated.department_id,
+      position: updated.position,
+      specialty: updated.specialization,
+    };
+  }
+
   async deactivateStaff(staffId: string) {
     this.requireDb();
     const staff = await this.prisma.staffProfiles.findFirst({
@@ -653,7 +1083,8 @@ export class OpsService {
           standard_price: s.price,
           is_active: true,
         },
-        update: { standard_price: s.price, is_active: true },
+        // Keep clinic fee-schedule prices; only ensure the row exists.
+        update: { is_active: true },
       });
     }
     return { policiesCreated: policies, feeSchedule: true };

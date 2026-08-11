@@ -30,6 +30,34 @@ const WARD_TYPES = [
   'SEMI_PRIVATE',
 ] as const;
 
+function paginate(filters?: { page?: number; limit?: number }) {
+  const limit = Math.min(Math.max(filters?.limit ?? 50, 1), 100);
+  const page = Math.max(filters?.page ?? 1, 1);
+  const skip = (page - 1) * limit;
+  return { limit, page, skip };
+}
+
+function patientSearchWhere(q: string): Prisma.PatientsWhereInput {
+  const trimmed = q.trim();
+  return {
+    OR: [
+      { patient_number: { contains: trimmed, mode: 'insensitive' } },
+      {
+        user: {
+          core_profiles_user_id: {
+            some: {
+              OR: [
+                { first_name: { contains: trimmed, mode: 'insensitive' } },
+                { last_name: { contains: trimmed, mode: 'insensitive' } },
+              ],
+            },
+          },
+        },
+      },
+    ],
+  };
+}
+
 /** Manual bed status changes allowed outside journey (not OCCUPIED). */
 const MANUAL_BED_TRANSITIONS: Record<string, string[]> = {
   AVAILABLE: ['MAINTENANCE', 'RESERVED'],
@@ -147,7 +175,13 @@ export class IpdOperationsUseCase {
 
   // ── Wards ─────────────────────────────────────────────────
 
-  public async listWards(filters?: { active?: boolean; wardType?: string }) {
+  public async listWards(filters?: {
+    active?: boolean;
+    wardType?: string;
+    page?: number;
+    limit?: number;
+    search?: string;
+  }) {
     if (filters?.wardType) {
       const wt = filters.wardType.toUpperCase();
       if (!WARD_TYPES.includes(wt as (typeof WARD_TYPES)[number])) {
@@ -157,20 +191,28 @@ export class IpdOperationsUseCase {
       }
       filters.wardType = wt;
     }
-    const wards = await this.prisma.wards.findMany({
-      where: {
-        ...(filters?.active !== undefined
-          ? { is_active: filters.active }
-          : { is_active: true }),
-        ...(filters?.wardType ? { ward_type: filters.wardType } : {}),
-      },
-      include: {
-        inpatient_beds_ward_id: { select: { id: true, status: true } },
-      },
-      orderBy: { name: 'asc' },
-      take: 100,
-    });
-    return wards.map((w) => {
+    const { limit, page, skip } = paginate(filters);
+    const q = filters?.search?.trim();
+    const where = {
+      ...(filters?.active !== undefined
+        ? { is_active: filters.active }
+        : { is_active: true }),
+      ...(filters?.wardType ? { ward_type: filters.wardType } : {}),
+      ...(q ? { name: { contains: q, mode: 'insensitive' as const } } : {}),
+    };
+    const [wards, total] = await Promise.all([
+      this.prisma.wards.findMany({
+        where,
+        include: {
+          inpatient_beds_ward_id: { select: { id: true, status: true } },
+        },
+        orderBy: { name: 'asc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.wards.count({ where }),
+    ]);
+    const items = wards.map((w) => {
       const beds = w.inpatient_beds_ward_id;
       return {
         id: w.id,
@@ -187,6 +229,7 @@ export class IpdOperationsUseCase {
         maintenanceBeds: beds.filter((b) => b.status === 'MAINTENANCE').length,
       };
     });
+    return { items, total, page, limit };
   }
 
   public async getWard(wardId: string) {
@@ -272,7 +315,13 @@ export class IpdOperationsUseCase {
 
   // ── Beds ──────────────────────────────────────────────────
 
-  public async listBeds(filters?: { wardId?: string; status?: string }) {
+  public async listBeds(filters?: {
+    wardId?: string;
+    status?: string;
+    page?: number;
+    limit?: number;
+    search?: string;
+  }) {
     if (filters?.status) {
       const st = filters.status.toUpperCase();
       if (!BED_STATUSES.includes(st as (typeof BED_STATUSES)[number])) {
@@ -282,22 +331,33 @@ export class IpdOperationsUseCase {
       }
       filters.status = st;
     }
-    const rows = await this.prisma.beds.findMany({
-      where: {
-        ...(filters?.wardId ? { ward_id: filters.wardId } : {}),
-        ...(filters?.status ? { status: filters.status } : {}),
-      },
-      include: { ward: true },
-      orderBy: [{ ward: { name: 'asc' } }, { bed_number: 'asc' }],
-      take: 500,
-    });
-    return rows.map((b) => ({
+    const { limit, page, skip } = paginate(filters);
+    const q = filters?.search?.trim();
+    const where = {
+      ...(filters?.wardId ? { ward_id: filters.wardId } : {}),
+      ...(filters?.status ? { status: filters.status } : {}),
+      ...(q
+        ? { bed_number: { contains: q, mode: 'insensitive' as const } }
+        : {}),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.beds.findMany({
+        where,
+        include: { ward: true },
+        orderBy: [{ ward: { name: 'asc' } }, { bed_number: 'asc' }],
+        skip,
+        take: limit,
+      }),
+      this.prisma.beds.count({ where }),
+    ]);
+    const items = rows.map((b) => ({
       id: b.id,
       wardId: b.ward_id,
       wardName: b.ward.name,
       bedNumber: b.bed_number,
       status: b.status,
     }));
+    return { items, total, page, limit };
   }
 
   public async updateBedStatus(
@@ -483,31 +543,41 @@ export class IpdOperationsUseCase {
     status?: string;
     patientId?: string;
     activeOnly?: boolean;
-    take?: number;
+    page?: number;
+    limit?: number;
+    search?: string;
   }) {
+    const { limit, page, skip } = paginate(filters);
     const status = filters?.status?.toUpperCase();
-    const rows = await this.prisma.admissions.findMany({
-      where: {
-        ...(status
-          ? { status }
-          : filters?.activeOnly
-            ? { status: 'ADMITTED' }
-            : {}),
-        ...(filters?.patientId ? { patient_id: filters.patientId } : {}),
-      },
-      include: {
-        patient: {
-          include: { user: { include: { core_profiles_user_id: true } } },
+    const q = filters?.search?.trim();
+    const where = {
+      ...(status
+        ? { status }
+        : filters?.activeOnly
+          ? { status: 'ADMITTED' }
+          : {}),
+      ...(filters?.patientId ? { patient_id: filters.patientId } : {}),
+      ...(q ? { patient: patientSearchWhere(q) } : {}),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.admissions.findMany({
+        where,
+        include: {
+          patient: {
+            include: { user: { include: { core_profiles_user_id: true } } },
+          },
+          bed: { include: { ward: true } },
+          admitting_doctor: {
+            include: { user: { include: { core_profiles_user_id: true } } },
+          },
         },
-        bed: { include: { ward: true } },
-        admitting_doctor: {
-          include: { user: { include: { core_profiles_user_id: true } } },
-        },
-      },
-      orderBy: { admission_date: 'desc' },
-      take: Math.min(Math.max(filters?.take ?? 100, 1), 200),
-    });
-    return rows.map((r) => {
+        orderBy: { admission_date: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.admissions.count({ where }),
+    ]);
+    const items = rows.map((r) => {
       const pp = r.patient.user.core_profiles_user_id[0];
       const dp = r.admitting_doctor.user.core_profiles_user_id[0];
       return {
@@ -531,6 +601,7 @@ export class IpdOperationsUseCase {
         dischargedAt: r.discharge_date?.toISOString() ?? null,
       };
     });
+    return { items, total, page, limit };
   }
 
   public async markDeceased(input: {
@@ -583,33 +654,44 @@ export class IpdOperationsUseCase {
     patientId?: string;
     from?: Date;
     to?: Date;
+    page?: number;
+    limit?: number;
+    search?: string;
   }) {
     await this.expireDueReservations();
+    const { limit, page, skip } = paginate(filters);
     const status = filters?.status?.toUpperCase();
-    const rows = await this.prisma.bedReservations.findMany({
-      where: {
-        ...(status ? { status } : {}),
-        ...(filters?.bedId ? { bed_id: filters.bedId } : {}),
-        ...(filters?.patientId ? { patient_id: filters.patientId } : {}),
-        ...(filters?.from || filters?.to
-          ? {
-              expected_admission_date: {
-                ...(filters.from ? { gte: filters.from } : {}),
-                ...(filters.to ? { lte: filters.to } : {}),
-              },
-            }
-          : {}),
-      },
-      include: {
-        bed: { include: { ward: true } },
-        patient: {
-          include: { user: { include: { core_profiles_user_id: true } } },
+    const q = filters?.search?.trim();
+    const where = {
+      ...(status ? { status } : {}),
+      ...(filters?.bedId ? { bed_id: filters.bedId } : {}),
+      ...(filters?.patientId ? { patient_id: filters.patientId } : {}),
+      ...(filters?.from || filters?.to
+        ? {
+            expected_admission_date: {
+              ...(filters.from ? { gte: filters.from } : {}),
+              ...(filters.to ? { lte: filters.to } : {}),
+            },
+          }
+        : {}),
+      ...(q ? { patient: patientSearchWhere(q) } : {}),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.bedReservations.findMany({
+        where,
+        include: {
+          bed: { include: { ward: true } },
+          patient: {
+            include: { user: { include: { core_profiles_user_id: true } } },
+          },
         },
-      },
-      orderBy: { expected_admission_date: 'asc' },
-      take: 100,
-    });
-    return rows.map((r) => {
+        orderBy: { expected_admission_date: 'asc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.bedReservations.count({ where }),
+    ]);
+    const items = rows.map((r) => {
       const pp = r.patient.user.core_profiles_user_id[0];
       return {
         id: r.id,
@@ -631,6 +713,7 @@ export class IpdOperationsUseCase {
         admissionId: r.admission_id,
       };
     });
+    return { items, total, page, limit };
   }
 
   public async reserveBed(input: {

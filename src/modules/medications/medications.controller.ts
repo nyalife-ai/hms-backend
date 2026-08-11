@@ -51,7 +51,8 @@ export class MedicationsController {
   findAll(@Query() query: MedicationsQueryDto) {
     return this.ops.listMedications({
       search: query.search,
-      take: query.limit,
+      page: query.page ?? 1,
+      limit: query.limit ?? 50,
     });
   }
 

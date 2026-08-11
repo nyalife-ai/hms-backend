@@ -325,42 +325,11 @@ export async function seedOps(prisma: PrismaClient): Promise<void> {
     }
   }
 
-  // Fee schedule + cash tender
-  const cashAcct = await prisma.accounts.upsert({
-    where: { account_code: '1000' },
-    create: {
-      account_code: '1000',
-      account_name: 'Cash on Hand',
-      account_type: 'ASSET',
-      normal_balance: 'DEBIT',
-    },
-    update: {},
-  });
-  await prisma.paymentMethods.upsert({
-    where: { method_code: 'CASH' },
-    create: {
-      method_name: 'Cash',
-      method_code: 'CASH',
-      gl_account_id: cashAcct.id,
-    },
-    update: { is_active: true },
-  });
-  for (const s of [
-    { code: 'CONSULT', name: 'Outpatient Consultation', price: 2500, category: 'Clinical' },
-    { code: 'LAB', name: 'Laboratory Test', price: 1500, category: 'Laboratory' },
-    { code: 'MED', name: 'Medication Dispense', price: 800, category: 'Pharmacy' },
-  ]) {
-    await prisma.services.upsert({
-      where: { service_code: s.code },
-      create: {
-        service_code: s.code,
-        service_name: s.name,
-        category: s.category,
-        standard_price: s.price,
-      },
-      update: { standard_price: s.price, is_active: true },
-    });
-  }
+  // Fee schedule + chart of accounts foundation
+  const { ensureBillingFoundation } = await import(
+    '../src/modules/billing/finance/ensure-foundation.ts'
+  );
+  await ensureBillingFoundation(prisma);
 
   console.log('Ops seed: wards, appointments, radiology, invoices, conversations, visits, policies, fees');
 }

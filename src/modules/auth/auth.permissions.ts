@@ -15,6 +15,7 @@ export const MODULE_PERMISSIONS = [
   'laboratory',
   'radiology',
   'billing',
+  'billing-ledger',
   'messages',
   'staff',
   'settings',
@@ -29,14 +30,17 @@ export function modulePermission(module: ModulePermission): string {
 /**
  * Strict per-desk module access (source of truth for seed + fallback).
  * Each operating role owns one desk; ADMIN is oversight/config only.
+ * SUPER_ADMIN gets every module — for QA / full UI testing, not a clinic desk.
  */
 export const ROLE_MODULE_ACCESS: Record<HmsRole, ModulePermission[]> = {
+  SUPER_ADMIN: [...MODULE_PERMISSIONS],
   ADMIN: [
     'dashboard',
     'patients',
     'appointments',
     'departments',
     'billing',
+    'billing-ledger',
     'messages',
     'staff',
     'settings',
@@ -69,7 +73,7 @@ export const ROLE_MODULE_ACCESS: Record<HmsRole, ModulePermission[]> = {
   PHARMACIST: ['dashboard', 'pharmacy', 'messages'],
   LAB_TECHNICIAN: ['dashboard', 'laboratory', 'messages'],
   RADIOLOGIST: ['dashboard', 'radiology', 'messages'],
-  ACCOUNTANT: ['dashboard', 'billing', 'messages'],
+  ACCOUNTANT: ['dashboard', 'billing', 'billing-ledger', 'messages'],
   PATIENT: [
     'dashboard',
     'appointments',

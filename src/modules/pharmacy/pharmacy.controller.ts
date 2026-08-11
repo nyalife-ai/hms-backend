@@ -18,25 +18,36 @@ import {
 import {
   ApiBearerAuth,
   ApiOperation,
-  ApiProperty,
+  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
-import {
-  IsArray,
-  IsNumber,
-  IsOptional,
-  IsString,
-  IsUUID,
-  Min,
-  ValidateNested,
-} from 'class-validator';
-import { Type } from 'class-transformer';
 import { CurrentUser } from '../../common/decorators/user.decorator';
 import type { AuthUserPublic, HmsRole } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
-import type { CreatePharmacyDto, PharmacyQueryDto, UpdatePharmacyDto } from './dto';
+import { CreatePharmacyDto, PharmacyQueryDto, UpdatePharmacyDto } from './dto';
+import {
+  AdjustStockDto,
+  CancelPrescriptionDto,
+  CreateBatchDto,
+  CreateCategoryDto,
+  CreateMedicationDto,
+  CreatePrescriptionDto,
+  CreatePurchaseOrderDto,
+  CreateSupplierDto,
+  DamageStockDto,
+  DispensePrescriptionDto,
+  ExpiryStockDto,
+  ReceivePurchaseOrderDto,
+  ReturnStockDto,
+  UpdateBatchDto,
+  UpdateCategoryDto,
+  UpdateMedicationDto,
+  UpdateSupplierDto,
+  VisitDispenseDto,
+  VoidPrescriptionDto,
+} from './dto/pharmacy-ops.dto';
 import { PharmacyService } from './pharmacy.service';
 import { DispenseMedicationUseCase } from './use-cases/dispense-medication.usecase';
 import { PharmacyOperationsUseCase } from './use-cases/pharmacy-operations.usecase';
@@ -49,35 +60,6 @@ const PHARM_ROLES: HmsRole[] = [
   'NURSE',
 ];
 const PHARM_WRITE: HmsRole[] = ['ADMIN', 'PHARMACIST'];
-
-class DispenseLineDto {
-  @ApiProperty()
-  @IsString()
-  medication!: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsUUID()
-  medicationId?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsNumber()
-  @Min(1)
-  quantity?: number;
-}
-
-class DispenseDto {
-  @ApiProperty()
-  @IsString()
-  visitId!: string;
-
-  @ApiProperty({ type: [DispenseLineDto] })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => DispenseLineDto)
-  lines!: DispenseLineDto[];
-}
 
 @ApiTags('Pharmacy')
 @ApiBearerAuth()
@@ -93,15 +75,19 @@ export class PharmacyController {
 
   @Get('overview')
   @Roles(...PHARM_ROLES)
+  @ApiOperation({ summary: 'Pharmacy board counts (stock, Rx, POs)' })
   overview() {
     return this.ops.overview();
   }
 
   @Post('dispense')
   @Roles(...PHARM_WRITE)
-  @ApiOperation({ summary: 'FEFO dispense for a visit (atomic stock decrement)' })
+  @ApiOperation({
+    summary:
+      'FEFO dispense for a visit — decrements stock, closes the formal Rx if linked, and marks the visit dispensed',
+  })
   dispenseVisit(
-    @Body() body: DispenseDto,
+    @Body() body: VisitDispenseDto,
     @CurrentUser() user: AuthUserPublic,
   ) {
     return this.dispense.dispenseForVisit({
@@ -114,59 +100,57 @@ export class PharmacyController {
   // ── Suppliers ─────────────────────────────────────────────
   @Get('suppliers')
   @Roles(...PHARM_ROLES)
+  @ApiOperation({ summary: 'List suppliers' })
+  @ApiQuery({ name: 'active', required: false })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
   listSuppliers(
     @Query('active') active?: string,
     @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
     return this.ops.listSuppliers({
       active:
         active === 'true' ? true : active === 'false' ? false : undefined,
       search,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 50,
     });
   }
 
   @Get('suppliers/:id')
   @Roles(...PHARM_ROLES)
+  @ApiOperation({ summary: 'Get supplier' })
   getSupplier(@Param('id', ParseUUIDPipe) id: string) {
     return this.ops.getSupplier(id);
   }
 
   @Post('suppliers')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Create supplier' })
   createSupplier(
     @CurrentUser() user: AuthUserPublic,
-    @Body()
-    body: {
-      companyName: string;
-      contactPerson?: string;
-      phone?: string;
-      email?: string;
-      address?: string;
-    },
+    @Body() body: CreateSupplierDto,
   ) {
     return this.ops.createSupplier({ ...body, actorUserId: user.id });
   }
 
   @Patch('suppliers/:id')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Update supplier' })
   updateSupplier(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,
-    @Body()
-    body: {
-      companyName?: string;
-      contactPerson?: string;
-      phone?: string;
-      email?: string;
-      address?: string;
-      isActive?: boolean;
-    },
+    @Body() body: UpdateSupplierDto,
   ) {
     return this.ops.updateSupplier(id, { ...body, actorUserId: user.id });
   }
 
   @Post('suppliers/:id/deactivate')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Deactivate supplier' })
   deactivateSupplier(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,
@@ -176,6 +160,7 @@ export class PharmacyController {
 
   @Post('suppliers/:id/activate')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Activate supplier' })
   activateSupplier(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,
@@ -186,6 +171,8 @@ export class PharmacyController {
   // ── Categories ────────────────────────────────────────────
   @Get('categories')
   @Roles(...PHARM_ROLES)
+  @ApiOperation({ summary: 'List medication categories' })
+  @ApiQuery({ name: 'active', required: false })
   listCategories(@Query('active') active?: string) {
     return this.ops.listCategories(
       active === 'true' ? true : active === 'false' ? false : undefined,
@@ -194,26 +181,28 @@ export class PharmacyController {
 
   @Get('categories/:id')
   @Roles(...PHARM_ROLES)
+  @ApiOperation({ summary: 'Get category' })
   getCategory(@Param('id', ParseUUIDPipe) id: string) {
     return this.ops.getCategory(id);
   }
 
   @Post('categories')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Create category' })
   createCategory(
     @CurrentUser() user: AuthUserPublic,
-    @Body() body: { categoryName: string; description?: string },
+    @Body() body: CreateCategoryDto,
   ) {
     return this.ops.createCategory({ ...body, actorUserId: user.id });
   }
 
   @Patch('categories/:id')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Update category' })
   updateCategory(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,
-    @Body()
-    body: { categoryName?: string; description?: string; isActive?: boolean },
+    @Body() body: UpdateCategoryDto,
   ) {
     return this.ops.updateCategory(id, { ...body, actorUserId: user.id });
   }
@@ -221,11 +210,20 @@ export class PharmacyController {
   // ── Medications (rich) ────────────────────────────────────
   @Get('medications')
   @Roles(...PHARM_ROLES)
+  @ApiOperation({ summary: 'List formulary medications' })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'categoryId', required: false })
+  @ApiQuery({ name: 'form', required: false })
+  @ApiQuery({ name: 'active', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
   listMedications(
     @Query('search') search?: string,
     @Query('categoryId') categoryId?: string,
     @Query('form') form?: string,
     @Query('active') active?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
     return this.ops.listMedications({
       search,
@@ -233,51 +231,45 @@ export class PharmacyController {
       form,
       active:
         active === 'true' ? true : active === 'false' ? false : undefined,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 50,
     });
   }
 
   @Get('medications/:id')
   @Roles(...PHARM_ROLES)
+  @ApiOperation({ summary: 'Get medication with batches' })
   getMedication(@Param('id', ParseUUIDPipe) id: string) {
     return this.ops.getMedication(id);
   }
 
   @Post('medications')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Create medication' })
   createMedication(
     @CurrentUser() user: AuthUserPublic,
-    @Body()
-    body: {
-      medicationName: string;
-      genericName?: string;
-      categoryId?: string;
-      form?: string;
-      strength?: string;
-      unit?: string;
-      standardSellingPrice?: number;
-      description?: string;
-      sideEffects?: string;
-      contraindications?: string;
-    },
+    @Body() body: CreateMedicationDto,
   ) {
     return this.ops.createMedication({ ...body, actorUserId: user.id });
   }
 
   @Patch('medications/:id')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Update medication' })
   updateMedication(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,
-    @Body() body: Record<string, unknown>,
+    @Body() body: UpdateMedicationDto,
   ) {
     return this.ops.updateMedication(id, {
-      ...(body as any),
+      ...body,
       actorUserId: user.id,
     });
   }
 
   @Delete('medications/:id')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Soft-delete medication' })
   deleteMedication(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,
@@ -288,53 +280,58 @@ export class PharmacyController {
   // ── Batches ───────────────────────────────────────────────
   @Get('batches')
   @Roles(...PHARM_ROLES)
+  @ApiOperation({ summary: 'List batches / lots' })
+  @ApiQuery({ name: 'medicationId', required: false })
+  @ApiQuery({ name: 'supplierId', required: false })
+  @ApiQuery({ name: 'expiredOnly', required: false })
+  @ApiQuery({ name: 'withStock', required: false })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
   listBatches(
     @Query('medicationId') medicationId?: string,
     @Query('supplierId') supplierId?: string,
     @Query('expiredOnly') expiredOnly?: string,
     @Query('withStock') withStock?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
     return this.ops.listBatches({
       medicationId,
       supplierId,
       expiredOnly: expiredOnly === 'true',
       withStock: withStock === 'true',
+      search,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 50,
     });
   }
 
   @Get('batches/:id')
   @Roles(...PHARM_ROLES)
+  @ApiOperation({ summary: 'Get batch' })
   getBatch(@Param('id', ParseUUIDPipe) id: string) {
     return this.ops.getBatch(id);
   }
 
   @Post('batches')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Receive a lot (creates RECEIVE stock movement)' })
   createBatch(
     @CurrentUser() user: AuthUserPublic,
-    @Body()
-    body: {
-      medicationId: string;
-      batchNumber: string;
-      quantityOnHand: number;
-      unitCost?: number;
-      sellingPrice?: number;
-      manufacturingDate?: string;
-      expiryDate: string;
-      supplierId?: string;
-      notes?: string;
-    },
+    @Body() body: CreateBatchDto,
   ) {
     return this.ops.createBatch({ ...body, createdBy: user.id });
   }
 
   @Patch('batches/:id')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Update batch notes / prices (not quantity)' })
   updateBatch(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,
-    @Body()
-    body: { notes?: string; sellingPrice?: number; unitCost?: number },
+    @Body() body: UpdateBatchDto,
   ) {
     return this.ops.updateBatchMeta(id, { ...body, actorUserId: user.id });
   }
@@ -342,6 +339,9 @@ export class PharmacyController {
   // ── Stock ─────────────────────────────────────────────────
   @Get('stock/movements')
   @Roles(...PHARM_ROLES)
+  @ApiOperation({ summary: 'Stock ledger' })
+  @ApiQuery({ name: 'batchId', required: false })
+  @ApiQuery({ name: 'movementType', required: false })
   listMovements(
     @Query('batchId') batchId?: string,
     @Query('movementType') movementType?: string,
@@ -351,42 +351,40 @@ export class PharmacyController {
 
   @Post('stock/adjust')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Adjust on-hand by signed delta' })
   adjust(
     @CurrentUser() user: AuthUserPublic,
-    @Body() body: { batchId: string; quantityChange: number; reason: string },
+    @Body() body: AdjustStockDto,
   ) {
     return this.ops.adjustStock({ ...body, performedBy: user.id });
   }
 
   @Post('stock/damage')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Write off damaged stock' })
   damage(
     @CurrentUser() user: AuthUserPublic,
-    @Body() body: { batchId: string; quantity: number; reason: string },
+    @Body() body: DamageStockDto,
   ) {
     return this.ops.damageStock({ ...body, performedBy: user.id });
   }
 
   @Post('stock/expiry')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Write off expired stock' })
   expiry(
     @CurrentUser() user: AuthUserPublic,
-    @Body() body: { batchId: string; quantity?: number; notes?: string },
+    @Body() body: ExpiryStockDto,
   ) {
     return this.ops.writeOffExpiry({ ...body, performedBy: user.id });
   }
 
   @Post('stock/return')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Return quantity onto a batch' })
   returnStock(
     @CurrentUser() user: AuthUserPublic,
-    @Body()
-    body: {
-      batchId: string;
-      quantity: number;
-      reason: string;
-      referenceId?: string;
-    },
+    @Body() body: ReturnStockDto,
   ) {
     return this.ops.returnStock({ ...body, performedBy: user.id });
   }
@@ -394,38 +392,47 @@ export class PharmacyController {
   // ── Prescriptions ─────────────────────────────────────────
   @Get('prescriptions')
   @Roles(...PHARM_ROLES)
+  @ApiOperation({ summary: 'List prescriptions' })
+  @ApiQuery({ name: 'patientId', required: false })
+  @ApiQuery({ name: 'status', required: false })
+  @ApiQuery({ name: 'from', required: false })
+  @ApiQuery({ name: 'to', required: false })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
   listPrescriptions(
     @Query('patientId') patientId?: string,
     @Query('status') status?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
-    return this.journey.listPrescriptions({ patientId, status });
+    return this.journey.listPrescriptions({
+      patientId,
+      status,
+      from: from ? new Date(from) : undefined,
+      to: to ? new Date(to) : undefined,
+      search,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 50,
+    });
   }
 
   @Get('prescriptions/:id')
   @Roles(...PHARM_ROLES)
+  @ApiOperation({ summary: 'Get prescription with lines' })
   getPrescription(@Param('id', ParseUUIDPipe) id: string) {
     return this.journey.getPrescription(id);
   }
 
   @Post('prescriptions')
   @Roles('ADMIN', 'PHARMACIST', 'DOCTOR')
+  @ApiOperation({ summary: 'Create prescription (walk-in or paper script)' })
   createPrescription(
     @CurrentUser() user: AuthUserPublic,
-    @Body()
-    body: {
-      patientId: string;
-      prescribedByStaffId: string;
-      consultationId?: string;
-      notes?: string;
-      lines: Array<{
-        medicationId: string;
-        dosage: string;
-        frequency: string;
-        duration: string;
-        quantity: number;
-        instructions?: string;
-      }>;
-    },
+    @Body() body: CreatePrescriptionDto,
   ) {
     return this.journey.createPrescription({
       ...body,
@@ -435,20 +442,22 @@ export class PharmacyController {
 
   @Post('prescriptions/:id/cancel')
   @Roles('ADMIN', 'PHARMACIST', 'DOCTOR')
+  @ApiOperation({ summary: 'Cancel a pending / partial prescription' })
   cancelPrescription(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,
-    @Body() body?: { reason?: string },
+    @Body() body?: CancelPrescriptionDto,
   ) {
     return this.journey.cancelPrescription(id, user.id, body?.reason);
   }
 
   @Post('prescriptions/:id/void')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Void a prescription (reason required)' })
   voidPrescription(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,
-    @Body() body: { voidReason: string },
+    @Body() body: VoidPrescriptionDto,
   ) {
     return this.journey.voidPrescription({
       prescriptionId: id,
@@ -459,10 +468,11 @@ export class PharmacyController {
 
   @Post('prescriptions/:id/dispense')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'FEFO dispense against formal prescription lines' })
   dispensePrescription(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,
-    @Body() body?: { lineIds?: string[] },
+    @Body() body?: DispensePrescriptionDto,
   ) {
     return this.journey.dispensePrescription({
       prescriptionId: id,
@@ -474,34 +484,41 @@ export class PharmacyController {
   // ── Purchase orders ───────────────────────────────────────
   @Get('purchase-orders')
   @Roles(...PHARM_ROLES)
+  @ApiOperation({ summary: 'List purchase orders' })
+  @ApiQuery({ name: 'supplierId', required: false })
+  @ApiQuery({ name: 'status', required: false })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
   listPos(
     @Query('supplierId') supplierId?: string,
     @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
-    return this.journey.listPurchaseOrders({ supplierId, status });
+    return this.journey.listPurchaseOrders({
+      supplierId,
+      status,
+      search,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 50,
+    });
   }
 
   @Get('purchase-orders/:id')
   @Roles(...PHARM_ROLES)
+  @ApiOperation({ summary: 'Get purchase order' })
   getPo(@Param('id', ParseUUIDPipe) id: string) {
     return this.journey.getPurchaseOrder(id);
   }
 
   @Post('purchase-orders')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Create draft purchase order' })
   createPo(
     @CurrentUser() user: AuthUserPublic,
-    @Body()
-    body: {
-      supplierId: string;
-      expectedDeliveryDate?: string;
-      notes?: string;
-      lines: Array<{
-        medicationId: string;
-        quantityOrdered: number;
-        unitCost: number;
-      }>;
-    },
+    @Body() body: CreatePurchaseOrderDto,
   ) {
     return this.journey.createPurchaseOrder({
       ...body,
@@ -511,6 +528,7 @@ export class PharmacyController {
 
   @Post('purchase-orders/:id/send')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Mark purchase order as sent to supplier' })
   sendPo(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,
@@ -520,6 +538,7 @@ export class PharmacyController {
 
   @Post('purchase-orders/:id/cancel')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Cancel a draft or sent purchase order' })
   cancelPo(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,
@@ -529,19 +548,11 @@ export class PharmacyController {
 
   @Post('purchase-orders/:id/receive')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({ summary: 'Receive stock against PO lines (creates lots)' })
   receivePo(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,
-    @Body()
-    body: {
-      receipts: Array<{
-        lineId: string;
-        quantity: number;
-        batchNumber: string;
-        expiryDate: string;
-        manufacturingDate?: string;
-      }>;
-    },
+    @Body() body: ReceivePurchaseOrderDto,
   ) {
     return this.journey.receivePurchaseOrder({
       purchaseOrderId: id,
@@ -553,7 +564,10 @@ export class PharmacyController {
   // ── Legacy thin medication alias (compat) ─────────────────
   @Post()
   @Roles(...PHARM_WRITE)
-  @ApiOperation({ summary: 'Create medication (legacy alias — prefer POST /pharmacy/medications)' })
+  @ApiOperation({
+    deprecated: true,
+    summary: 'Create medication (legacy alias — prefer POST /pharmacy/medications)',
+  })
   create(@Body() dto: CreatePharmacyDto, @CurrentUser() user: AuthUserPublic) {
     return this.ops.createMedication({
       medicationName: dto.name,
@@ -564,20 +578,33 @@ export class PharmacyController {
 
   @Get()
   @Roles(...PHARM_ROLES)
-  @ApiOperation({ summary: 'List medications (legacy alias)' })
+  @ApiOperation({
+    deprecated: true,
+    summary: 'List medications (legacy alias — prefer GET /pharmacy/medications)',
+  })
   findAll(@Query() query: PharmacyQueryDto) {
-    return this.ops.listMedications({ take: query.limit });
+    return this.ops.listMedications({
+      page: query.page ?? 1,
+      limit: query.limit ?? 50,
+    });
   }
 
   @Get(':id')
   @Roles(...PHARM_ROLES)
-  @ApiOperation({ summary: 'Get medication by id (legacy)' })
+  @ApiOperation({
+    deprecated: true,
+    summary: 'Get medication by id (legacy — prefer GET /pharmacy/medications/:id)',
+  })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.ops.getMedication(id);
   }
 
   @Patch(':id')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({
+    deprecated: true,
+    summary: 'Update medication (legacy alias)',
+  })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdatePharmacyDto,
@@ -592,6 +619,10 @@ export class PharmacyController {
 
   @Delete(':id')
   @Roles(...PHARM_WRITE)
+  @ApiOperation({
+    deprecated: true,
+    summary: 'Soft-delete medication (legacy alias)',
+  })
   remove(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,

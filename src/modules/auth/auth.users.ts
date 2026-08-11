@@ -7,7 +7,17 @@ import type { AuthUser } from './auth.types';
  */
 const DEMO_PASSWORD = 'nyalife123';
 
-const SEED: Omit<AuthUser, 'passwordHash' | 'permissions'>[] = [
+const SEED: Omit<
+  AuthUser,
+  'passwordHash' | 'permissions' | 'twoFactorEnabled'
+>[] = [
+  {
+    id: 'u-super',
+    name: 'NyaLife Super Admin',
+    email: 'super@nyalife.health',
+    role: 'SUPER_ADMIN',
+    position: 'Full-access tester',
+  },
   {
     id: 'u-admin',
     name: 'Terrine Herman',
@@ -72,6 +82,7 @@ export const AUTH_USERS: Array<Omit<AuthUser, 'permissions'> & { permissions?: s
   SEED.map((user) => ({
     ...user,
     passwordHash,
+    twoFactorEnabled: false,
   }));
 
 export const DEMO_PASSWORD_HINT = DEMO_PASSWORD;

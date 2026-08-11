@@ -10,7 +10,17 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import {
+  IsArray,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Min,
+  ValidateNested,
+} from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
@@ -24,6 +34,70 @@ const IPD_ROLES: HmsRole[] = [
   'NURSE',
   'RECEPTIONIST',
 ];
+
+class DischargePrescriptionLineDto {
+  @ApiProperty()
+  @IsUUID()
+  medicationId!: string;
+
+  @ApiProperty()
+  @IsString()
+  dosage!: string;
+
+  @ApiProperty()
+  @IsString()
+  frequency!: string;
+
+  @ApiProperty()
+  @IsString()
+  duration!: string;
+
+  @ApiProperty()
+  @IsNumber()
+  @Min(1)
+  quantity!: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  instructions?: string;
+}
+
+class DischargeAdmissionDto {
+  @ApiProperty()
+  @IsUUID()
+  dischargingDoctorId!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  diagnosis?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  summary?: string;
+
+  @ApiPropertyOptional({ description: 'Free-text discharge medication notes' })
+  @IsOptional()
+  @IsString()
+  medications?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  followUpInstructions?: string;
+
+  @ApiPropertyOptional({
+    type: [DischargePrescriptionLineDto],
+    description: 'Formulary lines — creates a pharmacy prescription on discharge',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DischargePrescriptionLineDto)
+  prescriptionLines?: DischargePrescriptionLineDto[];
+}
 
 @ApiTags('IPD Journey')
 @ApiBearerAuth()
@@ -47,11 +121,17 @@ export class InpatientController {
   listWards(
     @Query('active') active?: string,
     @Query('wardType') wardType?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
   ) {
     return this.ops.listWards({
       active:
         active === 'true' ? true : active === 'false' ? false : undefined,
       wardType,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 50,
+      search,
     });
   }
 
@@ -107,11 +187,17 @@ export class InpatientController {
     @Query('wardId') wardId?: string,
     @Query('status') status?: string,
     @Query('available') available?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
   ) {
-    if (available === 'true') {
-      return this.journey.listBeds({ availableOnly: true, wardId });
-    }
-    return this.ops.listBeds({ wardId, status });
+    return this.ops.listBeds({
+      wardId,
+      status: available === 'true' ? 'AVAILABLE' : status,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 50,
+      search,
+    });
   }
 
   @Post('beds')
@@ -145,16 +231,17 @@ export class InpatientController {
     @Query('status') status?: string,
     @Query('patientId') patientId?: string,
     @Query('active') active?: string,
-    @Query('take') take?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
   ) {
-    if (active === 'true' && !status && !patientId) {
-      return this.journey.listActiveAdmissions();
-    }
     return this.ops.listAdmissions({
       status,
       patientId,
       activeOnly: active === 'true',
-      take: take ? Number(take) : undefined,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 50,
+      search,
     });
   }
 
@@ -222,17 +309,14 @@ export class InpatientController {
 
   @Post('admissions/:id/discharge')
   @Roles('ADMIN', 'DOCTOR')
+  @ApiOperation({
+    summary:
+      'Discharge an admitted patient. Optional prescriptionLines create a formal pharmacy Rx.',
+  })
   discharge(
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: { user?: { id?: string } },
-    @Body()
-    body: {
-      dischargingDoctorId: string;
-      diagnosis?: string;
-      summary?: string;
-      medications?: string;
-      followUpInstructions?: string;
-    },
+    @Body() body: DischargeAdmissionDto,
   ) {
     return this.journey.discharge({
       admissionId: id,
@@ -241,6 +325,7 @@ export class InpatientController {
       summary: body.summary,
       medications: body.medications,
       followUpInstructions: body.followUpInstructions,
+      prescriptionLines: body.prescriptionLines,
       finalizedBy: req.user?.id || body.dischargingDoctorId,
     });
   }
@@ -337,6 +422,9 @@ export class InpatientController {
     @Query('patientId') patientId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
   ) {
     return this.ops.listReservations({
       status,
@@ -344,6 +432,9 @@ export class InpatientController {
       patientId,
       from: from ? new Date(from) : undefined,
       to: to ? new Date(to) : undefined,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 50,
+      search,
     });
   }
 

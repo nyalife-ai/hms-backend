@@ -13,6 +13,7 @@ import {
 import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../../database/prisma/prisma.service';
 import { HmsAuditWriter } from '../../audit/hms-audit.writer';
+import { profileName, USER_PROFILE_INCLUDE } from '../pharmacy-names';
 
 const MED_FORMS = [
   'TABLET',
@@ -31,6 +32,16 @@ const RX_STATUSES = [
 ] as const;
 
 const PO_STATUSES = ['DRAFT', 'SENT', 'RECEIVED', 'CANCELLED'] as const;
+
+function paginateParams(page?: number, limit?: number) {
+  const resolvedLimit = Math.min(Math.max(limit ?? 50, 1), 100);
+  const resolvedPage = Math.max(page ?? 1, 1);
+  return {
+    page: resolvedPage,
+    limit: resolvedLimit,
+    skip: (resolvedPage - 1) * resolvedLimit,
+  };
+}
 
 @Injectable()
 export class PharmacyOperationsUseCase {
@@ -111,27 +122,40 @@ export class PharmacyOperationsUseCase {
   public async listSuppliers(filters?: {
     active?: boolean;
     search?: string;
+    page?: number;
+    limit?: number;
   }) {
+    const { page, limit, skip } = paginateParams(filters?.page, filters?.limit);
     const q = filters?.search?.trim();
-    const rows = await this.prisma.suppliers.findMany({
-      where: {
-        ...(filters?.active !== undefined
-          ? { is_active: filters.active }
-          : {}),
-        ...(q
-          ? {
-              OR: [
-                { company_name: { contains: q, mode: 'insensitive' } },
-                { contact_person: { contains: q, mode: 'insensitive' } },
-                { email: { contains: q, mode: 'insensitive' } },
-              ],
-            }
-          : {}),
-      },
-      orderBy: { company_name: 'asc' },
-      take: 200,
-    });
-    return rows.map((s) => this.mapSupplier(s));
+    const where = {
+      ...(filters?.active !== undefined
+        ? { is_active: filters.active }
+        : {}),
+      ...(q
+        ? {
+            OR: [
+              { company_name: { contains: q, mode: 'insensitive' as const } },
+              { contact_person: { contains: q, mode: 'insensitive' as const } },
+              { email: { contains: q, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.suppliers.findMany({
+        where,
+        orderBy: { company_name: 'asc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.suppliers.count({ where }),
+    ]);
+    return {
+      items: rows.map((s) => this.mapSupplier(s)),
+      total,
+      page,
+      limit,
+    };
   }
 
   public async getSupplier(id: string) {
@@ -353,7 +377,8 @@ export class PharmacyOperationsUseCase {
     categoryId?: string;
     form?: string;
     active?: boolean;
-    take?: number;
+    page?: number;
+    limit?: number;
   }) {
     if (filters?.form) {
       const form = filters.form.toUpperCase();
@@ -364,54 +389,68 @@ export class PharmacyOperationsUseCase {
       }
       filters.form = form;
     }
+    const { page, limit, skip } = paginateParams(filters?.page, filters?.limit);
     const q = filters?.search?.trim();
-    const rows = await this.prisma.medications.findMany({
-      where: {
-        deleted_at: null,
-        ...(filters?.active !== undefined
-          ? { is_active: filters.active }
-          : { is_active: true }),
-        ...(filters?.categoryId ? { category_id: filters.categoryId } : {}),
-        ...(filters?.form ? { form: filters.form } : {}),
-        ...(q
-          ? {
-              OR: [
-                { medication_name: { contains: q, mode: 'insensitive' } },
-                { generic_name: { contains: q, mode: 'insensitive' } },
-              ],
-            }
-          : {}),
-      },
-      include: {
-        category: true,
-        pharmacy_batches_medication_id: {
-          select: { quantity_on_hand: true, expiry_date: true },
+    const where = {
+      deleted_at: null,
+      ...(filters?.active !== undefined
+        ? { is_active: filters.active }
+        : { is_active: true }),
+      ...(filters?.categoryId ? { category_id: filters.categoryId } : {}),
+      ...(filters?.form ? { form: filters.form } : {}),
+      ...(q
+        ? {
+            OR: [
+              { medication_name: { contains: q, mode: 'insensitive' as const } },
+              { generic_name: { contains: q, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.medications.findMany({
+        where,
+        include: {
+          category: true,
+          pharmacy_batches_medication_id: {
+            select: { quantity_on_hand: true, expiry_date: true },
+          },
         },
-      },
-      orderBy: { medication_name: 'asc' },
-      take: Math.min(Math.max(filters?.take ?? 100, 1), 200),
-    });
-    return rows.map((m) => {
-      const batches = m.pharmacy_batches_medication_id;
-      const stock = batches.reduce((s, b) => s + Number(b.quantity_on_hand), 0);
-      return {
-        id: m.id,
-        medicationName: m.medication_name,
-        genericName: m.generic_name,
-        categoryId: m.category_id,
-        categoryName: m.category?.category_name ?? null,
-        form: m.form,
-        strength: m.strength,
-        unit: m.unit,
-        standardSellingPrice: Number(m.standard_selling_price),
-        description: m.description,
-        sideEffects: m.side_effects,
-        contraindications: m.contraindications,
-        isActive: m.is_active,
-        quantityOnHand: stock,
-        batchCount: batches.length,
-      };
-    });
+        orderBy: { medication_name: 'asc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.medications.count({ where }),
+    ]);
+    return {
+      items: rows.map((m) => {
+        const batches = m.pharmacy_batches_medication_id;
+        const stock = batches.reduce(
+          (s, b) => s + Number(b.quantity_on_hand),
+          0,
+        );
+        return {
+          id: m.id,
+          medicationName: m.medication_name,
+          genericName: m.generic_name,
+          categoryId: m.category_id,
+          categoryName: m.category?.category_name ?? null,
+          form: m.form,
+          strength: m.strength,
+          unit: m.unit,
+          standardSellingPrice: Number(m.standard_selling_price),
+          description: m.description,
+          sideEffects: m.side_effects,
+          contraindications: m.contraindications,
+          isActive: m.is_active,
+          quantityOnHand: stock,
+          batchCount: batches.length,
+        };
+      }),
+      total,
+      page,
+      limit,
+    };
   }
 
   public async getMedication(id: string) {
@@ -616,36 +655,68 @@ export class PharmacyOperationsUseCase {
     expiringBefore?: Date;
     expiredOnly?: boolean;
     withStock?: boolean;
+    search?: string;
+    page?: number;
+    limit?: number;
   }) {
+    const { page, limit, skip } = paginateParams(filters?.page, filters?.limit);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const rows = await this.prisma.batches.findMany({
-      where: {
-        ...(filters?.medicationId
-          ? { medication_id: filters.medicationId }
+    const q = filters?.search?.trim();
+    const where = {
+      ...(filters?.medicationId
+        ? { medication_id: filters.medicationId }
+        : {}),
+      ...(filters?.supplierId ? { supplier_id: filters.supplierId } : {}),
+      ...(filters?.withStock ? { quantity_on_hand: { gt: 0 } } : {}),
+      ...(filters?.expiredOnly
+        ? { expiry_date: { lt: today } }
+        : filters?.expiringBefore
+          ? { expiry_date: { lte: filters.expiringBefore } }
           : {}),
-        ...(filters?.supplierId ? { supplier_id: filters.supplierId } : {}),
-        ...(filters?.withStock ? { quantity_on_hand: { gt: 0 } } : {}),
-        ...(filters?.expiredOnly
-          ? { expiry_date: { lt: today } }
-          : filters?.expiringBefore
-            ? { expiry_date: { lte: filters.expiringBefore } }
-            : {}),
-      },
-      include: {
-        medication: true,
-        supplier: true,
-      },
-      orderBy: [{ expiry_date: 'asc' }, { batch_number: 'asc' }],
-      take: 300,
-    });
-    return rows.map((b) => this.mapBatch(b));
+      ...(q
+        ? {
+            OR: [
+              { batch_number: { contains: q, mode: 'insensitive' as const } },
+              {
+                medication: {
+                  medication_name: { contains: q, mode: 'insensitive' as const },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.batches.findMany({
+        where,
+        include: {
+          medication: true,
+          supplier: true,
+          rel_created_by: USER_PROFILE_INCLUDE,
+        },
+        orderBy: [{ expiry_date: 'asc' }, { batch_number: 'asc' }],
+        skip,
+        take: limit,
+      }),
+      this.prisma.batches.count({ where }),
+    ]);
+    return {
+      items: rows.map((b) => this.mapBatch(b)),
+      total,
+      page,
+      limit,
+    };
   }
 
   public async getBatch(id: string) {
     const b = await this.prisma.batches.findFirst({
       where: { id },
-      include: { medication: true, supplier: true },
+      include: {
+        medication: true,
+        supplier: true,
+        rel_created_by: USER_PROFILE_INCLUDE,
+      },
     });
     if (!b) throw new NotFoundException('Batch not found');
     return this.mapBatch(b);
@@ -782,6 +853,9 @@ export class PharmacyOperationsUseCase {
     created_by: string;
     medication?: { medication_name: string };
     supplier?: { company_name: string } | null;
+    rel_created_by?: {
+      core_profiles_user_id: { first_name: string; last_name: string }[];
+    } | null;
   }) {
     return {
       id: b.id,
@@ -799,6 +873,7 @@ export class PharmacyOperationsUseCase {
       supplierName: b.supplier?.company_name ?? null,
       notes: b.notes,
       createdBy: b.created_by,
+      createdByName: profileName(b.rel_created_by),
       expired: b.expiry_date.getTime() < Date.now(),
     };
   }
@@ -819,6 +894,7 @@ export class PharmacyOperationsUseCase {
       },
       include: {
         batch: { include: { medication: true } },
+        rel_performed_by: USER_PROFILE_INCLUDE,
       },
       orderBy: { created_at: 'desc' },
       take: Math.min(Math.max(filters?.take ?? 100, 1), 200),
@@ -834,6 +910,7 @@ export class PharmacyOperationsUseCase {
       referenceId: m.reference_id,
       notes: m.notes,
       performedBy: m.performed_by,
+      performedByName: profileName(m.rel_performed_by),
       createdAt: m.created_at.toISOString(),
     }));
   }

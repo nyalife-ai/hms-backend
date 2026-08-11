@@ -18,6 +18,12 @@ describe('LabOperationsUseCase', () => {
         update: jest.fn(),
         count: jest.fn(),
       },
+      testCategories: {
+        upsert: jest.fn().mockResolvedValue({ id: 'cat1', name: 'Haematology' }),
+      },
+      serviceCategories: {
+        upsert: jest.fn().mockResolvedValue({ id: 'scat1', name: 'Procedure' }),
+      },
       testParameters: {
         findMany: jest.fn(),
         findFirst: jest.fn(),
@@ -31,6 +37,13 @@ describe('LabOperationsUseCase', () => {
       },
       samples: { findMany: jest.fn(), findFirst: jest.fn(), count: jest.fn() },
       results: { findMany: jest.fn(), count: jest.fn() },
+      services: {
+        findMany: jest.fn(),
+        count: jest.fn(),
+        create: jest.fn(),
+        update: jest.fn(),
+        findUnique: jest.fn(),
+      },
     };
     ops = new LabOperationsUseCase(prisma, {
       recordMutation: jest.fn().mockResolvedValue(undefined),

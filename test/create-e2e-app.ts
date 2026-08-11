@@ -9,6 +9,7 @@ import { Test } from '@nestjs/testing';
 import type { NextFunction, Request, Response } from 'express';
 import { AppModule } from '../src/app.module';
 import { RequestIdMiddleware } from '../src/common/middleware/request-id.middleware';
+import { auditContextMiddleware } from '../src/modules/audit/audit-context.middleware';
 
 export async function createE2eApp(options?: {
   forbidNonWhitelisted?: boolean;
@@ -24,6 +25,7 @@ export async function createE2eApp(options?: {
   app.use((req: Request, res: Response, next: NextFunction) =>
     requestIdMiddleware.use(req, res, next),
   );
+  app.use(auditContextMiddleware);
 
   app.useGlobalPipes(
     new ValidationPipe({

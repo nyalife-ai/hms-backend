@@ -53,7 +53,9 @@ export class PrescriptionsController {
   @Roles('ADMIN', 'PHARMACIST', 'DOCTOR', 'NURSE')
   findAll(@Query() query: PrescriptionsQueryDto) {
     return this.journey.listPrescriptions({
-      take: query.limit,
+      search: query.search,
+      page: query.page ?? 1,
+      limit: query.limit ?? 50,
     });
   }
 

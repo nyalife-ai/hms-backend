@@ -267,6 +267,10 @@ export class LabJourneyUseCase {
     }
 
     const allowed = SAMPLE_TRANSITIONS[sample.status] ?? [];
+    // Idempotent: already at the requested status (double-click / stale UI)
+    if (sample.status === next) {
+      return this.ops.getSample(sample.id);
+    }
     if (!allowed.includes(next)) {
       throw new BadRequestException(
         `Cannot transition sample from ${sample.status} to ${next}`,
@@ -314,6 +318,9 @@ export class LabJourneyUseCase {
     }
     if (request.status === 'COMPLETED') {
       throw new BadRequestException('Request is already completed');
+    }
+    if (!input.parameterId) {
+      throw new BadRequestException('parameterId is required');
     }
     if (!input.resultValue?.trim()) {
       throw new BadRequestException('resultValue is required');
@@ -602,6 +609,23 @@ export class LabJourneyUseCase {
       this.events.emit(LAB_EVENTS.REQUEST_COMPLETED, {
         requestId: input.requestId,
       });
+      try {
+        const req = await this.prisma.laboratoryRequests.findFirst({
+          where: { id: input.requestId },
+          select: { notes: true },
+        });
+        const parsed = req?.notes ? JSON.parse(req.notes) : null;
+        const visitId =
+          parsed && typeof parsed.visitId === 'string' ? parsed.visitId : null;
+        if (visitId) {
+          await this.prisma.outpatientVisits.updateMany({
+            where: { id: visitId, stage: 'LAB_PENDING' },
+            data: { stage: 'RESULTS_READY' },
+          });
+        }
+      } catch {
+        /* visit sync is best-effort */
+      }
     }
     return this.ops.getRequest(input.requestId);
   }

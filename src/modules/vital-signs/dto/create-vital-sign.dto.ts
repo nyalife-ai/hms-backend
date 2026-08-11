@@ -5,6 +5,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsDateString,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -95,11 +96,19 @@ export class CreateVitalSignDto {
   @Max(100)
   oxygenSaturation?: number;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Clinical observations' })
   @IsOptional()
   @IsString()
   @MaxLength(2000)
   notes?: string;
+
+  @ApiPropertyOptional({
+    enum: ['NORMAL', 'EMERGENCY'],
+    description: 'Triage urgency level',
+  })
+  @IsOptional()
+  @IsIn(['NORMAL', 'EMERGENCY'])
+  urgencyLevel?: 'NORMAL' | 'EMERGENCY';
 
   @ApiPropertyOptional()
   @IsOptional()

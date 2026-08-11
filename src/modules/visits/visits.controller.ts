@@ -11,15 +11,19 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/user.decorator';
 import type { AuthUserPublic } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { FRONT_DESK_ROLES, VISIT_FLOW_ROLES } from '../auth/role-sets';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import {
   CheckInDto,
   ClaimStatusDto,
+  CollectConsultFeeDto,
   CompleteConsultationDto,
   FinalizeBillingDto,
   LabResultsDto,
   OrderLabsDto,
+  SaveClinicalOrdersDto,
+  SaveClinicalRecordDto,
   TriageDto,
 } from './dto/visits.dto';
 import { VisitsService } from './visits.service';
@@ -32,21 +36,29 @@ export class VisitsController {
   constructor(private readonly visits: VisitsService) {}
 
   @Get()
+  @Roles(...VISIT_FLOW_ROLES)
   @ApiOperation({ summary: 'List all visits in the patient flow' })
   findAll() {
     return this.visits.findAll();
   }
 
   @Get(':id')
+  @Roles(...VISIT_FLOW_ROLES)
   findOne(@Param('id') id: string) {
     return this.visits.findOne(id);
   }
 
   @Post('check-in')
-  @Roles('ADMIN', 'RECEPTIONIST')
-  @ApiOperation({ summary: 'Front desk check-in' })
-  checkIn(@Body() body: CheckInDto) {
-    return this.visits.checkIn(body);
+  @Roles(...FRONT_DESK_ROLES)
+  @ApiOperation({
+    summary:
+      'Front desk check-in (auto-creates consult-fee draft invoice when system setting is enabled)',
+  })
+  checkIn(
+    @Body() body: CheckInDto,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.visits.checkIn(body, user.id);
   }
 
   @Post(':id/triage')
@@ -60,10 +72,70 @@ export class VisitsController {
     );
   }
 
+  @Post(':id/charge-consult-fee')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'ACCOUNTANT')
+  @ApiOperation({
+    summary:
+      'Manually create consult-fee draft (normally automatic on check-in when enabled)',
+  })
+  chargeConsultFee(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.visits.chargeConsultFee(id, user.id);
+  }
+
+  @Post(':id/waive-consult-fee')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'ACCOUNTANT')
+  @ApiOperation({ summary: 'Waive consultation fee for a visit' })
+  waiveConsultFee(@Param('id') id: string) {
+    return this.visits.waiveConsultFee(id);
+  }
+
+  @Post(':id/collect-consult-fee')
+  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
+  @ApiOperation({
+    summary: 'Finance desk: issue consult invoice and collect cash/M-Pesa',
+  })
+  collectConsultFee(
+    @Param('id') id: string,
+    @Body() body: CollectConsultFeeDto,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.visits.collectConsultFee(id, user.id, body.mode, {
+      transactionReference: body.transactionReference,
+      mpesaReceipt: body.mpesaReceipt,
+    });
+  }
+
   @Post(':id/start-consultation')
   @Roles('ADMIN', 'DOCTOR')
   startConsultation(@Param('id') id: string) {
     return this.visits.startConsultation(id);
+  }
+
+  @Post(':id/clinical-notes')
+  @Roles('ADMIN', 'DOCTOR')
+  @ApiOperation({
+    summary: 'Save full clinical consultation narrative mid-consult',
+  })
+  saveClinicalNotes(
+    @Param('id') id: string,
+    @Body() body: SaveClinicalRecordDto,
+  ) {
+    return this.visits.saveClinicalRecord(id, body.clinicalRecord as never);
+  }
+
+  @Post(':id/clinical-orders')
+  @Roles('ADMIN', 'DOCTOR')
+  @ApiOperation({
+    summary: 'Save ordered services / procedures / surgeries mid-consult',
+  })
+  saveClinicalOrders(
+    @Param('id') id: string,
+    @Body() body: SaveClinicalOrdersDto,
+  ) {
+    return this.visits.saveClinicalOrders(id, body as never);
   }
 
   @Post(':id/order-labs')
@@ -93,8 +165,12 @@ export class VisitsController {
 
   @Post(':id/complete')
   @Roles('ADMIN', 'DOCTOR')
-  complete(@Param('id') id: string, @Body() body: CompleteConsultationDto) {
-    return this.visits.completeConsultation(id, body);
+  complete(
+    @Param('id') id: string,
+    @Body() body: CompleteConsultationDto,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.visits.completeConsultation(id, body as never, user.id);
   }
 
   @Post(':id/billing')

@@ -56,7 +56,7 @@ export class DispenseMedicationUseCase {
       return { dispensed: 0, warnings: [] };
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.stockMovements.findFirst({
         where: {
           movement_type: 'DISPENSE',
@@ -183,5 +183,79 @@ export class DispenseMedicationUseCase {
 
       return { dispensed, warnings };
     });
+
+    await this.syncVisitAndFormalRx(input.visitId, input.performedBy);
+    return result;
+  }
+
+  /**
+   * After visit stock is moved, close the linked formal Rx (no second decrement)
+   * and mark visit.pharmacy.dispensed so the checkout queue clears.
+   */
+  private async syncVisitAndFormalRx(
+    visitId: string,
+    performedBy: string,
+  ): Promise<void> {
+    try {
+      if (!this.prisma.outpatientVisits?.findUnique) return;
+      const visit = await this.prisma.outpatientVisits.findUnique({
+        where: { id: visitId },
+      });
+      if (!visit) return;
+
+      const payload = (visit.payload ?? {}) as Record<string, unknown>;
+      const pharmacy = {
+        ...((payload.pharmacy as Record<string, unknown> | undefined) ?? {}),
+      };
+      const prescriptionId =
+        typeof pharmacy.prescriptionId === 'string'
+          ? pharmacy.prescriptionId
+          : null;
+
+      if (prescriptionId) {
+        const rx = await this.prisma.prescriptions.findFirst({
+          where: { id: prescriptionId, deleted_at: null },
+        });
+        if (
+          rx &&
+          !rx.is_voided &&
+          rx.status !== 'DISPENSED' &&
+          rx.status !== 'CANCELLED'
+        ) {
+          await this.prisma.prescriptionLines.updateMany({
+            where: { prescription_id: prescriptionId, status: 'PENDING' },
+            data: {
+              status: 'DISPENSED',
+              dispensed_by: performedBy,
+              dispensed_at: new Date(),
+            },
+          });
+          await this.prisma.prescriptions.update({
+            where: { id: prescriptionId },
+            data: { status: 'DISPENSED' },
+          });
+        }
+      }
+
+      await this.prisma.outpatientVisits.update({
+        where: { id: visitId },
+        data: {
+          payload: {
+            ...payload,
+            pharmacy: {
+              ...pharmacy,
+              dispensed: true,
+              dispensedAt: new Date().toISOString(),
+            },
+          },
+        },
+      });
+    } catch (err) {
+      this.log.warn(
+        `Visit ${visitId}: stock dispensed but visit/Rx sync failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 }

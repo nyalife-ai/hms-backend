@@ -8,6 +8,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../../database/prisma/prisma.module';
 import { AuditModule } from '../audit/audit.module';
 import { AuthModule } from '../auth/auth.module';
+import { PharmacyModule } from '../pharmacy/pharmacy.module';
 import { INPATIENT_REPOSITORY } from './constants/inpatient.constants';
 import { InpatientController } from './inpatient.controller';
 import { InpatientService } from './inpatient.service';
@@ -24,7 +25,7 @@ import { IpdJourneyUseCase } from './use-cases/ipd-journey.usecase';
 import { IpdOperationsUseCase } from './use-cases/ipd-operations.usecase';
 
 @Module({
-  imports: [PrismaModule, AuthModule, AuditModule],
+  imports: [PrismaModule, AuthModule, AuditModule, PharmacyModule],
   controllers: [InpatientController],
   providers: [
     InpatientService,

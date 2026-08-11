@@ -11,11 +11,17 @@ import {
 } from '../src/modules/auth/auth.permissions';
 import type { HmsRole } from '../src/modules/auth/auth.types';
 import { seedCatalog } from './seed-catalog';
+import { seedLabCatalog } from './seed-lab-catalog';
 import { seedOps } from './seed-ops';
 
 const prisma = new PrismaClient();
 
 const ROLES = [
+  {
+    name: 'SUPER_ADMIN',
+    description: 'Full-access testing / QA (all modules)',
+    is_system: true,
+  },
   { name: 'ADMIN', description: 'System administrator', is_system: true },
   { name: 'DOCTOR', description: 'Physician', is_system: true },
   { name: 'NURSE', description: 'Nursing staff', is_system: true },
@@ -28,6 +34,14 @@ const ROLES = [
 ] as const;
 
 const DEMO_USERS = [
+  {
+    email: 'super@nyalife.health',
+    first_name: 'NyaLife',
+    last_name: 'Super',
+    role: 'SUPER_ADMIN' as HmsRole,
+    employee_id: 'EMP-000',
+    position: 'Full-access tester',
+  },
   { email: 'admin@nyalife.health', first_name: 'Terrine', last_name: 'Herman', role: 'ADMIN' as HmsRole, employee_id: 'EMP-001', position: 'System Administrator' },
   { email: 'a.okello@nyalife.health', first_name: 'Amina', last_name: 'Okello', role: 'DOCTOR' as HmsRole, employee_id: 'EMP-014', position: 'General Physician', specialization: 'General Medicine' },
   { email: 'g.wanjiru@nyalife.health', first_name: 'Grace', last_name: 'Wanjiru', role: 'NURSE' as HmsRole, employee_id: 'EMP-027', position: 'Head Nurse, Ward A' },
@@ -179,6 +193,7 @@ async function main() {
   }
 
   await seedCatalog(prisma);
+  await seedLabCatalog(prisma);
   await seedOps(prisma);
 
   console.log('Seed complete:');

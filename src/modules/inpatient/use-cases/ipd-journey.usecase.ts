@@ -11,6 +11,7 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../../database/prisma/prisma.service';
 import { HmsAuditWriter } from '../../audit/hms-audit.writer';
+import { PharmacyJourneyUseCase } from '../../pharmacy/use-cases/pharmacy-journey.usecase';
 
 export const IPD_EVENTS = {
   WARD_CREATED: 'ipd.ward.created',
@@ -36,6 +37,7 @@ export class IpdJourneyUseCase {
     private readonly prisma: PrismaService,
     private readonly events: EventEmitter2,
     private readonly audit: HmsAuditWriter,
+    private readonly pharmacy: PharmacyJourneyUseCase,
   ) {}
 
   public async createWard(input: {
@@ -316,6 +318,14 @@ export class IpdJourneyUseCase {
     summary?: string;
     medications?: string;
     followUpInstructions?: string;
+    prescriptionLines?: Array<{
+      medicationId: string;
+      dosage: string;
+      frequency: string;
+      duration: string;
+      quantity: number;
+      instructions?: string;
+    }>;
   }) {
     return this.prisma
       .$transaction(async (tx) => {
@@ -393,6 +403,37 @@ export class IpdJourneyUseCase {
           entityId: input.admissionId,
           newValues: { event: 'DISCHARGE', status: 'DISCHARGED' },
         });
+
+        const lines = (input.prescriptionLines ?? []).filter(
+          (l) => l.medicationId && l.quantity > 0,
+        );
+        if (lines.length) {
+          const rx = await this.pharmacy.createPrescription({
+            patientId: discharged.patient_id,
+            prescribedByStaffId: input.dischargingDoctorId,
+            notes: [
+              `IPD discharge ${discharged.id}`,
+              input.medications?.trim(),
+            ]
+              .filter(Boolean)
+              .join(' · ')
+              .slice(0, 500),
+            lines: lines.map((l) => ({
+              medicationId: l.medicationId,
+              dosage: l.dosage?.trim() || 'As directed',
+              frequency: l.frequency?.trim() || 'As directed',
+              duration: l.duration?.trim() || 'As directed',
+              quantity: l.quantity,
+              instructions: l.instructions,
+            })),
+            actorUserId: input.finalizedBy,
+          });
+          return {
+            ...discharged,
+            pharmacyPrescriptionId: rx.id,
+            pharmacyPrescriptionNumber: rx.prescriptionNumber,
+          };
+        }
         return discharged;
       });
   }

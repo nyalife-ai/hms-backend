@@ -38,77 +38,10 @@ export class PrismaBillingRepository implements IBillingRepository {
 
   public async ensureFeeScheduleSeed(): Promise<void> {
     if (!this.prisma.isConnected) return;
-    const cash = await this.prisma.accounts.upsert({
-      where: { account_code: '1000' },
-      create: {
-        account_code: '1000',
-        account_name: 'Cash on Hand',
-        account_type: 'ASSET',
-        normal_balance: 'DEBIT',
-      },
-      update: {},
-    });
-    await this.prisma.paymentMethods.upsert({
-      where: { method_code: 'CASH' },
-      create: {
-        method_name: 'Cash',
-        method_code: 'CASH',
-        gl_account_id: cash.id,
-      },
-      update: { is_active: true },
-    });
-    const services = [
-      {
-        code: 'CONSULT',
-        name: 'Outpatient Consultation',
-        price: 2500,
-        category: 'Clinical',
-      },
-      {
-        code: 'LAB',
-        name: 'Laboratory Test',
-        price: 1500,
-        category: 'Laboratory',
-      },
-      {
-        code: 'MED',
-        name: 'Medication Dispense',
-        price: 800,
-        category: 'Pharmacy',
-      },
-    ];
-    for (const s of services) {
-      await this.prisma.services.upsert({
-        where: { service_code: s.code },
-        create: {
-          service_code: s.code,
-          service_name: s.name,
-          category: s.category,
-          standard_price: s.price,
-        },
-        update: { standard_price: s.price, is_active: true },
-      });
-    }
-
-    const mpesaGl = await this.prisma.accounts.upsert({
-      where: { account_code: '1010' },
-      create: {
-        account_code: '1010',
-        account_name: 'M-Pesa Collections',
-        account_type: 'ASSET',
-        normal_balance: 'DEBIT',
-      },
-      update: {},
-    });
-    await this.prisma.paymentMethods.upsert({
-      where: { method_code: 'MPESA' },
-      create: {
-        method_name: 'M-Pesa',
-        method_code: 'MPESA',
-        gl_account_id: mpesaGl.id,
-      },
-      update: { is_active: true },
-    });
+    const { ensureBillingFoundation } = await import(
+      '../finance/ensure-foundation'
+    );
+    await ensureBillingFoundation(this.prisma);
   }
 
   public async findPatientByMrn(mrn: string) {

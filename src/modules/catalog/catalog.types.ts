@@ -52,6 +52,16 @@ export type CatalogLabTest = {
   range: string;
 };
 
+export type CatalogClinicalService = {
+  id: string;
+  code: string;
+  name: string;
+  category: string | null;
+  description: string | null;
+  standardPrice: string;
+  kind: 'service' | 'surgery';
+};
+
 export type CatalogStaff = {
   id: string;
   userId: string;

@@ -56,6 +56,73 @@ export class LaboratoryController {
     return this.ops.overview();
   }
 
+  // ── Clinical services / procedures / surgeries (before :id routes)
+  @Get('clinical-services')
+  @Roles(...LAB_READ)
+  @ApiOperation({
+    summary: 'List clinical services & procedures managed for doctor orders',
+  })
+  listClinicalServices(
+    @Query('search') search?: string,
+    @Query('category') category?: string,
+    @Query('kind') kind?: 'service' | 'surgery',
+    @Query('active') active?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.ops.listClinicalServices({
+      search,
+      category,
+      kind,
+      active:
+        active === 'true' ? true : active === 'false' ? false : undefined,
+      take: take ? Number(take) : undefined,
+      skip: skip ? Number(skip) : undefined,
+    });
+  }
+
+  @Post('clinical-services')
+  @Roles(...LAB_CONFIG)
+  @ApiOperation({ summary: 'Create a clinical service / procedure / surgery' })
+  createClinicalService(
+    @Body()
+    body: {
+      serviceCode: string;
+      serviceName: string;
+      category?: string;
+      description?: string;
+      standardPrice: string | number;
+      isActive?: boolean;
+    },
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.ops.createClinicalService({
+      ...body,
+      actorUserId: user.id,
+    });
+  }
+
+  @Patch('clinical-services/:id')
+  @Roles(...LAB_CONFIG)
+  @ApiOperation({ summary: 'Update a clinical service / procedure / surgery' })
+  updateClinicalService(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body()
+    body: {
+      serviceName?: string;
+      category?: string | null;
+      description?: string | null;
+      standardPrice?: string | number;
+      isActive?: boolean;
+    },
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.ops.updateClinicalService(id, {
+      ...body,
+      actorUserId: user.id,
+    });
+  }
+
   // ── Test types ────────────────────────────────────────────
   @Get('test-types')
   @Roles(...LAB_READ)
@@ -196,6 +263,8 @@ export class LaboratoryController {
     @Query('priority') priority?: string,
     @Query('requestingDoctorId') requestingDoctorId?: string,
     @Query('search') search?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
   ) {
@@ -205,6 +274,8 @@ export class LaboratoryController {
       priority,
       requestingDoctorId,
       search,
+      from: from ? new Date(from) : undefined,
+      to: to ? new Date(to) : undefined,
       take: take ? Number(take) : undefined,
       skip: skip ? Number(skip) : undefined,
     });
@@ -214,6 +285,26 @@ export class LaboratoryController {
   @Roles(...LAB_READ)
   getRequest(@Param('id', ParseUUIDPipe) id: string) {
     return this.ops.getRequest(id);
+  }
+
+  @Patch('requests/:id/findings')
+  @Roles(...LAB_TECH)
+  @ApiOperation({ summary: 'Update observations / conclusion / evidence meta' })
+  updateFindings(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUserPublic,
+    @Body()
+    body: {
+      observations?: string | null;
+      conclusion?: string | null;
+      evidenceName?: string | null;
+      text?: string | null;
+    },
+  ) {
+    return this.ops.updateRequestFindings(id, {
+      ...body,
+      actorUserId: user.id,
+    });
   }
 
   @Post('requests')
@@ -389,6 +480,35 @@ export class LaboratoryController {
   }
 
   // ── Results ───────────────────────────────────────────────
+  @Get('results/summary')
+  @Roles(...LAB_READ)
+  resultsSummary() {
+    return this.ops.resultsSummary();
+  }
+
+  @Get('results/bundles')
+  @Roles(...LAB_READ)
+  @ApiOperation({
+    summary: 'Lab results grouped by request (one row per request)',
+  })
+  listResultBundles(
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('criticalOnly') criticalOnly?: string,
+    @Query('unverifiedOnly') unverifiedOnly?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.ops.listResultBundles({
+      search,
+      status,
+      criticalOnly: criticalOnly === 'true',
+      unverifiedOnly: unverifiedOnly === 'true',
+      take: take ? Number(take) : undefined,
+      skip: skip ? Number(skip) : undefined,
+    });
+  }
+
   @Get('results')
   @Roles(...LAB_READ)
   listResults(
@@ -405,5 +525,12 @@ export class LaboratoryController {
       take: take ? Number(take) : undefined,
       skip: skip ? Number(skip) : undefined,
     });
+  }
+
+  @Get('results/:requestId')
+  @Roles(...LAB_READ)
+  @ApiOperation({ summary: 'Result report detail for a lab request' })
+  getResultReport(@Param('requestId', ParseUUIDPipe) requestId: string) {
+    return this.ops.getRequest(requestId);
   }
 }

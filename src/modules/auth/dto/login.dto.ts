@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsBoolean,
   IsEmail,
   IsIn,
   IsOptional,
@@ -11,6 +12,7 @@ import {
 import type { HmsRole } from '../auth.types';
 
 const ROLES = [
+  'SUPER_ADMIN',
   'ADMIN',
   'DOCTOR',
   'NURSE',
@@ -79,8 +81,21 @@ export class ForgotPasswordDto {
   email!: string;
 }
 
-export class ResetPasswordDto {
+export class VerifyResetOtpDto {
   @ApiProperty()
+  @IsEmail()
+  email!: string;
+
+  @ApiProperty({ example: '123456', description: '6-digit one-time code' })
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'OTP must be a 6-digit code' })
+  otp!: string;
+}
+
+export class ResetPasswordDto {
+  @ApiProperty({
+    description: 'One-time reset session token from verify-reset-otp',
+  })
   @IsString()
   @MinLength(20)
   resetToken!: string;
@@ -147,6 +162,9 @@ export class AuthUserResponseDto {
 
   @ApiProperty({ type: [String] })
   permissions!: string[];
+
+  @ApiProperty({ description: 'Whether email OTP 2FA is enabled for this account' })
+  twoFactorEnabled!: boolean;
 }
 
 export class AuthResponseDto {
@@ -164,4 +182,24 @@ export class AuthResponseDto {
 
   @ApiProperty({ type: AuthUserResponseDto })
   user!: AuthUserResponseDto;
+}
+
+export class VerifyLoginOtpDto {
+  @ApiProperty({
+    description: 'Challenge hash returned by login when twoFactorRequired is true',
+  })
+  @IsString()
+  @MinLength(32)
+  hash!: string;
+
+  @ApiProperty({ example: '123456', description: '6-digit one-time code' })
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'OTP must be a 6-digit code' })
+  otp!: string;
+}
+
+export class SetTwoFactorDto {
+  @ApiProperty({ description: 'Enable or disable email OTP 2FA for this account' })
+  @IsBoolean()
+  enabled!: boolean;
 }

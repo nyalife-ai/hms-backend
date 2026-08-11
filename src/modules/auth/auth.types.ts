@@ -1,4 +1,5 @@
 export type HmsRole =
+  | 'SUPER_ADMIN'
   | 'ADMIN'
   | 'DOCTOR'
   | 'NURSE'
@@ -17,6 +18,8 @@ export interface AuthUser {
   position: string;
   passwordHash: string;
   permissions: string[];
+  /** Per-account email OTP 2FA. */
+  twoFactorEnabled: boolean;
 }
 
 export interface AuthUserPublic {
@@ -26,6 +29,7 @@ export interface AuthUserPublic {
   role: HmsRole;
   position: string;
   permissions: string[];
+  twoFactorEnabled: boolean;
 }
 
 export interface JwtPayload {

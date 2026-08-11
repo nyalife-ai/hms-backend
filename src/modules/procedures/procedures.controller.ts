@@ -4,14 +4,29 @@
  * Purpose: HTTP controller with Swagger + pagination query.
  */
 
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
-// import { Public } from '../../common/decorators/public.decorator';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import type { CreateProcedureDto, ProceduresQueryDto, UpdateProcedureDto } from './dto';
 import { ProceduresService } from './procedures.service';
 
 @ApiTags('Procedures')
+@ApiBearerAuth()
 @Controller('procedures')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('ADMIN', 'DOCTOR')
 export class ProceduresController {
   public constructor(private readonly service: ProceduresService) {}
 
@@ -23,7 +38,6 @@ export class ProceduresController {
 
   @Get()
   @ApiOperation({ summary: 'List procedures (paginated)' })
-  // @Public()
   findAll(@Query() query: ProceduresQueryDto) {
     return this.service.findAll(query);
   }
@@ -41,6 +55,7 @@ export class ProceduresController {
   }
 
   @Delete(':id')
+  @Roles('ADMIN')
   @ApiOperation({ summary: 'Soft-delete procedure' })
   remove(@Param('id') id: string) {
     return this.service.softDelete(id);

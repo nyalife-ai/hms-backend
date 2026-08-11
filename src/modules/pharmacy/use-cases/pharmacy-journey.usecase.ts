@@ -10,6 +10,17 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../../database/prisma/prisma.service';
 import { HmsAuditWriter } from '../../audit/hms-audit.writer';
+import { profileName, USER_PROFILE_INCLUDE } from '../pharmacy-names';
+
+function paginateParams(page?: number, limit?: number) {
+  const resolvedLimit = Math.min(Math.max(limit ?? 50, 1), 100);
+  const resolvedPage = Math.max(page ?? 1, 1);
+  return {
+    page: resolvedPage,
+    limit: resolvedLimit,
+    skip: (resolvedPage - 1) * resolvedLimit,
+  };
+}
 
 @Injectable()
 export class PharmacyJourneyUseCase {
@@ -25,38 +36,91 @@ export class PharmacyJourneyUseCase {
     status?: string;
     from?: Date;
     to?: Date;
-    take?: number;
+    search?: string;
+    page?: number;
+    limit?: number;
   }) {
+    const { page, limit, skip } = paginateParams(filters?.page, filters?.limit);
     const status = filters?.status?.toUpperCase();
-    const rows = await this.prisma.prescriptions.findMany({
-      where: {
-        deleted_at: null,
-        ...(filters?.patientId ? { patient_id: filters.patientId } : {}),
-        ...(status ? { status } : {}),
-        ...(filters?.from || filters?.to
-          ? {
-              prescription_date: {
-                ...(filters.from ? { gte: filters.from } : {}),
-                ...(filters.to ? { lte: filters.to } : {}),
+    const q = filters?.search?.trim();
+    const where = {
+      deleted_at: null,
+      ...(filters?.patientId ? { patient_id: filters.patientId } : {}),
+      ...(status ? { status } : {}),
+      ...(filters?.from || filters?.to
+        ? {
+            prescription_date: {
+              ...(filters.from ? { gte: filters.from } : {}),
+              ...(filters.to ? { lte: filters.to } : {}),
+            },
+          }
+        : {}),
+      ...(q
+        ? {
+            OR: [
+              {
+                patient: {
+                  patient_number: { contains: q, mode: 'insensitive' as const },
+                },
               },
-            }
-          : {}),
-      },
-      include: {
-        patient: {
-          include: { user: { include: { core_profiles_user_id: true } } },
+              {
+                patient: {
+                  user: {
+                    core_profiles_user_id: {
+                      some: {
+                        OR: [
+                          {
+                            first_name: {
+                              contains: q,
+                              mode: 'insensitive' as const,
+                            },
+                          },
+                          {
+                            last_name: {
+                              contains: q,
+                              mode: 'insensitive' as const,
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.prescriptions.findMany({
+        where,
+        include: {
+          patient: {
+            include: { user: { include: { core_profiles_user_id: true } } },
+          },
+          rel_prescribed_by: {
+            include: { user: { include: { core_profiles_user_id: true } } },
+          },
+          pharmacy_prescription_lines_prescription_id: {
+            include: {
+              medication: true,
+              rel_dispensed_by: USER_PROFILE_INCLUDE,
+            },
+          },
+          rel_voided_by: USER_PROFILE_INCLUDE,
         },
-        rel_prescribed_by: {
-          include: { user: { include: { core_profiles_user_id: true } } },
-        },
-        pharmacy_prescription_lines_prescription_id: {
-          include: { medication: true },
-        },
-      },
-      orderBy: { prescription_date: 'desc' },
-      take: Math.min(Math.max(filters?.take ?? 50, 1), 100),
-    });
-    return rows.map((r) => this.mapPrescription(r));
+        orderBy: { prescription_date: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.prescriptions.count({ where }),
+    ]);
+    return {
+      items: rows.map((r) => this.mapPrescription(r)),
+      total,
+      page,
+      limit,
+    };
   }
 
   public async getPrescription(id: string) {
@@ -70,9 +134,13 @@ export class PharmacyJourneyUseCase {
           include: { user: { include: { core_profiles_user_id: true } } },
         },
         pharmacy_prescription_lines_prescription_id: {
-          include: { medication: true },
+          include: {
+            medication: true,
+            rel_dispensed_by: USER_PROFILE_INCLUDE,
+          },
           orderBy: { created_at: 'asc' },
         },
+        rel_voided_by: USER_PROFILE_INCLUDE,
       },
     });
     if (!r) throw new NotFoundException('Prescription not found');
@@ -400,6 +468,9 @@ export class PharmacyJourneyUseCase {
     rel_prescribed_by: {
       user: { core_profiles_user_id: { first_name: string; last_name: string }[] };
     };
+    rel_voided_by?: {
+      core_profiles_user_id: { first_name: string; last_name: string }[];
+    } | null;
     pharmacy_prescription_lines_prescription_id: Array<{
       id: string;
       medication_id: string;
@@ -412,6 +483,9 @@ export class PharmacyJourneyUseCase {
       dispensed_by: string | null;
       dispensed_at: Date | null;
       medication: { medication_name: string };
+      rel_dispensed_by?: {
+        core_profiles_user_id: { first_name: string; last_name: string }[];
+      } | null;
     }>;
   }) {
     const pp = r.patient.user.core_profiles_user_id[0];
@@ -433,6 +507,7 @@ export class PharmacyJourneyUseCase {
       isVoided: r.is_voided,
       voidReason: r.void_reason,
       voidedBy: r.voided_by,
+      voidedByName: profileName(r.rel_voided_by),
       voidedAt: r.voided_at?.toISOString() ?? null,
       lines: r.pharmacy_prescription_lines_prescription_id.map((l) => ({
         id: l.id,
@@ -445,6 +520,7 @@ export class PharmacyJourneyUseCase {
         instructions: l.instructions,
         status: l.status,
         dispensedBy: l.dispensed_by,
+        dispensedByName: profileName(l.rel_dispensed_by),
         dispensedAt: l.dispensed_at?.toISOString() ?? null,
       })),
     };
@@ -455,24 +531,51 @@ export class PharmacyJourneyUseCase {
   public async listPurchaseOrders(filters?: {
     supplierId?: string;
     status?: string;
-    take?: number;
+    search?: string;
+    page?: number;
+    limit?: number;
   }) {
+    const { page, limit, skip } = paginateParams(filters?.page, filters?.limit);
     const status = filters?.status?.toUpperCase();
-    const rows = await this.prisma.purchaseOrders.findMany({
-      where: {
-        ...(filters?.supplierId ? { supplier_id: filters.supplierId } : {}),
-        ...(status ? { status } : {}),
-      },
-      include: {
-        supplier: true,
-        pharmacy_purchase_order_lines_purchase_order_id: {
-          include: { medication: true },
+    const q = filters?.search?.trim();
+    const where = {
+      ...(filters?.supplierId ? { supplier_id: filters.supplierId } : {}),
+      ...(status ? { status } : {}),
+      ...(q
+        ? {
+            OR: [
+              { order_number: { contains: q, mode: 'insensitive' as const } },
+              {
+                supplier: {
+                  company_name: { contains: q, mode: 'insensitive' as const },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.purchaseOrders.findMany({
+        where,
+        include: {
+          supplier: true,
+          rel_created_by: USER_PROFILE_INCLUDE,
+          pharmacy_purchase_order_lines_purchase_order_id: {
+            include: { medication: true },
+          },
         },
-      },
-      orderBy: { created_at: 'desc' },
-      take: Math.min(Math.max(filters?.take ?? 50, 1), 100),
-    });
-    return rows.map((r) => this.mapPo(r));
+        orderBy: { created_at: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.purchaseOrders.count({ where }),
+    ]);
+    return {
+      items: rows.map((r) => this.mapPo(r)),
+      total,
+      page,
+      limit,
+    };
   }
 
   public async getPurchaseOrder(id: string) {
@@ -480,6 +583,7 @@ export class PharmacyJourneyUseCase {
       where: { id },
       include: {
         supplier: true,
+        rel_created_by: USER_PROFILE_INCLUDE,
         pharmacy_purchase_order_lines_purchase_order_id: {
           include: { medication: true },
         },
@@ -740,6 +844,9 @@ export class PharmacyJourneyUseCase {
     notes: string | null;
     created_by: string;
     supplier: { company_name: string };
+    rel_created_by?: {
+      core_profiles_user_id: { first_name: string; last_name: string }[];
+    } | null;
     pharmacy_purchase_order_lines_purchase_order_id: Array<{
       id: string;
       medication_id: string;
@@ -762,6 +869,7 @@ export class PharmacyJourneyUseCase {
       status: r.status,
       notes: r.notes,
       createdBy: r.created_by,
+      createdByName: profileName(r.rel_created_by),
       lines: r.pharmacy_purchase_order_lines_purchase_order_id.map((l) => ({
         id: l.id,
         medicationId: l.medication_id,

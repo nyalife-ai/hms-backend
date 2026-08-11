@@ -38,10 +38,15 @@ describe('IpdJourneyUseCase', () => {
         fn(prisma),
       ),
     };
-    journey = new IpdJourneyUseCase(prisma, events, {
-      recordMutation: jest.fn().mockResolvedValue(undefined),
-      recordAccess: jest.fn().mockResolvedValue(undefined),
-    } as any);
+    journey = new IpdJourneyUseCase(
+      prisma,
+      events,
+      {
+        recordMutation: jest.fn().mockResolvedValue(undefined),
+        recordAccess: jest.fn().mockResolvedValue(undefined),
+      } as any,
+      { createPrescription: jest.fn() } as any,
+    );
     jest.clearAllMocks();
   });
 

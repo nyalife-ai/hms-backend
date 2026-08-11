@@ -4,14 +4,29 @@
  * Purpose: HTTP controller with Swagger + pagination query.
  */
 
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
-// import { Public } from '../../common/decorators/public.decorator';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import type { CreateStaffDto, StaffQueryDto, UpdateStaffDto } from './dto';
 import { StaffService } from './staff.service';
 
 @ApiTags('Staff')
+@ApiBearerAuth()
 @Controller('staff')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('ADMIN')
 export class StaffController {
   public constructor(private readonly service: StaffService) {}
 
@@ -23,7 +38,6 @@ export class StaffController {
 
   @Get()
   @ApiOperation({ summary: 'List staff (paginated)' })
-  // @Public()
   findAll(@Query() query: StaffQueryDto) {
     return this.service.findAll(query);
   }

@@ -149,17 +149,19 @@ export class CheckoutService {
     this.refreshClient();
     const visit = await this.loadVisit(input.visitId);
 
-    if (visit.billing?.receiptId) {
+    if (visit.billing?.receiptId && visit.stage !== 'AWAITING_PAYMENT') {
       throw new BadRequestException('This visit is already paid and receipted.');
     }
 
     const claimRejected =
       visit.stage === 'CLAIM_SUBMITTED' &&
       visit.billing?.claimStatus === 'REJECTED';
-    const ready = visit.stage === 'READY_FOR_BILLING' || claimRejected;
+    const consultFeeDue = visit.stage === 'AWAITING_PAYMENT';
+    const ready =
+      visit.stage === 'READY_FOR_BILLING' || claimRejected || consultFeeDue;
     if (!ready) {
       throw new BadRequestException(
-        'Visit must be ready for billing before M-Pesa checkout.',
+        'Visit must be ready for billing (or awaiting consultation-fee payment) before M-Pesa checkout.',
       );
     }
     if (
@@ -172,7 +174,15 @@ export class CheckoutService {
       );
     }
 
-    const lines = await this.visitLines(visit);
+    const fees = await this.billing.getFeeSchedule();
+    const lines = consultFeeDue
+      ? [
+          {
+            description: 'Consultation',
+            amount: visit.billing?.consultFeeAmount ?? fees.consult,
+          },
+        ]
+      : await this.visitLines(visit);
     const total = lines.reduce((s, l) => s + l.amount, 0);
     const phone = MpesaClient.normalizePhone(input.phone);
     const accountReference =
@@ -189,7 +199,7 @@ export class CheckoutService {
         phone,
         amount: total,
         accountReference,
-        description: 'NyaLife bill',
+        description: consultFeeDue ? 'NyaLife consult fee' : 'NyaLife bill',
       });
       checkoutRequestId = stk.CheckoutRequestID;
       merchantRequestId = stk.MerchantRequestID;
@@ -205,8 +215,11 @@ export class CheckoutService {
       phone,
       amount: total,
       accountReference,
-      description:
-        input.source === 'PHARMACY' ? 'Pharmacy dispense' : 'Outpatient bill',
+      description: consultFeeDue
+        ? 'Consultation fee'
+        : input.source === 'PHARMACY'
+          ? 'Pharmacy dispense'
+          : 'Outpatient bill',
       visitId: visit.id,
       patientId: patient?.id,
       source: input.source,
@@ -216,6 +229,8 @@ export class CheckoutService {
         patientName: visit.patientName,
         mrn: visit.mrn,
         simulated,
+        purpose: consultFeeDue ? 'CONSULT_FEE' : 'VISIT_SETTLEMENT',
+        invoiceId: visit.billing?.invoiceId,
       },
     });
 
@@ -420,23 +435,111 @@ export class CheckoutService {
     const visit = await this.loadVisit(tx.visit_id);
     const payload = (tx.payload ?? {}) as {
       lines?: BillLine[];
+      purpose?: string;
+      invoiceId?: string;
     };
+    const isConsultFee =
+      visit.stage === 'AWAITING_PAYMENT' || payload.purpose === 'CONSULT_FEE';
+
+    if (isConsultFee) {
+      const invoiceId = payload.invoiceId || visit.billing?.invoiceId;
+      if (!invoiceId) {
+        throw new BadRequestException(
+          'Consultation-fee checkout is missing a linked invoice',
+        );
+      }
+      const paid = await this.billing.collectOnInvoice({
+        invoiceId,
+        mode: 'MPESA',
+        actorUserId: tx.initiated_by,
+        mpesaReceipt: info.mpesaReceipt,
+        transactionReference: info.mpesaReceipt || tx.checkout_request_id,
+      });
+      const total = Number(paid.totalAmount ?? tx.amount);
+
+      const seq = await this.billingRepo.countReceipts();
+      const receiptNumber = `RCP-${new Date().getFullYear()}-${String(seq + 1).padStart(5, '0')}`;
+      const patient = await this.billingRepo.findPatientByMrn(visit.mrn);
+      if (!patient) throw new NotFoundException('Patient not found for receipt');
+
+      const receipt = await this.billingRepo.createReceipt({
+        receiptNumber,
+        patientId: patient.id,
+        visitId: visit.id,
+        invoiceId: paid.invoiceId,
+        paymentId: paid.paymentId || undefined,
+        mpesaTransactionId: tx.id,
+        channel: 'MPESA',
+        amount: total,
+        issuedBy: tx.initiated_by,
+        lineItems: payload.lines?.length
+          ? payload.lines
+          : [{ description: 'Consultation', amount: total }],
+        meta: {
+          mpesaReceipt: info.mpesaReceipt,
+          phone: tx.phone,
+          source: tx.source,
+          checkoutRequestId: tx.checkout_request_id,
+          mrn: visit.mrn,
+          patientName: visit.patientName,
+          purpose: 'CONSULT_FEE',
+        },
+      });
+
+      await this.billingRepo.updateMpesaTransaction(tx.id, {
+        status: 'SUCCESS',
+        resultCode: '0',
+        resultDesc: info.resultDesc || 'Success',
+        mpesaReceiptNumber: info.mpesaReceipt,
+      });
+
+      const row = await this.billingRepo.findVisitForCheckout(visit.id);
+      if (!row) throw new NotFoundException(`Visit ${visit.id} not found`);
+      const prev = (row.payload ?? {}) as Record<string, unknown>;
+      const prevBilling = (prev.billing ?? {}) as Record<string, unknown>;
+      await this.billingRepo.updateVisitCheckout(visit.id, {
+        stage: 'CHECKED_IN',
+        payload: {
+          ...prev,
+          billing: {
+            ...prevBilling,
+            total,
+            mode: 'CASH',
+            invoiceId: paid.invoiceId,
+            invoiceNumber: paid.invoiceNumber,
+            receiptId: receipt.id,
+            receiptNumber: receipt.receipt_number,
+            mpesaReceipt: info.mpesaReceipt,
+            paymentChannel: 'MPESA',
+            consultFeeStatus: 'PAID',
+            consultFeeAmount: total,
+            consultFeePaidAt: new Date().toISOString(),
+          },
+        },
+      });
+
+      const updatedTx = await this.billingRepo.findMpesaById(tx.id);
+      if (!updatedTx) throw new NotFoundException('Checkout not found');
+      return this.toStatusPayload(updatedTx, receipt.id);
+    }
+
     const lines = payload.lines?.length
       ? payload.lines
       : await this.visitLines(visit);
-    const total = Number(tx.amount);
+    const stkTotal = Number(tx.amount);
 
     const settled = await this.billing.settleVisit({
       createdByUserId: tx.initiated_by,
       mrn: visit.mrn,
       patientName: visit.patientName,
       lines,
-      total,
+      total: stkTotal,
       mode: 'MPESA',
       mpesaReceipt: info.mpesaReceipt,
       transactionReference: info.mpesaReceipt || tx.checkout_request_id,
       diagnosis: visit.diagnosis,
     });
+    const total = Number(settled.totalAmount ?? stkTotal);
 
     const seq = await this.billingRepo.countReceipts();
     const receiptNumber = `RCP-${new Date().getFullYear()}-${String(seq + 1).padStart(5, '0')}`;
@@ -501,6 +604,7 @@ export class CheckoutService {
       billing: {
         total,
         mode: 'CASH',
+        invoiceId: settled.invoiceId,
         invoiceNumber: settled.invoiceNumber,
         receiptId: receipt.id,
         receiptNumber: receipt.receipt_number,

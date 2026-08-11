@@ -6,20 +6,29 @@ import {
   Param,
   Patch,
   Post,
+  Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import {
+  IsArray,
   IsBoolean,
   IsIn,
   IsNumber,
   IsOptional,
   IsString,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { CurrentUser } from '../../common/decorators/user.decorator';
 import type { AuthUserPublic } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import {
+  HOSPITAL_SETTINGS_READ_ROLES,
+  STAFF_MESSAGE_ROLES,
+} from '../auth/role-sets';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { OpsService } from './ops.service';
@@ -30,6 +39,8 @@ class CreateAppointmentDto {
   @ApiProperty() @IsString() date!: string;
   @ApiProperty() @IsString() time!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() type?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() reason?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
 }
 
 class CreateAdmissionDto {
@@ -60,6 +71,10 @@ class CreatePatientDto {
   gender!: 'Male' | 'Female' | 'Other';
   @ApiProperty() @IsString() phone!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() dateOfBirth?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() allergies?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() chronicDiseases?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() emergencyContactName?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() emergencyContactPhone?: string;
 }
 
 class CreateStaffDto {
@@ -71,6 +86,15 @@ class CreateStaffDto {
   @ApiPropertyOptional() @IsOptional() @IsString() departmentId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() asDoctor?: boolean;
+}
+
+class UpdateOpsStaffDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() firstName?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() lastName?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() departmentId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() position?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() specialty?: string;
 }
 
 class CreateMedicationDto {
@@ -101,6 +125,22 @@ class HospitalSettingsDto {
   @ApiPropertyOptional() @IsOptional() @IsString() email?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() address?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() timezone?: string;
+}
+
+class SystemSettingItemDto {
+  @ApiProperty() @IsString() key!: string;
+  @ApiProperty() @IsString() value!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() label?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() type?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() groupName?: string;
+}
+
+class UpsertSystemSettingsDto {
+  @ApiProperty({ type: [SystemSettingItemDto] })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SystemSettingItemDto)
+  items!: SystemSettingItemDto[];
 }
 
 @ApiTags('ops')
@@ -166,7 +206,7 @@ export class OpsController {
   }
 
   @Post('patients')
-  @Roles('ADMIN', 'RECEPTIONIST')
+  @Roles('ADMIN', 'RECEPTIONIST', 'DOCTOR', 'NURSE')
   createPatient(
     @Body() body: CreatePatientDto,
     @CurrentUser() user: AuthUserPublic,
@@ -178,6 +218,13 @@ export class OpsController {
   @Roles('ADMIN')
   createStaff(@Body() body: CreateStaffDto) {
     return this.ops.createStaff(body);
+  }
+
+  @Patch('staff/:id')
+  @Roles('ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Update staff profile and linked user profile' })
+  updateStaff(@Param('id') id: string, @Body() body: UpdateOpsStaffDto) {
+    return this.ops.updateStaff(id, body);
   }
 
   @Post('medications')
@@ -199,7 +246,7 @@ export class OpsController {
   }
 
   @Post('conversations')
-  @Roles('ADMIN', 'DOCTOR', 'NURSE', 'RECEPTIONIST')
+  @Roles(...STAFF_MESSAGE_ROLES)
   createConversation(
     @Body() body: CreateConversationDto,
     @CurrentUser() user: AuthUserPublic,
@@ -208,14 +255,14 @@ export class OpsController {
   }
 
   @Get('conversations/:id/messages')
-  @Roles('ADMIN', 'DOCTOR', 'NURSE', 'RECEPTIONIST')
+  @Roles(...STAFF_MESSAGE_ROLES)
   @ApiOperation({ summary: 'List messages in a conversation' })
   listMessages(@Param('id') id: string) {
     return this.ops.listMessages(id);
   }
 
   @Post('conversations/:id/messages')
-  @Roles('ADMIN', 'DOCTOR', 'NURSE', 'RECEPTIONIST')
+  @Roles(...STAFF_MESSAGE_ROLES)
   @ApiOperation({ summary: 'Send a message in a conversation' })
   postMessage(
     @Param('id') id: string,
@@ -230,7 +277,7 @@ export class OpsController {
   }
 
   @Get('settings/hospital')
-  @Roles('ADMIN')
+  @Roles(...HOSPITAL_SETTINGS_READ_ROLES)
   @ApiOperation({ summary: 'Get hospital profile settings' })
   getHospitalSettings() {
     return this.ops.getHospitalSettings();
@@ -244,6 +291,25 @@ export class OpsController {
     @CurrentUser() user: AuthUserPublic,
   ) {
     return this.ops.updateHospitalSettings(body, user.id);
+  }
+
+  @Get('settings')
+  @Roles('ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({
+    summary: 'List system settings (general / about / contact)',
+  })
+  listSystemSettings(@Query('group') group?: string) {
+    return this.ops.listSystemSettings(group);
+  }
+
+  @Put('settings')
+  @Roles('ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Create or update system settings by key' })
+  upsertSystemSettings(
+    @Body() body: UpsertSystemSettingsDto,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.ops.upsertSystemSettings(body.items ?? [], user.id);
   }
 
   @Delete('staff/:id')

@@ -19,6 +19,8 @@ export type SettleVisitInput = {
   diagnosis?: string;
   mpesaReceipt?: string;
   transactionReference?: string;
+  /** Extra billable clinical services / surgeries (by billing.services id). */
+  extraServiceIds?: string[];
 };
 
 export type SettleVisitResult = {
