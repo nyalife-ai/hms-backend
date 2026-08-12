@@ -9,3 +9,4 @@ export * from './update-follow-up.dto';
 export * from './follow-ups-query.dto';
 export * from './follow-up-response.dto';
 export * from './follow-ups-paginated-response.dto';
+export * from './follow-ups-summary.dto';

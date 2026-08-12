@@ -2,6 +2,7 @@ import type { HmsRole } from './auth.types';
 
 /** Staff who operate the OPD visit board (list/read visits). */
 export const VISIT_FLOW_ROLES: HmsRole[] = [
+  'SUPER_ADMIN',
   'ADMIN',
   'RECEPTIONIST',
   'NURSE',

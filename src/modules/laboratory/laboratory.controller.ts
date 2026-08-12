@@ -37,7 +37,7 @@ const LAB_REQUEST_CREATE: HmsRole[] = [
 ];
 const LAB_TECH: HmsRole[] = ['ADMIN', 'LAB_TECHNICIAN'];
 const LAB_VERIFY: HmsRole[] = ['ADMIN', 'LAB_TECHNICIAN'];
-const LAB_CORRECT: HmsRole[] = ['ADMIN'];
+const LAB_CORRECT: HmsRole[] = ['ADMIN', 'SUPER_ADMIN'];
 
 @ApiTags('Laboratory')
 @ApiBearerAuth()
@@ -262,6 +262,9 @@ export class LaboratoryController {
     @Query('status') status?: string,
     @Query('priority') priority?: string,
     @Query('requestingDoctorId') requestingDoctorId?: string,
+    @Query('consultationId') consultationId?: string,
+    @Query('appointmentId') appointmentId?: string,
+    @Query('visitId') visitId?: string,
     @Query('search') search?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
@@ -273,6 +276,9 @@ export class LaboratoryController {
       status,
       priority,
       requestingDoctorId,
+      consultationId,
+      appointmentId,
+      visitId,
       search,
       from: from ? new Date(from) : undefined,
       to: to ? new Date(to) : undefined,

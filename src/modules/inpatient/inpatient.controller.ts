@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -24,16 +25,48 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
-import type { HmsRole } from '../auth/auth.types';
+import { CurrentUser } from '../../common/decorators/user.decorator';
+import type { AuthUserPublic, HmsRole } from '../auth/auth.types';
 import { IpdJourneyUseCase } from './use-cases/ipd-journey.usecase';
 import { IpdOperationsUseCase } from './use-cases/ipd-operations.usecase';
 
 const IPD_ROLES: HmsRole[] = [
+  'SUPER_ADMIN',
   'ADMIN',
   'DOCTOR',
   'NURSE',
   'RECEPTIONIST',
 ];
+
+function isOversight(role: HmsRole): boolean {
+  return role === 'ADMIN' || role === 'SUPER_ADMIN';
+}
+
+/** Doctors do not pick themselves; admin/reception must name the admitting doctor. */
+function resolveAdmittingDoctorId(
+  user: AuthUserPublic,
+  explicit?: string,
+): string {
+  if (user.role === 'DOCTOR' && user.staffProfileId) {
+    return user.staffProfileId;
+  }
+  if (!explicit?.trim()) {
+    throw new BadRequestException(
+      'Select the admitting doctor (required for admin and reception).',
+    );
+  }
+  return explicit;
+}
+
+/** Note author: nurse/doctor = current staff; admin must select. */
+function resolveNoteAuthorId(user: AuthUserPublic, explicit?: string): string {
+  if (!isOversight(user.role) && user.staffProfileId) {
+    return user.staffProfileId;
+  }
+  if (explicit?.trim()) return explicit;
+  if (user.staffProfileId) return user.staffProfileId;
+  throw new BadRequestException('Select the nurse or doctor recording this note.');
+}
 
 class DischargePrescriptionLineDto {
   @ApiProperty()
@@ -64,9 +97,10 @@ class DischargePrescriptionLineDto {
 }
 
 class DischargeAdmissionDto {
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsUUID()
-  dischargingDoctorId!: string;
+  dischargingDoctorId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -258,20 +292,21 @@ export class InpatientController {
   }
 
   @Post('admissions')
-  @Roles('ADMIN', 'DOCTOR', 'RECEPTIONIST')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'DOCTOR', 'RECEPTIONIST')
   admit(
-    @Req() req: { user?: { id?: string } },
+    @CurrentUser() user: AuthUserPublic,
     @Body()
     body: {
       patientId: string;
       bedId: string;
-      admittingDoctorId: string;
+      admittingDoctorId?: string;
       primaryDiagnosis?: string;
     },
   ) {
     return this.journey.admit({
       ...body,
-      actorUserId: req.user?.id,
+      admittingDoctorId: resolveAdmittingDoctorId(user, body.admittingDoctorId),
+      actorUserId: user.id,
     });
   }
 
@@ -308,25 +343,29 @@ export class InpatientController {
   }
 
   @Post('admissions/:id/discharge')
-  @Roles('ADMIN', 'DOCTOR')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'DOCTOR')
   @ApiOperation({
     summary:
       'Discharge an admitted patient. Optional prescriptionLines create a formal pharmacy Rx.',
   })
   discharge(
     @Param('id', ParseUUIDPipe) id: string,
-    @Req() req: { user?: { id?: string } },
+    @CurrentUser() user: AuthUserPublic,
     @Body() body: DischargeAdmissionDto,
   ) {
+    const dischargingDoctorId = resolveAdmittingDoctorId(
+      user,
+      body.dischargingDoctorId,
+    );
     return this.journey.discharge({
       admissionId: id,
-      dischargingDoctorId: body.dischargingDoctorId,
+      dischargingDoctorId,
       diagnosis: body.diagnosis,
       summary: body.summary,
       medications: body.medications,
       followUpInstructions: body.followUpInstructions,
       prescriptionLines: body.prescriptionLines,
-      finalizedBy: req.user?.id || body.dischargingDoctorId,
+      finalizedBy: user.id || dischargingDoctorId,
     });
   }
 
@@ -357,23 +396,94 @@ export class InpatientController {
   }
 
   @Post('admissions/:id/nursing-notes')
-  @Roles('ADMIN', 'NURSE', 'DOCTOR')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'NURSE', 'DOCTOR')
   createNursingNote(
     @Param('id', ParseUUIDPipe) id: string,
-    @Req() req: { user?: { id?: string } },
+    @CurrentUser() user: AuthUserPublic,
     @Body()
     body: {
       nurseId?: string;
       notesText: string;
+      noteType?: string;
       vitalSignsSnapshot?: Record<string, unknown>;
     },
   ) {
     return this.ops.addNursingNote({
       admissionId: id,
-      nurseId: body.nurseId || req.user?.id || '',
+      nurseId: resolveNoteAuthorId(user, body.nurseId),
       notesText: body.notesText,
+      noteType: body.noteType,
       vitalSignsSnapshot: body.vitalSignsSnapshot,
-      actorUserId: req.user?.id,
+      actorUserId: user.id,
+    });
+  }
+
+  @Get('admissions/:id/vitals')
+  @Roles(...IPD_ROLES)
+  listVitals(@Param('id', ParseUUIDPipe) id: string) {
+    return this.ops.listAdmissionVitals(id);
+  }
+
+  @Post('admissions/:id/vitals')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'NURSE', 'DOCTOR')
+  recordVitals(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUserPublic,
+    @Body()
+    body: {
+      nurseId?: string;
+      temperature?: string;
+      systolic?: string;
+      diastolic?: string;
+      pulse?: string;
+      respRate?: string;
+      spo2?: string;
+      weightKg?: string;
+      notes?: string;
+    },
+  ) {
+    return this.ops.recordAdmissionVitals({
+      admissionId: id,
+      nurseId: resolveNoteAuthorId(user, body.nurseId),
+      actorUserId: user.id,
+      vitals: body,
+    });
+  }
+
+  @Get('admissions/:id/medications')
+  @Roles(...IPD_ROLES)
+  listWardMedications(@Param('id', ParseUUIDPipe) id: string) {
+    return this.ops.listWardMedications(id);
+  }
+
+  @Post('admissions/:id/medications')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'DOCTOR', 'NURSE')
+  orderWardMedication(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUserPublic,
+    @Body()
+    body: {
+      prescribedByStaffId?: string;
+      notes?: string;
+      lines: Array<{
+        medicationId: string;
+        dosage: string;
+        frequency: string;
+        duration: string;
+        quantity: number;
+        instructions?: string;
+      }>;
+    },
+  ) {
+    return this.ops.orderWardMedication({
+      admissionId: id,
+      prescribedByStaffId: resolveAdmittingDoctorId(
+        user,
+        body.prescribedByStaffId,
+      ),
+      notes: body.notes,
+      lines: body.lines,
+      actorUserId: user.id,
     });
   }
 
@@ -476,18 +586,18 @@ export class InpatientController {
   }
 
   @Post('reservations/:id/convert')
-  @Roles('ADMIN', 'DOCTOR', 'RECEPTIONIST')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'DOCTOR', 'RECEPTIONIST')
   convertReservation(
     @Param('id', ParseUUIDPipe) id: string,
-    @Req() req: { user?: { id?: string } },
+    @CurrentUser() user: AuthUserPublic,
     @Body()
-    body: { admittingDoctorId: string; primaryDiagnosis?: string },
+    body: { admittingDoctorId?: string; primaryDiagnosis?: string },
   ) {
     return this.ops.convertReservation({
       reservationId: id,
-      admittingDoctorId: body.admittingDoctorId,
+      admittingDoctorId: resolveAdmittingDoctorId(user, body.admittingDoctorId),
       primaryDiagnosis: body.primaryDiagnosis,
-      actorUserId: req.user?.id || '',
+      actorUserId: user.id,
     });
   }
 

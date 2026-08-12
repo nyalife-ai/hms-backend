@@ -426,6 +426,7 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
       two_factor_enabled?: boolean | null;
       core_profiles_user_id: { first_name: string; last_name: string }[];
       core_staff_profiles_user_id: {
+        id: string;
         position: string | null;
         specialization: string | null;
       }[];
@@ -476,6 +477,7 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
       passwordHash: row.password_hash ?? '',
       permissions,
       twoFactorEnabled: Boolean(row.two_factor_enabled),
+      staffProfileId: staff?.id ?? null,
     };
   }
 }

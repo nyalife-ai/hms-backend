@@ -9,6 +9,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../../database/prisma/prisma.service';
+import type { Prisma } from '../../../generated/prisma';
 import { HmsAuditWriter } from '../../audit/hms-audit.writer';
 import { profileName, USER_PROFILE_INCLUDE } from '../pharmacy-names';
 
@@ -39,11 +40,84 @@ export class PharmacyJourneyUseCase {
     search?: string;
     page?: number;
     limit?: number;
+    consultationId?: string;
+    appointmentId?: string;
+    visitId?: string;
   }) {
     const { page, limit, skip } = paginateParams(filters?.page, filters?.limit);
     const status = filters?.status?.toUpperCase();
     const q = filters?.search?.trim();
-    const where = {
+
+    const scopeOr: Prisma.PrescriptionsWhereInput[] = [];
+    if (filters?.consultationId) {
+      scopeOr.push({ consultation_id: filters.consultationId });
+    }
+    if (filters?.appointmentId) {
+      scopeOr.push({
+        consultation: { appointment_id: filters.appointmentId },
+      });
+    }
+    if (filters?.visitId) {
+      const visit = await this.prisma.outpatientVisits.findUnique({
+        where: { id: filters.visitId },
+        select: { payload: true, patient_id: true },
+      });
+      const payload = (visit?.payload ?? {}) as {
+        appointmentId?: string;
+        pharmacy?: { prescriptionId?: string };
+      };
+      if (payload.pharmacy?.prescriptionId) {
+        scopeOr.push({ id: payload.pharmacy.prescriptionId });
+      }
+      if (payload.appointmentId) {
+        scopeOr.push({
+          consultation: { appointment_id: payload.appointmentId },
+        });
+      }
+    }
+
+    if (
+      (filters?.consultationId || filters?.appointmentId || filters?.visitId) &&
+      !scopeOr.length
+    ) {
+      scopeOr.push({ id: '00000000-0000-0000-0000-000000000000' });
+    }
+
+    const searchOr: Prisma.PrescriptionsWhereInput[] | undefined = q
+      ? [
+          {
+            patient: {
+              patient_number: { contains: q, mode: 'insensitive' as const },
+            },
+          },
+          {
+            patient: {
+              user: {
+                core_profiles_user_id: {
+                  some: {
+                    OR: [
+                      {
+                        first_name: {
+                          contains: q,
+                          mode: 'insensitive' as const,
+                        },
+                      },
+                      {
+                        last_name: {
+                          contains: q,
+                          mode: 'insensitive' as const,
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        ]
+      : undefined;
+
+    const where: Prisma.PrescriptionsWhereInput = {
       deleted_at: null,
       ...(filters?.patientId ? { patient_id: filters.patientId } : {}),
       ...(status ? { status } : {}),
@@ -55,38 +129,11 @@ export class PharmacyJourneyUseCase {
             },
           }
         : {}),
-      ...(q
+      ...(scopeOr.length || searchOr
         ? {
-            OR: [
-              {
-                patient: {
-                  patient_number: { contains: q, mode: 'insensitive' as const },
-                },
-              },
-              {
-                patient: {
-                  user: {
-                    core_profiles_user_id: {
-                      some: {
-                        OR: [
-                          {
-                            first_name: {
-                              contains: q,
-                              mode: 'insensitive' as const,
-                            },
-                          },
-                          {
-                            last_name: {
-                              contains: q,
-                              mode: 'insensitive' as const,
-                            },
-                          },
-                        ],
-                      },
-                    },
-                  },
-                },
-              },
+            AND: [
+              ...(scopeOr.length ? [{ OR: scopeOr }] : []),
+              ...(searchOr ? [{ OR: searchOr }] : []),
             ],
           }
         : {}),

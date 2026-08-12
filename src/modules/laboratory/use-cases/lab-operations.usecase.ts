@@ -455,6 +455,9 @@ export class LabOperationsUseCase {
     status?: string;
     priority?: string;
     requestingDoctorId?: string;
+    consultationId?: string;
+    appointmentId?: string;
+    visitId?: string;
     search?: string;
     from?: Date;
     to?: Date;
@@ -482,6 +485,24 @@ export class LabOperationsUseCase {
     const q = filters?.search?.trim();
     const take = Math.min(Math.max(filters?.take ?? 50, 1), 100);
     const skip = Math.max(filters?.skip ?? 0, 0);
+
+    const appointmentScope = await this.labScopeWhere(
+      filters?.appointmentId,
+      filters?.visitId,
+      filters?.consultationId,
+    );
+
+    const searchOr: Prisma.LaboratoryRequestsWhereInput[] | undefined = q
+      ? [
+          { request_number: { contains: q, mode: 'insensitive' } },
+          {
+            patient: {
+              patient_number: { contains: q, mode: 'insensitive' },
+            },
+          },
+        ]
+      : undefined;
+
     const where: Prisma.LaboratoryRequestsWhereInput = {
       ...(filters?.patientId ? { patient_id: filters.patientId } : {}),
       ...(filters?.status ? { status: filters.status } : {}),
@@ -497,15 +518,11 @@ export class LabOperationsUseCase {
             },
           }
         : {}),
-      ...(q
+      ...(appointmentScope.OR || searchOr
         ? {
-            OR: [
-              { request_number: { contains: q, mode: 'insensitive' } },
-              {
-                patient: {
-                  patient_number: { contains: q, mode: 'insensitive' },
-                },
-              },
+            AND: [
+              ...(appointmentScope.OR ? [{ OR: appointmentScope.OR }] : []),
+              ...(searchOr ? [{ OR: searchOr }] : []),
             ],
           }
         : {}),
@@ -1097,6 +1114,40 @@ export class LabOperationsUseCase {
   ) {
     const p = profiles?.[0];
     return p ? `${p.first_name} ${p.last_name}`.trim() : null;
+  }
+
+  /** Scope lab requests to a consultation, appointment, and/or outpatient visit. */
+  private async labScopeWhere(
+    appointmentId?: string,
+    visitId?: string,
+    consultationId?: string,
+  ): Promise<Prisma.LaboratoryRequestsWhereInput> {
+    const or: Prisma.LaboratoryRequestsWhereInput[] = [];
+    if (consultationId) {
+      or.push({ consultation_id: consultationId });
+    }
+    if (appointmentId) {
+      or.push({ consultation: { appointment_id: appointmentId } });
+      const visits = await this.prisma.outpatientVisits.findMany({
+        where: { payload: { path: ['appointmentId'], equals: appointmentId } },
+        select: { id: true },
+        take: 20,
+      });
+      for (const v of visits) {
+        or.push({ notes: { contains: v.id } });
+        or.push({
+          request_number: `LAB-${v.id.slice(0, 8).toUpperCase()}`,
+        });
+      }
+    }
+    if (visitId) {
+      or.push({ notes: { contains: visitId } });
+      or.push({
+        request_number: `LAB-${visitId.slice(0, 8).toUpperCase()}`,
+      });
+    }
+    if (!or.length) return {};
+    return { OR: or };
   }
 
   private async resolveTestCategoryId(name: string): Promise<string> {

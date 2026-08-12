@@ -150,6 +150,13 @@ export class TriageDto {
   @IsString()
   doctorName!: string;
 
+  @ApiPropertyOptional({
+    description: 'Assigned doctor staff profile id (preferred over name-only)',
+  })
+  @IsOptional()
+  @IsString()
+  doctorStaffId?: string;
+
   @ApiProperty()
   @IsString()
   nurseName!: string;
@@ -271,6 +278,18 @@ export class ClaimStatusDto {
   @ApiProperty({ enum: ['SUBMITTED', 'ACCEPTED', 'REJECTED'] })
   @IsIn(['SUBMITTED', 'ACCEPTED', 'REJECTED'])
   status!: 'SUBMITTED' | 'ACCEPTED' | 'REJECTED';
+}
+
+export class UpdateReceptionDto {
+  @ApiPropertyOptional({ description: 'Chief reason for this visit (reception)' })
+  @IsOptional()
+  @IsString()
+  reasonForVisit?: string;
+
+  @ApiPropertyOptional({ description: 'Additional reception notes' })
+  @IsOptional()
+  @IsString()
+  additionalNotes?: string;
 }
 
 export class CollectConsultFeeDto {

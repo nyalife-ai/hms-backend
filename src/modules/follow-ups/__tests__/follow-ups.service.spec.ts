@@ -6,12 +6,14 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { PrismaService } from '../../../database/prisma/prisma.service';
 import { FollowUpsService } from '../follow-ups.service';
 import { CreateFollowUpUseCase } from '../use-cases/create-follow-up.usecase';
 import { FindFollowUpByIdUseCase } from '../use-cases/find-follow-up-by-id.usecase';
 import { FindAllFollowUpsUseCase } from '../use-cases/find-all-follow-ups.usecase';
 import { UpdateFollowUpUseCase } from '../use-cases/update-follow-up.usecase';
 import { SoftDeleteFollowUpUseCase } from '../use-cases/soft-delete-follow-up.usecase';
+import { FOLLOW_UPS_REPOSITORY } from '../constants/follow-ups.constants';
 import { Result } from '../../../core/contracts';
 
 describe('FollowUpsService', () => {
@@ -33,6 +35,21 @@ describe('FollowUpsService', () => {
         { provide: UpdateFollowUpUseCase, useValue: { execute: jest.fn() } },
         { provide: SoftDeleteFollowUpUseCase, useValue: { execute: jest.fn() } },
         { provide: EventEmitter2, useValue: { emit: jest.fn() } },
+        {
+          provide: PrismaService,
+          useValue: { staffProfiles: { findFirst: jest.fn() } },
+        },
+        {
+          provide: FOLLOW_UPS_REPOSITORY,
+          useValue: {
+            getSummary: jest.fn().mockResolvedValue({
+              scheduledThisMonth: 0,
+              completedThisMonth: 0,
+              dueWithin7Days: 0,
+              overdue: 0,
+            }),
+          },
+        },
       ],
     }).compile();
 

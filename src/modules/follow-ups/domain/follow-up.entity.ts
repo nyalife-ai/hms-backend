@@ -4,7 +4,16 @@
 
 import { randomUUID } from 'crypto';
 import { Entity } from '../../../core/domain';
+import { FollowUpStatus } from '../enums/follow-up-status.enum';
 import { FollowUpName } from './value-objects/follow-up-name.vo';
+
+export type FollowUpDisplay = {
+  patientName?: string;
+  patientMrn?: string;
+  appointmentId?: string | null;
+  doctorId?: string;
+  doctorName?: string;
+};
 
 export type FollowUpProps = {
   name: FollowUpName;
@@ -17,7 +26,21 @@ export type FollowUpProps = {
   status: string;
   notes?: string | null;
   createdBy: string;
+  display?: FollowUpDisplay;
 };
+
+function normalizeStatus(status?: string): string {
+  const raw = (status || FollowUpStatus.SCHEDULED).toUpperCase();
+  if (
+    raw === FollowUpStatus.SCHEDULED ||
+    raw === FollowUpStatus.COMPLETED ||
+    raw === FollowUpStatus.CANCELLED ||
+    raw === FollowUpStatus.NO_SHOW
+  ) {
+    return raw;
+  }
+  return FollowUpStatus.SCHEDULED;
+}
 
 export class FollowUp extends Entity<string> {
   private props: FollowUpProps;
@@ -43,6 +66,7 @@ export class FollowUp extends Entity<string> {
     status?: string;
     notes?: string;
     createdBy: string;
+    display?: FollowUpDisplay;
   }): FollowUp {
     const now = new Date();
     const reason = input.reason.trim();
@@ -60,9 +84,10 @@ export class FollowUp extends Entity<string> {
         followUpDate: new Date(input.followUpDate),
         followUpType: input.followUpType ?? null,
         reason,
-        status: (input.status || 'SCHEDULED').toUpperCase(),
+        status: normalizeStatus(input.status),
         notes: input.notes ?? input.description ?? null,
         createdBy: input.createdBy,
+        display: input.display,
       },
       now,
       now,
@@ -97,7 +122,7 @@ export class FollowUp extends Entity<string> {
       this.props.reason = patch.reason.trim();
     }
     if (patch.status !== undefined) {
-      this.props.status = patch.status.toUpperCase();
+      this.props.status = normalizeStatus(patch.status);
     }
     if (patch.notes !== undefined) this.props.notes = patch.notes;
     if (patch.description !== undefined) {
@@ -114,6 +139,11 @@ export class FollowUp extends Entity<string> {
       this.props.name = FollowUpName.create(label);
     }
     this.touch();
+  }
+
+  public withDisplay(display: FollowUpDisplay): FollowUp {
+    this.props.display = { ...this.props.display, ...display };
+    return this;
   }
 
   public getName(): FollowUpName {
@@ -145,5 +175,8 @@ export class FollowUp extends Entity<string> {
   }
   public getCreatedBy(): string {
     return this.props.createdBy;
+  }
+  public getDisplay(): FollowUpDisplay {
+    return this.props.display ?? {};
   }
 }

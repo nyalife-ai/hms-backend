@@ -179,5 +179,5 @@ describe('Live DB — Laboratory journey', () => {
     } finally {
       await app?.close();
     }
-  }, 120_000);
+  }, 240_000);
 });

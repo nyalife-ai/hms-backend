@@ -91,6 +91,8 @@ export interface Visit {
   vitals?: Vitals;
   nurseName?: string;
   doctorName?: string;
+  /** core.staff_profiles id assigned at triage */
+  doctorStaffId?: string;
   labOrder?: {
     tests: LabTestOrder[];
     notes?: string;

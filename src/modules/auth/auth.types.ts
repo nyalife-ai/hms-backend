@@ -20,6 +20,8 @@ export interface AuthUser {
   permissions: string[];
   /** Per-account email OTP 2FA. */
   twoFactorEnabled: boolean;
+  /** Linked core.staff_profiles row when the user is clinical staff. */
+  staffProfileId?: string | null;
 }
 
 export interface AuthUserPublic {
@@ -30,6 +32,8 @@ export interface AuthUserPublic {
   position: string;
   permissions: string[];
   twoFactorEnabled: boolean;
+  /** Linked core.staff_profiles id — used for DOCTOR scoping on visits/appointments. */
+  staffProfileId?: string | null;
 }
 
 export interface JwtPayload {

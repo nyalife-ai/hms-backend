@@ -62,6 +62,27 @@ export class TypeOrmFollowUpRepository implements IFollowUpRepository {
     return { items: rows.map((r) => this.toDomain(r)), total };
   }
 
+  public async findByIdScoped(id: string): Promise<FollowUp | null> {
+    return this.findById(id);
+  }
+
+  public async getSummary() {
+    return {
+      scheduledThisMonth: 0,
+      completedThisMonth: 0,
+      dueWithin7Days: 0,
+      overdue: 0,
+    };
+  }
+
+  public async findByConsultationAndDate(): Promise<FollowUp | null> {
+    return null;
+  }
+
+  public async findLatestConsultationId(): Promise<string | null> {
+    return null;
+  }
+
   public async softDelete(id: string): Promise<void> {
     await this.repo.softDelete(id);
   }

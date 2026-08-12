@@ -4,6 +4,7 @@
 
 import {
   BadRequestException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
@@ -14,7 +15,9 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../../database/prisma/prisma.service';
 import { BillingSettlementService } from '../billing/billing-settlement.service';
 import { PharmacyDispenseService } from '../billing/pharmacy-dispense.service';
+import { FollowUpsService } from '../follow-ups/follow-ups.service';
 import { PharmacyJourneyUseCase } from '../pharmacy/use-cases/pharmacy-journey.usecase';
+import type { AuthUserPublic } from '../auth/auth.types';
 import type { ClinicalRecord } from './clinical-record.types';
 import type {
   LabTestOrder,
@@ -38,6 +41,8 @@ type VisitPayload = {
   vitals?: Vitals;
   nurseName?: string;
   doctorName?: string;
+  /** Staff profile id of the assigned doctor (set at triage). */
+  doctorStaffId?: string;
   labOrder?: Visit['labOrder'];
   diagnosis?: string;
   prescriptions?: PrescriptionLine[];
@@ -108,6 +113,7 @@ export class VisitsService implements OnModuleInit {
     private readonly billing: BillingSettlementService,
     private readonly dispense: PharmacyDispenseService,
     private readonly pharmacyJourney: PharmacyJourneyUseCase,
+    private readonly followUps: FollowUpsService,
   ) {}
 
   private requireDb(): void {
@@ -128,17 +134,72 @@ export class VisitsService implements OnModuleInit {
     }
   }
 
-  async findAll(): Promise<Visit[]> {
+  async findAll(
+    actor?: AuthUserPublic,
+    appointmentId?: string,
+  ): Promise<Visit[]> {
     this.requireDb();
     const rows = await this.visits.findAllOrdered();
-    return rows.map((r) => this.fromRow(r));
+    let visits = rows.map((r) => this.fromRow(r));
+    if (appointmentId) {
+      const extra = await this.visits.findByAppointmentId(appointmentId);
+      if (extra && !visits.some((v) => v.id === extra.id)) {
+        visits = [...visits, this.fromRow(extra)];
+      }
+      visits = visits.filter((v) => v.appointmentId === appointmentId);
+    }
+    if (actor?.role !== 'DOCTOR') {
+      return visits;
+    }
+    return visits.filter((v) => this.isVisitAssignedToDoctor(v, actor));
   }
 
-  async findOne(id: string): Promise<Visit> {
+  /** DOCTOR scope: prefer staff id; fall back to legacy doctorName display match. */
+  private isVisitAssignedToDoctor(
+    visit: Visit,
+    doctor: AuthUserPublic,
+  ): boolean {
+    if (visit.doctorStaffId) {
+      return Boolean(
+        doctor.staffProfileId && visit.doctorStaffId === doctor.staffProfileId,
+      );
+    }
+    return Boolean(
+      visit.doctorName &&
+        doctor.name &&
+        visit.doctorName.trim() === doctor.name.trim(),
+    );
+  }
+
+  async findOne(id: string, actor?: AuthUserPublic): Promise<Visit> {
     this.requireDb();
     const row = await this.visits.findById(id);
     if (!row) throw new NotFoundException(`Visit ${id} not found`);
-    return this.fromRow(row);
+    const visit = this.fromRow(row);
+    if (
+      actor?.role === 'DOCTOR' &&
+      !this.isVisitAssignedToDoctor(visit, actor)
+    ) {
+      throw new ForbiddenException('This visit is not assigned to you');
+    }
+    return visit;
+  }
+
+  async updateReception(
+    id: string,
+    patch: { reasonForVisit?: string; additionalNotes?: string },
+  ): Promise<Visit> {
+    const visit = await this.findOne(id);
+    return this.patch(id, {
+      reasonForVisit:
+        patch.reasonForVisit !== undefined
+          ? patch.reasonForVisit
+          : visit.reasonForVisit,
+      additionalNotes:
+        patch.additionalNotes !== undefined
+          ? patch.additionalNotes
+          : visit.additionalNotes,
+    });
   }
 
   async checkIn(
@@ -222,6 +283,7 @@ export class VisitsService implements OnModuleInit {
     vitals: Vitals,
     doctorName: string,
     nurseName: string,
+    doctorStaffId?: string,
   ): Promise<Visit> {
     const visit = await this.findOne(id);
     if (visit.stage === 'AWAITING_PAYMENT') {
@@ -241,6 +303,7 @@ export class VisitsService implements OnModuleInit {
       vitals,
       doctorName,
       nurseName,
+      doctorStaffId: doctorStaffId?.trim() || undefined,
       stage: 'WAITING_DOCTOR',
     });
   }
@@ -475,9 +538,9 @@ export class VisitsService implements OnModuleInit {
     );
 
     let pharmacyMeta = visit.pharmacy;
+    const patientId =
+      (await this.visits.findPatientIdByMrn(visit.mrn)) ?? null;
     if (meds.length) {
-      const patientId =
-        (await this.visits.findPatientIdByMrn(visit.mrn)) ?? null;
       const prescriberId = await this.resolvePrescriberStaffId(
         actorUserId,
         visit.doctorName,
@@ -506,6 +569,34 @@ export class VisitsService implements OnModuleInit {
           };
         } catch {
           // Visit still proceeds to billing; pharmacist can create Rx manually
+        }
+      }
+    }
+
+    if (outcome.followUpDate && patientId) {
+      let followUpConsultationId = consultationId;
+      if (!followUpConsultationId) {
+        followUpConsultationId = await this.ensureConsultationForFollowUp(
+          visit,
+          actorUserId,
+          patientId,
+        );
+      }
+      if (followUpConsultationId) {
+        try {
+          await this.followUps.ensureFromConsultation({
+            patientId,
+            consultationId: followUpConsultationId,
+            followUpDate: outcome.followUpDate,
+            reason:
+              clinicalRecord?.followUpInstructions?.trim() ||
+              visit.reasonForVisit?.trim() ||
+              'Follow-up from consultation',
+            notes: clinicalRecord?.followUpInstructions?.trim(),
+            createdBy: actorUserId,
+          });
+        } catch {
+          // Non-blocking — visit completion must still succeed
         }
       }
     }
@@ -597,6 +688,48 @@ export class VisitsService implements OnModuleInit {
       return created.id;
     } catch {
       // Non-blocking — visit payload remains source of truth for the pipeline
+      return null;
+    }
+  }
+
+  /** Fallback consultation row when completing a visit with followUpDate but no clinical record. */
+  private async ensureConsultationForFollowUp(
+    visit: Visit,
+    actorUserId: string,
+    patientId: string,
+  ): Promise<string | null> {
+    try {
+      if (visit.appointmentId) {
+        const existing = await this.prisma.consultations.findFirst({
+          where: { appointment_id: visit.appointmentId, deleted_at: null },
+        });
+        if (existing) return existing.id;
+      }
+      const latest = await this.prisma.consultations.findFirst({
+        where: { patient_id: patientId, deleted_at: null },
+        orderBy: { consultation_date: 'desc' },
+        select: { id: true },
+      });
+      if (latest) return latest.id;
+
+      const doctorId = await this.resolvePrescriberStaffId(
+        actorUserId,
+        visit.doctorName,
+      );
+      if (!doctorId) return null;
+
+      const created = await this.prisma.consultations.create({
+        data: {
+          patient_id: patientId,
+          doctor_id: doctorId,
+          created_by: actorUserId,
+          appointment_id: visit.appointmentId || null,
+          consultation_date: new Date(),
+          status: 'COMPLETED',
+        },
+      });
+      return created.id;
+    } catch {
       return null;
     }
   }
@@ -934,6 +1067,11 @@ export class VisitsService implements OnModuleInit {
     });
 
     const requestNumber = `LAB-${visit.id.slice(0, 8).toUpperCase()}`;
+    const consultationId = await this.ensureConsultationForFollowUp(
+      visit,
+      actorUserId,
+      patientId,
+    );
 
     await this.visits.upsertLabRequest({
       requestNumber,
@@ -941,6 +1079,7 @@ export class VisitsService implements OnModuleInit {
       status,
       notes,
       requestedBy: actorUserId,
+      consultationId,
     });
   }
 
@@ -1000,6 +1139,7 @@ export class VisitsService implements OnModuleInit {
       vitals: visit.vitals,
       nurseName: visit.nurseName,
       doctorName: visit.doctorName,
+      doctorStaffId: visit.doctorStaffId,
       labOrder: visit.labOrder,
       diagnosis: visit.diagnosis,
       prescriptions: visit.prescriptions,
@@ -1031,6 +1171,7 @@ export class VisitsService implements OnModuleInit {
       vitals: payload.vitals,
       nurseName: payload.nurseName,
       doctorName: payload.doctorName,
+      doctorStaffId: payload.doctorStaffId,
       labOrder: payload.labOrder,
       diagnosis: payload.diagnosis,
       prescriptions: payload.prescriptions,

@@ -398,6 +398,9 @@ export class PharmacyController {
   @ApiQuery({ name: 'from', required: false })
   @ApiQuery({ name: 'to', required: false })
   @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'consultationId', required: false })
+  @ApiQuery({ name: 'appointmentId', required: false })
+  @ApiQuery({ name: 'visitId', required: false })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
   listPrescriptions(
@@ -406,6 +409,9 @@ export class PharmacyController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('search') search?: string,
+    @Query('consultationId') consultationId?: string,
+    @Query('appointmentId') appointmentId?: string,
+    @Query('visitId') visitId?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
@@ -415,6 +421,9 @@ export class PharmacyController {
       from: from ? new Date(from) : undefined,
       to: to ? new Date(to) : undefined,
       search,
+      consultationId,
+      appointmentId,
+      visitId,
       page: page ? Number(page) : 1,
       limit: limit ? Number(limit) : 50,
     });

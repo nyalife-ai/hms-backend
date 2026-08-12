@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma/prisma.service';
+import type { AuthUserPublic } from '../auth/auth.types';
 import {
   DOCTORS as FALLBACK_DOCTORS,
   LAB_TEST_CATALOG as FALLBACK_LAB,
@@ -1061,15 +1062,18 @@ export class CatalogService {
     }));
   }
 
-  async listAppointments(options?: {
-    page?: number;
-    limit?: number;
-    search?: string;
-    status?: string;
-    doctorId?: string;
-    from?: string;
-    to?: string;
-  }): Promise<{
+  async listAppointments(
+    options?: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: string;
+      doctorId?: string;
+      from?: string;
+      to?: string;
+    },
+    actor?: AuthUserPublic,
+  ): Promise<{
     items: Array<Record<string, unknown>>;
     total: number;
     page: number;
@@ -1082,6 +1086,15 @@ export class CatalogService {
 
     if (!this.prisma.isConnected) {
       return { items: [], total: 0, page, limit };
+    }
+
+    // DOCTOR: always force their staff profile — ignore client doctorId
+    let scopedDoctorId = options?.doctorId;
+    if (actor?.role === 'DOCTOR') {
+      if (!actor.staffProfileId) {
+        return { items: [], total: 0, page, limit };
+      }
+      scopedDoctorId = actor.staffProfileId;
     }
 
     const q = options?.search?.trim();
@@ -1103,7 +1116,7 @@ export class CatalogService {
 
     const where = {
       deleted_at: null as null,
-      ...(options?.doctorId ? { doctor_id: options.doctorId } : {}),
+      ...(scopedDoctorId ? { doctor_id: scopedDoctorId } : {}),
       ...(statusFilter ? { status: { in: statusFilter } } : {}),
       ...(options?.from || options?.to
         ? {
@@ -1233,7 +1246,7 @@ export class CatalogService {
    * - completed = COMPLETED
    * - total = all non-deleted
    */
-  async appointmentSummary(): Promise<{
+  async appointmentSummary(actor?: AuthUserPublic): Promise<{
     total: number;
     pending: number;
     scheduled: number;
@@ -1250,9 +1263,26 @@ export class CatalogService {
       };
     }
 
+    if (actor?.role === 'DOCTOR' && !actor.staffProfileId) {
+      return {
+        total: 0,
+        pending: 0,
+        scheduled: 0,
+        completed: 0,
+        cancelled: 0,
+      };
+    }
+
+    const where = {
+      deleted_at: null as null,
+      ...(actor?.role === 'DOCTOR' && actor.staffProfileId
+        ? { doctor_id: actor.staffProfileId }
+        : {}),
+    };
+
     const groups = await this.prisma.appointments.groupBy({
       by: ['status'],
-      where: { deleted_at: null },
+      where,
       _count: { _all: true },
     });
 
@@ -1635,6 +1665,7 @@ export class CatalogService {
 
     return {
       id: r.id,
+      visitId: opVisit?.id ?? null,
       appointmentNumber: `APT-${r.id.replace(/-/g, '').slice(0, 6).toUpperCase()}`,
       date: r.appointment_date.toISOString().slice(0, 10),
       time,

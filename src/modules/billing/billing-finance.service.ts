@@ -2485,6 +2485,173 @@ export class BillingFinanceService {
     };
   }
 
+  async invoicesSummary() {
+    const [total, grouped, openInvoices] = await Promise.all([
+      this.prisma.invoices.count({
+        where: { deleted_at: null, is_voided: false },
+      }),
+      this.prisma.invoices.groupBy({
+        by: ['status'],
+        where: { deleted_at: null, is_voided: false },
+        _count: { _all: true },
+      }),
+      this.prisma.invoices.findMany({
+        where: {
+          status: { in: ['ISSUED', 'PARTIALLY_PAID'] },
+          deleted_at: null,
+          is_voided: false,
+        },
+        include: {
+          billing_payment_allocations_invoice_id: {
+            where: { payment: { status: 'COMPLETED' } },
+            select: { allocated_amount: true },
+          },
+        },
+      }),
+    ]);
+    const byStatus = Object.fromEntries(
+      grouped.map((g) => [g.status, g._count._all]),
+    );
+    let outstandingKes = moneyZero();
+    for (const inv of openInvoices) {
+      const allocated = inv.billing_payment_allocations_invoice_id.reduce(
+        (sum, a) => sum.add(moneyFrom(a.allocated_amount.toString())),
+        moneyZero(),
+      );
+      outstandingKes = outstandingKes.add(
+        outstandingBalance(
+          inv.total_amount.toString(),
+          moneyToDecimal(allocated),
+        ),
+      );
+    }
+    return {
+      total,
+      draft: byStatus.DRAFT ?? 0,
+      issued: byStatus.ISSUED ?? 0,
+      partiallyPaid: byStatus.PARTIALLY_PAID ?? 0,
+      paid: byStatus.PAID ?? 0,
+      outstandingKes: moneyToDecimal(outstandingKes),
+    };
+  }
+
+  async paymentsSummary() {
+    const from = startOfDay();
+    const to = endOfDay();
+    const [total, grouped, completedToday, completedSum, allocatedSum] =
+      await Promise.all([
+        this.prisma.payments.count(),
+        this.prisma.payments.groupBy({
+          by: ['status'],
+          _count: { _all: true },
+        }),
+        this.prisma.payments.aggregate({
+          where: {
+            status: 'COMPLETED',
+            payment_date: { gte: from, lte: to },
+          },
+          _sum: { amount: true },
+        }),
+        this.prisma.payments.aggregate({
+          where: { status: 'COMPLETED' },
+          _sum: { amount: true },
+        }),
+        this.prisma.paymentAllocations.aggregate({
+          where: { payment: { status: 'COMPLETED' } },
+          _sum: { allocated_amount: true },
+        }),
+      ]);
+    const byStatus = Object.fromEntries(
+      grouped.map((g) => [g.status, g._count._all]),
+    );
+    const completed = moneyFrom(completedSum._sum.amount?.toString() ?? '0');
+    const allocated = moneyFrom(
+      allocatedSum._sum.allocated_amount?.toString() ?? '0',
+    );
+    const unallocated = completed.subtract(allocated);
+    return {
+      total,
+      completedTodayKes: completedToday._sum.amount?.toString() ?? '0',
+      pending: byStatus.PENDING ?? 0,
+      unallocatedKes: moneyToDecimal(
+        unallocated.isNegative() ? moneyZero() : unallocated,
+      ),
+    };
+  }
+
+  async claimsSummary() {
+    const [total, grouped] = await Promise.all([
+      this.prisma.insuranceClaims.count(),
+      this.prisma.insuranceClaims.groupBy({
+        by: ['status'],
+        _count: { _all: true },
+      }),
+    ]);
+    const byStatus = Object.fromEntries(
+      grouped.map((g) => [g.status, g._count._all]),
+    );
+    return {
+      total,
+      draft: byStatus.DRAFT ?? 0,
+      inFlight:
+        (byStatus.SUBMITTED ?? 0) + (byStatus.UNDER_REVIEW ?? 0),
+      approved: byStatus.APPROVED ?? 0,
+      denied: byStatus.DENIED ?? 0,
+    };
+  }
+
+  async servicesSummary() {
+    const [total, active] = await Promise.all([
+      this.prisma.services.count(),
+      this.prisma.services.count({ where: { is_active: true } }),
+    ]);
+    return {
+      total,
+      active,
+      inactive: total - active,
+    };
+  }
+
+  async accountsSummary() {
+    const [total, activePostable, grouped] = await Promise.all([
+      this.prisma.accounts.count(),
+      this.prisma.accounts.count({
+        where: { is_active: true, is_postable: true },
+      }),
+      this.prisma.accounts.groupBy({
+        by: ['account_type'],
+        _count: { _all: true },
+      }),
+    ]);
+    const byType = Object.fromEntries(
+      grouped.map((g) => [g.account_type, g._count._all]),
+    );
+    return {
+      total,
+      activePostable,
+      byType,
+    };
+  }
+
+  async journalsSummary() {
+    const [total, grouped] = await Promise.all([
+      this.prisma.journalEntries.count(),
+      this.prisma.journalEntries.groupBy({
+        by: ['status'],
+        _count: { _all: true },
+      }),
+    ]);
+    const byStatus = Object.fromEntries(
+      grouped.map((g) => [g.status, g._count._all]),
+    );
+    return {
+      total,
+      draft: byStatus.DRAFT ?? 0,
+      posted: byStatus.POSTED ?? 0,
+      reversed: byStatus.REVERSED ?? 0,
+    };
+  }
+
   // ── Visit quote ──────────────────────────────────────────────────────────
 
   /**

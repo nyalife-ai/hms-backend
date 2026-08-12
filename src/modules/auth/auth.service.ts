@@ -709,6 +709,7 @@ export class AuthService implements OnModuleInit {
       position: user.position,
       permissions: user.permissions,
       twoFactorEnabled: Boolean(user.twoFactorEnabled),
+      staffProfileId: user.staffProfileId ?? null,
     };
   }
 }

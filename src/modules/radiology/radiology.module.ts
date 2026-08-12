@@ -8,6 +8,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../../database/prisma/prisma.module';
 import { RADIOLOGY_REPOSITORY } from './constants/radiology.constants';
 import { RadiologyController } from './radiology.controller';
+import { ImagingController } from './imaging.controller';
 import { RadiologyService } from './radiology.service';
 import { RadiologyListener } from './listeners/radiology.listener';
 import { RadiologyRepositoryProvider } from './repositories/radiology.repository';
@@ -17,10 +18,11 @@ import { FindRadiologyByIdUseCase } from './use-cases/find-radiology-by-id.useca
 import { FindAllRadiologyUseCase } from './use-cases/find-all-radiology.usecase';
 import { UpdateRadiologyUseCase } from './use-cases/update-radiology.usecase';
 import { SoftDeleteRadiologyUseCase } from './use-cases/soft-delete-radiology.usecase';
+import { RadiologyClinicalUseCase } from './use-cases/radiology-clinical.usecase';
 
 @Module({
   imports: [PrismaModule],
-  controllers: [RadiologyController],
+  controllers: [RadiologyController, ImagingController],
   providers: [
     RadiologyService,
     RadiologyListener,
@@ -31,6 +33,7 @@ import { SoftDeleteRadiologyUseCase } from './use-cases/soft-delete-radiology.us
     FindAllRadiologyUseCase,
     UpdateRadiologyUseCase,
     SoftDeleteRadiologyUseCase,
+    RadiologyClinicalUseCase,
   ],
   exports: [RadiologyService, RADIOLOGY_REPOSITORY],
 })

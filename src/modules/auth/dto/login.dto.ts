@@ -165,6 +165,12 @@ export class AuthUserResponseDto {
 
   @ApiProperty({ description: 'Whether email OTP 2FA is enabled for this account' })
   twoFactorEnabled!: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Linked staff profile id when the user is clinical staff',
+    nullable: true,
+  })
+  staffProfileId?: string | null;
 }
 
 export class AuthResponseDto {

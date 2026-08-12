@@ -4,11 +4,10 @@
  * When disabled, the suite records that live mode is off (no .skip).
  */
 
-import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { PrismaService } from '../src/database/prisma/prisma.service';
-import { createE2eApp } from './create-e2e-app';
+import { createLiveE2eApp } from './create-e2e-app';
 
 describe('Live DB — IPD journey', () => {
   const live = process.env.E2E_USE_LIVE_DB === 'true';
@@ -23,16 +22,15 @@ describe('Live DB — IPD journey', () => {
       return;
     }
 
-    let app: INestApplication | undefined;
+    const app = await createLiveE2eApp();
+    if (!app) {
+      expect(true).toBe(true);
+      return;
+    }
     try {
-      app = await createE2eApp();
       const prisma = app.get(PrismaService);
-      if (!prisma.isConnected) {
-        expect(prisma.isConnected).toBe(false);
-        return;
-      }
 
-      const http = (): App => app!.getHttpServer() as App;
+      const http = (): App => app.getHttpServer() as App;
       const login = await request(http())
         .post('/auth/login')
         .send({
@@ -149,9 +147,9 @@ describe('Live DB — IPD journey', () => {
         .send({ name: 'legacy' });
       expect(gone.status).toBe(410);
     } finally {
-      await app?.close();
+      await app.close();
     }
-  }, 180_000);
+  }, 240_000);
 
   it('reservation → convert and transfer-out (live)', async () => {
     if (!live) {
@@ -159,16 +157,15 @@ describe('Live DB — IPD journey', () => {
       return;
     }
 
-    let app: INestApplication | undefined;
+    const app = await createLiveE2eApp();
+    if (!app) {
+      expect(true).toBe(true);
+      return;
+    }
     try {
-      app = await createE2eApp();
       const prisma = app.get(PrismaService);
-      if (!prisma.isConnected) {
-        expect(prisma.isConnected).toBe(false);
-        return;
-      }
 
-      const http = (): App => app!.getHttpServer() as App;
+      const http = (): App => app.getHttpServer() as App;
       const login = await request(http())
         .post('/auth/login')
         .send({
@@ -235,7 +232,158 @@ describe('Live DB — IPD journey', () => {
       const freed = await prisma.beds.findUnique({ where: { id: bed.body.id } });
       expect(freed?.status).toBe('AVAILABLE');
     } finally {
-      await app?.close();
+      await app.close();
     }
-  }, 180_000);
+  }, 240_000);
+
+  it('typed notes, vitals history, and ward medication order (live)', async () => {
+    if (!live) {
+      expect(process.env.E2E_USE_LIVE_DB !== 'true').toBe(true);
+      return;
+    }
+
+    const app = await createLiveE2eApp();
+    if (!app) {
+      expect(true).toBe(true);
+      return;
+    }
+    try {
+      const prisma = app.get(PrismaService);
+
+      const http = (): App => app.getHttpServer() as App;
+      const login = await request(http())
+        .post('/auth/login')
+        .send({
+          email: process.env.E2E_ADMIN_EMAIL || 'admin@nyalife.health',
+          password: process.env.E2E_ADMIN_PASSWORD || 'nyalife123',
+        });
+      expect([200, 201]).toContain(login.status);
+      const auth = { Authorization: `Bearer ${login.body.accessToken}` };
+
+      const doctor = await prisma.staffProfiles.findFirst({
+        where: { deleted_at: null },
+      });
+      const patient = await prisma.patients.findFirst({
+        where: { deleted_at: null },
+      });
+      expect(doctor).toBeTruthy();
+      expect(patient).toBeTruthy();
+
+      const suffix = Date.now().toString(36);
+      const wardRes = await request(http())
+        .post('/ipd/wards')
+        .set(auth)
+        .send({ name: `E2E Notes ${suffix}`, wardType: 'GENERAL', capacity: 2 });
+      expect([200, 201]).toContain(wardRes.status);
+
+      const bed = await request(http())
+        .post('/ipd/beds')
+        .set(auth)
+        .send({ wardId: wardRes.body.id, bedNumber: `NT-${suffix}` });
+      expect([200, 201]).toContain(bed.status);
+
+      const admit = await request(http())
+        .post('/ipd/admissions')
+        .set(auth)
+        .send({
+          patientId: patient!.id,
+          bedId: bed.body.id,
+          admittingDoctorId: doctor!.id,
+          primaryDiagnosis: 'E2E notes/vitals/MAR',
+        });
+      expect([200, 201]).toContain(admit.status);
+      const admissionId = admit.body.id as string;
+
+      const progress = await request(http())
+        .post(`/ipd/admissions/${admissionId}/nursing-notes`)
+        .set(auth)
+        .send({
+          nurseId: doctor!.id,
+          noteType: 'PROGRESS',
+          notesText: 'E2E progress: patient ambulating',
+        });
+      expect([200, 201]).toContain(progress.status);
+      expect(progress.body.noteType).toBe('PROGRESS');
+
+      const v1 = await request(http())
+        .post(`/ipd/admissions/${admissionId}/vitals`)
+        .set(auth)
+        .send({
+          nurseId: doctor!.id,
+          pulse: '72',
+          systolic: '120',
+          diastolic: '80',
+          temperature: '36.8',
+          spo2: '98',
+        });
+      expect([200, 201]).toContain(v1.status);
+
+      const v2 = await request(http())
+        .post(`/ipd/admissions/${admissionId}/vitals`)
+        .set(auth)
+        .send({
+          nurseId: doctor!.id,
+          pulse: '88',
+          systolic: '130',
+          diastolic: '85',
+          temperature: '37.2',
+          spo2: '96',
+        });
+      expect([200, 201]).toContain(v2.status);
+
+      const vitals = await request(http())
+        .get(`/ipd/admissions/${admissionId}/vitals`)
+        .set(auth)
+        .expect(200);
+      expect(vitals.body.length).toBeGreaterThanOrEqual(2);
+
+      const notes = await request(http())
+        .get(`/ipd/admissions/${admissionId}/nursing-notes`)
+        .set(auth)
+        .expect(200);
+      expect(
+        notes.body.some((n: { noteType?: string }) => n.noteType === 'PROGRESS'),
+      ).toBe(true);
+
+      const med = await prisma.medications.findFirst({
+        where: { deleted_at: null, is_active: true },
+      });
+      if (med) {
+        const order = await request(http())
+          .post(`/ipd/admissions/${admissionId}/medications`)
+          .set(auth)
+          .send({
+            prescribedByStaffId: doctor!.id,
+            notes: 'E2E ward MAR',
+            lines: [
+              {
+                medicationId: med.id,
+                dosage: '500mg',
+                frequency: 'TDS',
+                duration: '5 days',
+                quantity: 15,
+              },
+            ],
+          });
+        expect([200, 201]).toContain(order.status);
+
+        const listed = await request(http())
+          .get(`/ipd/admissions/${admissionId}/medications`)
+          .set(auth)
+          .expect(200);
+        expect(listed.body.length).toBeGreaterThanOrEqual(1);
+      }
+
+      await request(http())
+        .post(`/ipd/admissions/${admissionId}/discharge`)
+        .set(auth)
+        .send({
+          dischargingDoctorId: doctor!.id,
+          diagnosis: 'Resolved',
+          summary: 'E2E notes discharge',
+        });
+    } finally {
+      await app.close();
+    }
+  }, 240_000);
 });

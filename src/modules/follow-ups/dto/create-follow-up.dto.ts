@@ -5,21 +5,27 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsDateString,
+  IsEnum,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { FollowUpStatus } from '../enums/follow-up-status.enum';
 
 export class CreateFollowUpDto {
   @ApiProperty()
   @IsUUID()
   patientId!: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description:
+      'Required unless the patient has at least one consultation (latest is used)',
+  })
+  @IsOptional()
   @IsUUID()
-  consultationId!: string;
+  consultationId?: string;
 
   @ApiProperty()
   @IsDateString()
@@ -31,22 +37,12 @@ export class CreateFollowUpDto {
   @MaxLength(2000)
   reason!: string;
 
-  @ApiProperty({ description: 'User who created the follow-up' })
+  @ApiPropertyOptional({
+    description: 'User who created the follow-up (defaults to the authenticated user)',
+  })
+  @IsOptional()
   @IsUUID()
-  createdBy!: string;
-
-  @ApiPropertyOptional({ description: 'Display label; defaults to type/reason' })
-  @IsOptional()
-  @IsString()
-  @MinLength(1)
-  @MaxLength(255)
-  name?: string;
-
-  @ApiPropertyOptional({ description: 'Maps to notes' })
-  @IsOptional()
-  @IsString()
-  @MaxLength(2000)
-  description?: string;
+  createdBy?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -54,11 +50,10 @@ export class CreateFollowUpDto {
   @MaxLength(50)
   followUpType?: string;
 
-  @ApiPropertyOptional({ example: 'SCHEDULED' })
+  @ApiPropertyOptional({ enum: FollowUpStatus, example: FollowUpStatus.SCHEDULED })
   @IsOptional()
-  @IsString()
-  @MaxLength(20)
-  status?: string;
+  @IsEnum(FollowUpStatus)
+  status?: FollowUpStatus;
 
   @ApiPropertyOptional()
   @IsOptional()

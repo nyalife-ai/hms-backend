@@ -109,6 +109,13 @@ export class BillingFinanceController {
     });
   }
 
+  @Get('services/summary')
+  @Roles(...BILLING_READ)
+  @ApiOperation({ summary: 'Service catalog KPI counts' })
+  servicesSummary() {
+    return this.finance.servicesSummary();
+  }
+
   @Get('services/:id')
   @Roles(...BILLING_READ)
   getService(@Param('id', ParseUUIDPipe) id: string) {
@@ -177,6 +184,13 @@ export class BillingFinanceController {
       active: parseBool(active),
       postable: parseBool(postable),
     });
+  }
+
+  @Get('accounts/summary')
+  @Roles(...BILLING_ACCT)
+  @ApiOperation({ summary: 'Chart of accounts KPI counts' })
+  accountsSummary() {
+    return this.finance.accountsSummary();
   }
 
   @Post('accounts')
@@ -376,6 +390,13 @@ export class BillingFinanceController {
     });
   }
 
+  @Get('invoices/summary')
+  @Roles(...BILLING_READ)
+  @ApiOperation({ summary: 'Invoice register KPI counts' })
+  invoicesSummary() {
+    return this.finance.invoicesSummary();
+  }
+
   @Get('invoices/:id')
   @Roles(...BILLING_READ)
   getInvoice(@Param('id', ParseUUIDPipe) id: string) {
@@ -496,6 +517,13 @@ export class BillingFinanceController {
     });
   }
 
+  @Get('payments/summary')
+  @Roles(...BILLING_READ)
+  @ApiOperation({ summary: 'Payments KPI counts' })
+  paymentsSummary() {
+    return this.finance.paymentsSummary();
+  }
+
   @Get('payments/:id')
   @Roles(...BILLING_READ)
   getPayment(@Param('id', ParseUUIDPipe) id: string) {
@@ -556,6 +584,13 @@ export class BillingFinanceController {
       status,
       patientId,
     });
+  }
+
+  @Get('claims/summary')
+  @Roles(...BILLING_READ)
+  @ApiOperation({ summary: 'Insurance claims KPI counts' })
+  claimsSummary() {
+    return this.finance.claimsSummary();
   }
 
   @Get('claims/:id')
@@ -639,6 +674,13 @@ export class BillingFinanceController {
       from,
       to,
     });
+  }
+
+  @Get('journals/summary')
+  @Roles(...BILLING_ACCT)
+  @ApiOperation({ summary: 'Journal entries KPI counts' })
+  journalsSummary() {
+    return this.finance.journalsSummary();
   }
 
   @Get('journals/:id')

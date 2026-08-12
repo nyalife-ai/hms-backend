@@ -8,7 +8,11 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Result } from '../../../core/contracts';
 import type { FollowUpsQueryDto } from '../dto';
 import { FOLLOW_UPS_REPOSITORY } from '../constants/follow-ups.constants';
-import type { IFollowUpRepository, FollowUpPage } from '../interfaces/follow-up-repository.interface';
+import type {
+  IFollowUpRepository,
+  FollowUpPage,
+  FollowUpListScope,
+} from '../interfaces/follow-up-repository.interface';
 
 @Injectable()
 export class FindAllFollowUpsUseCase {
@@ -16,9 +20,12 @@ export class FindAllFollowUpsUseCase {
     @Inject(FOLLOW_UPS_REPOSITORY) private readonly repository: IFollowUpRepository,
   ) {}
 
-  public async execute(query: FollowUpsQueryDto): Promise<Result<FollowUpPage, string>> {
+  public async execute(
+    query: FollowUpsQueryDto,
+    scope?: FollowUpListScope,
+  ): Promise<Result<FollowUpPage, string>> {
     try {
-      const page = await this.repository.findMany(query);
+      const page = await this.repository.findMany(query, scope);
       return Result.success(page);
     } catch (err) {
       return Result.failure(err instanceof Error ? err.message : 'List failed');

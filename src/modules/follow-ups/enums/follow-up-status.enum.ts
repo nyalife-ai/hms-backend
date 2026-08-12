@@ -1,11 +1,14 @@
 /**
  * File: follow-up-status.enum.ts
  * Module: follow-ups
- * Purpose: FollowUp lifecycle status.
+ * Purpose: Aligns with clinical.follow_ups CHECK constraint.
  */
 
 export enum FollowUpStatus {
-  PENDING = 'PENDING',
-  ACTIVE = 'ACTIVE',
-  ARCHIVED = 'ARCHIVED',
+  SCHEDULED = 'SCHEDULED',
+  COMPLETED = 'COMPLETED',
+  CANCELLED = 'CANCELLED',
+  NO_SHOW = 'NO_SHOW',
 }
+
+export const FOLLOW_UP_STATUSES = Object.values(FollowUpStatus);

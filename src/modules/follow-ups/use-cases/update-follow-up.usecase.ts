@@ -27,10 +27,8 @@ export class UpdateFollowUpUseCase {
     }
     try {
       existing.update({
-        name: dto.name,
-        description: dto.description,
         followUpDate: dto.followUpDate,
-        followUpType: dto.followUpType,
+        followUpType: dto.followUpType ?? dto.type,
         reason: dto.reason,
         status: dto.status,
         notes: dto.notes,

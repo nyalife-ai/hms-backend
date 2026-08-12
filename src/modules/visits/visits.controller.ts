@@ -5,9 +5,10 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/user.decorator';
 import type { AuthUserPublic } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -25,6 +26,7 @@ import {
   SaveClinicalOrdersDto,
   SaveClinicalRecordDto,
   TriageDto,
+  UpdateReceptionDto,
 } from './dto/visits.dto';
 import { VisitsService } from './visits.service';
 
@@ -38,14 +40,18 @@ export class VisitsController {
   @Get()
   @Roles(...VISIT_FLOW_ROLES)
   @ApiOperation({ summary: 'List all visits in the patient flow' })
-  findAll() {
-    return this.visits.findAll();
+  @ApiQuery({ name: 'appointmentId', required: false })
+  findAll(
+    @CurrentUser() user: AuthUserPublic,
+    @Query('appointmentId') appointmentId?: string,
+  ) {
+    return this.visits.findAll(user, appointmentId);
   }
 
   @Get(':id')
   @Roles(...VISIT_FLOW_ROLES)
-  findOne(@Param('id') id: string) {
-    return this.visits.findOne(id);
+  findOne(@Param('id') id: string, @CurrentUser() user: AuthUserPublic) {
+    return this.visits.findOne(id, user);
   }
 
   @Post('check-in')
@@ -61,14 +67,25 @@ export class VisitsController {
     return this.visits.checkIn(body, user.id);
   }
 
+  @Patch(':id/reception')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'RECEPTIONIST')
+  @ApiOperation({ summary: 'Update reception reason / notes for a visit' })
+  updateReception(
+    @Param('id') id: string,
+    @Body() body: UpdateReceptionDto,
+  ) {
+    return this.visits.updateReception(id, body);
+  }
+
   @Post(':id/triage')
-  @Roles('ADMIN', 'NURSE')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'NURSE')
   recordTriage(@Param('id') id: string, @Body() body: TriageDto) {
     return this.visits.recordTriage(
       id,
       body.vitals,
       body.doctorName,
       body.nurseName,
+      body.doctorStaffId,
     );
   }
 
@@ -93,7 +110,7 @@ export class VisitsController {
   }
 
   @Post(':id/collect-consult-fee')
-  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
   @ApiOperation({
     summary: 'Finance desk: issue consult invoice and collect cash/M-Pesa',
   })
@@ -109,13 +126,13 @@ export class VisitsController {
   }
 
   @Post(':id/start-consultation')
-  @Roles('ADMIN', 'DOCTOR')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'DOCTOR')
   startConsultation(@Param('id') id: string) {
     return this.visits.startConsultation(id);
   }
 
   @Post(':id/clinical-notes')
-  @Roles('ADMIN', 'DOCTOR')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'DOCTOR')
   @ApiOperation({
     summary: 'Save full clinical consultation narrative mid-consult',
   })
@@ -127,7 +144,7 @@ export class VisitsController {
   }
 
   @Post(':id/clinical-orders')
-  @Roles('ADMIN', 'DOCTOR')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'DOCTOR')
   @ApiOperation({
     summary: 'Save ordered services / procedures / surgeries mid-consult',
   })
@@ -139,7 +156,7 @@ export class VisitsController {
   }
 
   @Post(':id/order-labs')
-  @Roles('ADMIN', 'DOCTOR')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'DOCTOR')
   orderLabs(
     @Param('id') id: string,
     @Body() body: OrderLabsDto,
@@ -149,7 +166,7 @@ export class VisitsController {
   }
 
   @Post(':id/lab-results')
-  @Roles('ADMIN', 'LAB_TECHNICIAN')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'LAB_TECHNICIAN')
   submitLabResults(
     @Param('id') id: string,
     @Body() body: LabResultsDto,
@@ -164,7 +181,7 @@ export class VisitsController {
   }
 
   @Post(':id/complete')
-  @Roles('ADMIN', 'DOCTOR')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'DOCTOR')
   complete(
     @Param('id') id: string,
     @Body() body: CompleteConsultationDto,
@@ -174,7 +191,7 @@ export class VisitsController {
   }
 
   @Post(':id/billing')
-  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
   finalizeBilling(
     @Param('id') id: string,
     @Body() body: FinalizeBillingDto,
@@ -189,7 +206,7 @@ export class VisitsController {
   }
 
   @Patch(':id/claim-status')
-  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
   updateClaimStatus(
     @Param('id') id: string,
     @Body() body: ClaimStatusDto,
@@ -199,7 +216,7 @@ export class VisitsController {
   }
 
   @Post(':id/sign-off')
-  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
   @ApiOperation({
     summary: 'Sign off patient after claim acceptance (or cash settlement)',
   })

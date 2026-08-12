@@ -1,5 +1,7 @@
 import { Controller, Get, Param, ParseUUIDPipe, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../../common/decorators/user.decorator';
+import type { AuthUserPublic } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
@@ -141,8 +143,8 @@ export class CatalogController {
 
   @Get('appointments/summary')
   @ApiOperation({ summary: 'Appointment KPI counts for the ledger header' })
-  appointmentSummary() {
-    return this.catalog.appointmentSummary();
+  appointmentSummary(@CurrentUser() user: AuthUserPublic) {
+    return this.catalog.appointmentSummary(user);
   }
 
   @Get('appointments/:id')
@@ -153,6 +155,7 @@ export class CatalogController {
 
   @Get('appointments')
   appointments(
+    @CurrentUser() user: AuthUserPublic,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('search') search?: string,
@@ -161,15 +164,18 @@ export class CatalogController {
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
-    return this.catalog.listAppointments({
-      page: page ? Number(page) : 1,
-      limit: limit ? Number(limit) : 50,
-      search,
-      status,
-      doctorId,
-      from,
-      to,
-    });
+    return this.catalog.listAppointments(
+      {
+        page: page ? Number(page) : 1,
+        limit: limit ? Number(limit) : 50,
+        search,
+        status,
+        doctorId,
+        from,
+        to,
+      },
+      user,
+    );
   }
 
   @Get('inventory')

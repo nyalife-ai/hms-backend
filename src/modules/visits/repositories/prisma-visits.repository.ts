@@ -46,6 +46,17 @@ export class PrismaVisitsRepository implements IVisitsRepository {
     return this.prisma.outpatientVisits.findUnique({ where: { id } });
   }
 
+  public async findByAppointmentId(
+    appointmentId: string,
+  ): Promise<VisitRow | null> {
+    return this.prisma.outpatientVisits.findFirst({
+      where: {
+        payload: { path: ['appointmentId'], equals: appointmentId },
+      },
+      orderBy: { checked_in_at: 'desc' },
+    });
+  }
+
   public async create(data: {
     id?: string;
     patientId: string | null;
@@ -142,6 +153,7 @@ export class PrismaVisitsRepository implements IVisitsRepository {
     status: string;
     notes: string;
     requestedBy: string;
+    consultationId?: string | null;
   }): Promise<void> {
     await this.prisma.laboratoryRequests.upsert({
       where: { request_number: input.requestNumber },
@@ -152,8 +164,15 @@ export class PrismaVisitsRepository implements IVisitsRepository {
         status: input.status,
         notes: input.notes,
         requested_by: input.requestedBy,
+        consultation_id: input.consultationId || null,
       },
-      update: { status: input.status, notes: input.notes },
+      update: {
+        status: input.status,
+        notes: input.notes,
+        ...(input.consultationId
+          ? { consultation_id: input.consultationId }
+          : {}),
+      },
     });
   }
 

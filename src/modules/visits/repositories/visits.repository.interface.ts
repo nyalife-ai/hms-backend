@@ -26,6 +26,7 @@ export interface IVisitsRepository {
   count(): Promise<number>;
   findAllOrdered(): Promise<VisitRow[]>;
   findById(id: string): Promise<VisitRow | null>;
+  findByAppointmentId(appointmentId: string): Promise<VisitRow | null>;
   create(data: {
     id?: string;
     patientId: string | null;
@@ -65,6 +66,7 @@ export interface IVisitsRepository {
     status: string;
     notes: string;
     requestedBy: string;
+    consultationId?: string | null;
   }): Promise<void>;
   findAdminUserId(): Promise<string | undefined>;
 }

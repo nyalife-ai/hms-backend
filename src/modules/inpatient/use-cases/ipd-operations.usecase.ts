@@ -8,10 +8,12 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../../database/prisma/prisma.service';
 import { HmsAuditWriter } from '../../audit/hms-audit.writer';
+import { PharmacyJourneyUseCase } from '../../pharmacy/use-cases/pharmacy-journey.usecase';
 
 const BED_STATUSES = [
   'AVAILABLE',
@@ -66,11 +68,22 @@ const MANUAL_BED_TRANSITIONS: Record<string, string[]> = {
   OCCUPIED: [], // only via admit/transfer/discharge/convert
 };
 
+const NOTE_TYPES = [
+  'ADMISSION',
+  'NURSING',
+  'PROGRESS',
+  'DOCTOR',
+  'HANDOVER',
+  'VITALS',
+  'MEDICATION',
+] as const;
+
 @Injectable()
 export class IpdOperationsUseCase {
   public constructor(
     private readonly prisma: PrismaService,
     private readonly audit: HmsAuditWriter,
+    @Optional() private readonly pharmacy?: PharmacyJourneyUseCase,
   ) {}
 
   // ── Overview ──────────────────────────────────────────────
@@ -907,6 +920,7 @@ export class IpdOperationsUseCase {
     admissionId: string;
     nurseId: string;
     notesText: string;
+    noteType?: string;
     vitalSignsSnapshot?: Record<string, unknown>;
     actorUserId?: string;
   }) {
@@ -938,14 +952,22 @@ export class IpdOperationsUseCase {
         'vitalSignsSnapshot must be a JSON object when provided',
       );
     }
+    const noteType = (input.noteType || 'NURSING').toUpperCase();
+    if (!NOTE_TYPES.includes(noteType as (typeof NOTE_TYPES)[number])) {
+      throw new BadRequestException(
+        `noteType must be one of ${NOTE_TYPES.join(', ')}`,
+      );
+    }
+    const snapshot = {
+      ...(input.vitalSignsSnapshot ?? {}),
+      noteType,
+    };
     const note = await this.prisma.nursingNotes.create({
       data: {
         admission_id: input.admissionId,
         nurse_id: nurse.id,
         notes_text: input.notesText.trim(),
-        vital_signs_snapshot: input.vitalSignsSnapshot
-          ? (input.vitalSignsSnapshot as Prisma.InputJsonValue)
-          : undefined,
+        vital_signs_snapshot: snapshot as Prisma.InputJsonValue,
       },
     });
     await this.audit.recordMutation({
@@ -953,9 +975,9 @@ export class IpdOperationsUseCase {
       action: 'CREATE',
       entityType: 'inpatient.nursing_notes',
       entityId: note.id,
-      newValues: { admissionId: input.admissionId },
+      newValues: { admissionId: input.admissionId, noteType },
     });
-    return note;
+    return this.mapNursingNote(note, nurse);
   }
 
   public async getNursingNote(noteId: string) {
@@ -991,18 +1013,208 @@ export class IpdOperationsUseCase {
       orderBy: { created_at: 'desc' },
       take: 100,
     });
-    return rows.map((n) => {
-      const np = n.nurse.user.core_profiles_user_id[0];
-      return {
-        id: n.id,
-        admissionId: n.admission_id,
-        notesText: n.notes_text,
-        vitalSignsSnapshot: n.vital_signs_snapshot,
-        nurseId: n.nurse_id,
-        nurseName: np ? `${np.first_name} ${np.last_name}` : n.nurse.employee_id,
-        createdAt: n.created_at.toISOString(),
-      };
+    return rows.map((n) => this.mapNoteRow(n));
+  }
+
+  public async listAdmissionVitals(admissionId: string) {
+    const notes = await this.listNursingNotes(admissionId);
+    return notes
+      .map((n) => {
+        const snap = (n.vitalSignsSnapshot ?? {}) as Record<string, unknown>;
+        const vitals = {
+          temperature: snap.temperature ?? snap.temp,
+          systolic: snap.systolic,
+          diastolic: snap.diastolic,
+          pulse: snap.pulse ?? snap.hr,
+          respRate: snap.respRate ?? snap.rr,
+          spo2: snap.spo2,
+          weightKg: snap.weightKg,
+          bp: snap.bp,
+        };
+        const has =
+          vitals.temperature ||
+          vitals.pulse ||
+          vitals.bp ||
+          vitals.systolic ||
+          vitals.spo2;
+        if (!has && n.noteType !== 'VITALS') return null;
+        return {
+          id: n.id,
+          recordedAt: n.createdAt,
+          recordedBy: n.nurseName,
+          noteType: n.noteType,
+          notes: n.notesText,
+          ...vitals,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  public async recordAdmissionVitals(input: {
+    admissionId: string;
+    nurseId: string;
+    actorUserId?: string;
+    vitals: {
+      temperature?: string;
+      systolic?: string;
+      diastolic?: string;
+      pulse?: string;
+      respRate?: string;
+      spo2?: string;
+      weightKg?: string;
+      notes?: string;
+    };
+  }) {
+    const bp =
+      input.vitals.systolic && input.vitals.diastolic
+        ? `${input.vitals.systolic}/${input.vitals.diastolic}`
+        : undefined;
+    return this.addNursingNote({
+      admissionId: input.admissionId,
+      nurseId: input.nurseId,
+      notesText: input.vitals.notes?.trim() || 'Vitals recorded',
+      noteType: 'VITALS',
+      actorUserId: input.actorUserId,
+      vitalSignsSnapshot: {
+        temperature: input.vitals.temperature,
+        systolic: input.vitals.systolic,
+        diastolic: input.vitals.diastolic,
+        pulse: input.vitals.pulse,
+        respRate: input.vitals.respRate,
+        spo2: input.vitals.spo2,
+        weightKg: input.vitals.weightKg,
+        bp,
+      },
     });
+  }
+
+  public async listWardMedications(admissionId: string) {
+    const admission = await this.prisma.admissions.findFirst({
+      where: { id: admissionId },
+    });
+    if (!admission) throw new NotFoundException('Admission not found');
+    if (!this.pharmacy) return [];
+    const listed = await this.pharmacy.listPrescriptions({
+      patientId: admission.patient_id,
+      page: 1,
+      limit: 50,
+    });
+    const admittedAt = admission.admission_date;
+    return listed.items.filter((rx) => {
+      const notes = rx.notes || '';
+      if (notes.includes(admissionId)) return true;
+      const when = rx.prescriptionDate
+        ? new Date(rx.prescriptionDate)
+        : null;
+      if (!when || !admittedAt) return false;
+      const end = admission.discharge_date ?? new Date();
+      return when >= admittedAt && when <= end;
+    });
+  }
+
+  public async orderWardMedication(input: {
+    admissionId: string;
+    prescribedByStaffId: string;
+    notes?: string;
+    lines: Array<{
+      medicationId: string;
+      dosage: string;
+      frequency: string;
+      duration: string;
+      quantity: number;
+      instructions?: string;
+    }>;
+    actorUserId?: string;
+  }) {
+    const admission = await this.prisma.admissions.findFirst({
+      where: { id: input.admissionId, status: 'ADMITTED' },
+    });
+    if (!admission) throw new NotFoundException('Active admission not found');
+    if (!this.pharmacy) {
+      throw new BadRequestException('Pharmacy is not available');
+    }
+    const rx = await this.pharmacy.createPrescription({
+      patientId: admission.patient_id,
+      prescribedByStaffId: input.prescribedByStaffId,
+      notes: JSON.stringify({
+        admissionId: input.admissionId,
+        source: 'WARD',
+        text: input.notes || '',
+      }),
+      lines: input.lines,
+      actorUserId: input.actorUserId,
+    });
+    await this.addNursingNote({
+      admissionId: input.admissionId,
+      nurseId: input.prescribedByStaffId,
+      notesText: `Ward medication ordered: ${input.lines
+        .map((l) => l.dosage)
+        .join(', ')}`,
+      noteType: 'MEDICATION',
+      actorUserId: input.actorUserId,
+      vitalSignsSnapshot: { prescriptionId: rx.id },
+    });
+    return rx;
+  }
+
+  private mapNoteRow(n: {
+    id: string;
+    admission_id: string;
+    notes_text: string;
+    vital_signs_snapshot: unknown;
+    nurse_id: string;
+    created_at: Date;
+    nurse: {
+      employee_id: string;
+      user: { core_profiles_user_id: { first_name: string; last_name: string }[] };
+    };
+  }) {
+    const np = n.nurse.user.core_profiles_user_id[0];
+    const snap =
+      n.vital_signs_snapshot &&
+      typeof n.vital_signs_snapshot === 'object' &&
+      !Array.isArray(n.vital_signs_snapshot)
+        ? (n.vital_signs_snapshot as Record<string, unknown>)
+        : null;
+    return {
+      id: n.id,
+      admissionId: n.admission_id,
+      notesText: n.notes_text,
+      noteType: typeof snap?.noteType === 'string' ? snap.noteType : 'NURSING',
+      vitalSignsSnapshot: snap,
+      nurseId: n.nurse_id,
+      nurseName: np ? `${np.first_name} ${np.last_name}` : n.nurse.employee_id,
+      createdAt: n.created_at.toISOString(),
+    };
+  }
+
+  private mapNursingNote(
+    note: {
+      id: string;
+      admission_id: string;
+      notes_text: string;
+      vital_signs_snapshot: unknown;
+      nurse_id: string;
+      created_at: Date;
+    },
+    nurse: { employee_id: string; id: string },
+  ) {
+    const snap =
+      note.vital_signs_snapshot &&
+      typeof note.vital_signs_snapshot === 'object' &&
+      !Array.isArray(note.vital_signs_snapshot)
+        ? (note.vital_signs_snapshot as Record<string, unknown>)
+        : null;
+    return {
+      id: note.id,
+      admissionId: note.admission_id,
+      notesText: note.notes_text,
+      noteType: typeof snap?.noteType === 'string' ? snap.noteType : 'NURSING',
+      vitalSignsSnapshot: snap,
+      nurseId: nurse.id,
+      nurseName: nurse.employee_id,
+      createdAt: note.created_at.toISOString(),
+    };
   }
 
   // ── Discharge summary ─────────────────────────────────────
