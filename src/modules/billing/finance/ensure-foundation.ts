@@ -4,11 +4,60 @@
  */
 
 import type { PrismaClient } from '../../../generated/prisma';
+import {
+  resolveRevenueAccountCode,
+  REVENUE_ACCOUNT_CODES,
+} from '../domain/service-revenue-account';
 
 type Db = Pick<
   PrismaClient,
   'accounts' | 'paymentMethods' | 'services' | 'postingPeriods' | 'taxRates'
 >;
+
+/** Link every active service missing revenue_account_id to a postable REVENUE leaf. */
+export async function backfillServiceRevenueAccounts(
+  prisma: Db,
+): Promise<{ updated: number; stillUnmapped: number }> {
+  const revenueRows = await prisma.accounts.findMany({
+    where: {
+      account_code: { in: Object.values(REVENUE_ACCOUNT_CODES) },
+      is_active: true,
+      is_postable: true,
+    },
+    select: { id: true, account_code: true },
+  });
+  const revenueByCode = new Map(
+    revenueRows.map((a) => [a.account_code, a.id]),
+  );
+  if (revenueByCode.size === 0) return { updated: 0, stillUnmapped: 0 };
+
+  const unmapped = await prisma.services.findMany({
+    where: { is_active: true, revenue_account_id: null },
+    select: {
+      id: true,
+      service_code: true,
+      service_name: true,
+      category: true,
+    },
+  });
+
+  let updated = 0;
+  for (const svc of unmapped) {
+    const accountCode = resolveRevenueAccountCode(svc);
+    const accountId = revenueByCode.get(accountCode);
+    if (!accountId) continue;
+    await prisma.services.update({
+      where: { id: svc.id },
+      data: { revenue_account_id: accountId },
+    });
+    updated += 1;
+  }
+
+  const stillUnmapped = await prisma.services.count({
+    where: { is_active: true, revenue_account_id: null },
+  });
+  return { updated, stillUnmapped };
+}
 
 export async function ensureBillingFoundation(prisma: Db): Promise<void> {
   const cash = await prisma.accounts.upsert({
@@ -195,6 +244,9 @@ export async function ensureBillingFoundation(prisma: Db): Promise<void> {
       },
     });
   }
+
+  // Fee-schedule rows (000-01., lab catalog, etc.) often lack GL links after import.
+  await backfillServiceRevenueAccounts(prisma);
 
   await prisma.taxRates.upsert({
     where: { tax_code: 'VAT0' },

@@ -40,6 +40,7 @@ import {
   reverseJournal,
   type JournalLineInput,
 } from './finance/journal.engine';
+import { resolveRevenueAccountCode } from './domain/service-revenue-account';
 import { nextDocumentNumber, withNumberRetry } from './finance/numbering';
 
 export const CONTROL_CODES = {
@@ -166,6 +167,24 @@ export class BillingFinanceService {
     }
     assertPostableActiveAccount(account);
     return account;
+  }
+
+  /** Resolve a postable REVENUE account id from category/code/name heuristics. */
+  private async resolveDefaultRevenueAccountId(
+    tx: Tx | PrismaService,
+    input: {
+      category?: string | null;
+      serviceCode?: string | null;
+      serviceName?: string | null;
+    },
+  ): Promise<string | null> {
+    const accountCode = resolveRevenueAccountCode(input);
+    const account = await tx.accounts.findUnique({
+      where: { account_code: accountCode },
+    });
+    if (!account || !account.is_active || !account.is_postable) return null;
+    if (account.account_type !== 'REVENUE') return null;
+    return account.id;
   }
 
   private async requireLiabilityAccount(tx: Tx, accountId: string) {
@@ -358,10 +377,23 @@ export class BillingFinanceService {
     const price = moneyFrom(input.standardPrice);
     assertNonNegative(price, 'Standard price');
     const isActive = input.isActive ?? true;
-    if (isActive && input.revenueAccountId) {
-      await this.requireRevenueAccount(this.prisma, input.revenueAccountId);
-    }
+    const serviceCode = input.serviceCode.trim();
+    const serviceName = input.serviceName.trim();
     const categoryName = input.category?.trim() || null;
+    let revenueAccountId = input.revenueAccountId ?? null;
+    if (!revenueAccountId && isActive) {
+      revenueAccountId = await this.resolveDefaultRevenueAccountId(
+        this.prisma,
+        {
+          category: categoryName,
+          serviceCode,
+          serviceName,
+        },
+      );
+    }
+    if (isActive && revenueAccountId) {
+      await this.requireRevenueAccount(this.prisma, revenueAccountId);
+    }
     let categoryId: string | null = null;
     if (categoryName) {
       const slug = categoryName
@@ -382,13 +414,13 @@ export class BillingFinanceService {
     }
     const row = await this.prisma.services.create({
       data: {
-        service_code: input.serviceCode.trim(),
-        service_name: input.serviceName.trim(),
+        service_code: serviceCode,
+        service_name: serviceName,
         category: categoryName,
         category_id: categoryId,
         description: input.description?.trim() || null,
         standard_price: moneyToDecimal(price),
-        revenue_account_id: input.revenueAccountId ?? null,
+        revenue_account_id: revenueAccountId,
         is_active: isActive,
       },
     });
@@ -417,10 +449,21 @@ export class BillingFinanceService {
     const existing = await this.prisma.services.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Service not found');
     const nextActive = input.isActive ?? existing.is_active;
-    const nextRevenue =
+    let nextRevenue =
       input.revenueAccountId !== undefined
         ? input.revenueAccountId
         : existing.revenue_account_id;
+    if (nextActive && !nextRevenue) {
+      nextRevenue = await this.resolveDefaultRevenueAccountId(this.prisma, {
+        category:
+          input.category !== undefined ? input.category : existing.category,
+        serviceCode: existing.service_code,
+        serviceName:
+          input.serviceName !== undefined
+            ? input.serviceName
+            : existing.service_name,
+      });
+    }
     if (nextActive && nextRevenue) {
       await this.requireRevenueAccount(this.prisma, nextRevenue);
     }
@@ -434,8 +477,8 @@ export class BillingFinanceService {
       assertNonNegative(price, 'Standard price');
       data.standard_price = moneyToDecimal(price);
     }
-    if (input.revenueAccountId !== undefined)
-      data.revenue_account_id = input.revenueAccountId;
+    if (input.revenueAccountId !== undefined || nextRevenue !== existing.revenue_account_id)
+      data.revenue_account_id = nextRevenue;
     if (input.isActive !== undefined) data.is_active = input.isActive;
     const row = await this.prisma.services.update({ where: { id }, data });
     await this.audit.recordMutation({

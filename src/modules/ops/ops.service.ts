@@ -1070,23 +1070,10 @@ export class OpsService {
       },
       update: { is_active: true },
     });
-    for (const s of [
-      { code: 'CONSULT', name: 'Outpatient Consultation', price: 2500 },
-      { code: 'LAB', name: 'Laboratory Test', price: 1500 },
-      { code: 'MED', name: 'Medication Dispense', price: 800 },
-    ]) {
-      await this.prisma.services.upsert({
-        where: { service_code: s.code },
-        create: {
-          service_code: s.code,
-          service_name: s.name,
-          standard_price: s.price,
-          is_active: true,
-        },
-        // Keep clinic fee-schedule prices; only ensure the row exists.
-        update: { is_active: true },
-      });
-    }
+    const { ensureBillingFoundation } = await import(
+      '../billing/finance/ensure-foundation'
+    );
+    await ensureBillingFoundation(this.prisma);
     return { policiesCreated: policies, feeSchedule: true };
   }
 }

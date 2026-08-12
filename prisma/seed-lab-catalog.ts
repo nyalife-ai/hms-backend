@@ -5,6 +5,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Prisma, type PrismaClient } from '../src/generated/prisma';
+import { resolveRevenueAccountCode } from '../src/modules/billing/domain/service-revenue-account';
 
 const LAB_CATEGORIES = new Set([
   'Hematology',
@@ -168,6 +169,32 @@ async function ensureServiceCategory(
   return row.id;
 }
 
+async function loadRevenueAccountIds(
+  prisma: PrismaClient,
+): Promise<Map<string, string>> {
+  const rows = await prisma.accounts.findMany({
+    where: {
+      account_code: { in: ['4100', '4200', '4300', '4400', '4500'] },
+      is_active: true,
+      is_postable: true,
+    },
+    select: { id: true, account_code: true },
+  });
+  return new Map(rows.map((r) => [r.account_code, r.id]));
+}
+
+function revenueAccountIdFor(
+  revenueByCode: Map<string, string>,
+  input: {
+    category: string;
+    serviceCode: string;
+    serviceName: string;
+  },
+): string | null {
+  const code = resolveRevenueAccountCode(input);
+  return revenueByCode.get(code) ?? null;
+}
+
 export async function seedLabCatalog(prisma: PrismaClient): Promise<void> {
   const csvPath = path.join(__dirname, 'data', 'lab_test_types.csv');
   if (!fs.existsSync(csvPath)) {
@@ -178,6 +205,7 @@ export async function seedLabCatalog(prisma: PrismaClient): Promise<void> {
   const rows = parseCsv(csvPath);
   const testCatCache = new Map<string, string>();
   const svcCatCache = new Map<string, string>();
+  const revenueByCode = await loadRevenueAccountIds(prisma);
   let labCount = 0;
   let svcCount = 0;
   let paramCount = 0;
@@ -283,6 +311,11 @@ export async function seedLabCatalog(prisma: PrismaClient): Promise<void> {
       description,
       `CLIN-${String(row.test_type_id).padStart(4, '0')}`,
     );
+    const revenueAccountId = revenueAccountIdFor(revenueByCode, {
+      category,
+      serviceCode: code,
+      serviceName: name,
+    });
     try {
       await prisma.services.upsert({
         where: { service_code: code },
@@ -293,6 +326,7 @@ export async function seedLabCatalog(prisma: PrismaClient): Promise<void> {
           category_id: categoryId,
           description,
           standard_price: price,
+          revenue_account_id: revenueAccountId,
           is_active: isActive,
         },
         update: {
@@ -302,6 +336,7 @@ export async function seedLabCatalog(prisma: PrismaClient): Promise<void> {
           description,
           standard_price: price,
           is_active: isActive,
+          ...(revenueAccountId ? { revenue_account_id: revenueAccountId } : {}),
         },
       });
       svcCount += 1;
@@ -312,6 +347,11 @@ export async function seedLabCatalog(prisma: PrismaClient): Promise<void> {
         err.code === 'P2002'
       ) {
         const alt = `CLIN-${String(row.test_type_id).padStart(4, '0')}`;
+        const altRevenue = revenueAccountIdFor(revenueByCode, {
+          category,
+          serviceCode: alt,
+          serviceName: name,
+        });
         await prisma.services.upsert({
           where: { service_code: alt },
           create: {
@@ -321,6 +361,7 @@ export async function seedLabCatalog(prisma: PrismaClient): Promise<void> {
             category_id: categoryId,
             description,
             standard_price: price,
+            revenue_account_id: altRevenue,
             is_active: isActive,
           },
           update: {
@@ -330,6 +371,7 @@ export async function seedLabCatalog(prisma: PrismaClient): Promise<void> {
             description,
             standard_price: price,
             is_active: isActive,
+            ...(altRevenue ? { revenue_account_id: altRevenue } : {}),
           },
         });
         svcCount += 1;

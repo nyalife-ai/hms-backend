@@ -19,6 +19,7 @@ import {
   clinicalServiceKind,
   isSystemFeeCode,
 } from '../../catalog/clinical-service.util';
+import { resolveRevenueAccountCode } from '../../billing/domain/service-revenue-account';
 
 export const LAB_PRIORITIES = ['NORMAL', 'URGENT', 'STAT'] as const;
 export const LAB_REQUEST_STATUSES = [
@@ -1128,6 +1129,26 @@ export class LabOperationsUseCase {
     return row.id;
   }
 
+  private async resolveServiceRevenueAccountId(input: {
+    category?: string | null;
+    serviceCode: string;
+    serviceName: string;
+  }): Promise<string | null> {
+    const accountCode = resolveRevenueAccountCode(input);
+    const account = await this.prisma.accounts.findUnique({
+      where: { account_code: accountCode },
+    });
+    if (
+      !account ||
+      !account.is_active ||
+      !account.is_postable ||
+      account.account_type !== 'REVENUE'
+    ) {
+      return null;
+    }
+    return account.id;
+  }
+
   private mapTestType(
     t: {
       id: string;
@@ -1426,6 +1447,11 @@ export class LabOperationsUseCase {
       const categoryId = categoryName
         ? await this.resolveServiceCategoryId(categoryName)
         : null;
+      const revenueAccountId = await this.resolveServiceRevenueAccountId({
+        category: categoryName,
+        serviceCode: code,
+        serviceName: name,
+      });
       const row = await this.prisma.services.create({
         data: {
           service_code: code,
@@ -1434,6 +1460,7 @@ export class LabOperationsUseCase {
           category_id: categoryId,
           description: input.description?.trim() || null,
           standard_price: new Prisma.Decimal(Number(input.standardPrice) || 0),
+          revenue_account_id: revenueAccountId,
           is_active: input.isActive ?? true,
         },
       });
@@ -1500,6 +1527,20 @@ export class LabOperationsUseCase {
       data.standard_price = new Prisma.Decimal(Number(input.standardPrice) || 0);
     }
     if (input.isActive !== undefined) data.is_active = input.isActive;
+
+    const nextCategory =
+      input.category !== undefined ? input.category?.trim() || null : existing.category;
+    const nextName =
+      input.serviceName !== undefined ? input.serviceName.trim() : existing.service_name;
+    const nextActive = input.isActive ?? existing.is_active;
+    if (nextActive && !existing.revenue_account_id) {
+      const revenueAccountId = await this.resolveServiceRevenueAccountId({
+        category: nextCategory,
+        serviceCode: existing.service_code,
+        serviceName: nextName,
+      });
+      if (revenueAccountId) data.revenue_account_id = revenueAccountId;
+    }
 
     const row = await this.prisma.services.update({ where: { id }, data });
     await this.audit.recordMutation({
