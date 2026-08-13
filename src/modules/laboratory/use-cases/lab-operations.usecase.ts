@@ -136,7 +136,85 @@ export class LabOperationsUseCase {
       resultsAwaitingVerification: awaitingVerification,
       criticalUnverified,
       todaysCompleted,
+      outpatientQueue: await this.buildOutpatientLabQueue(),
     };
+  }
+
+  /**
+   * LAB_PENDING outpatient visits still awaiting lab work (not yet released).
+   * Badge source of truth = linked laboratory.requests status.
+   */
+  private async buildOutpatientLabQueue() {
+    const visits = await this.prisma.outpatientVisits.findMany({
+      where: { stage: 'LAB_PENDING' },
+      orderBy: { updated_at: 'asc' },
+      take: 50,
+      select: {
+        id: true,
+        mrn: true,
+        patient_name: true,
+        payload: true,
+        updated_at: true,
+      },
+    });
+
+    const queue: Array<{
+      visitId: string;
+      mrn: string;
+      patientName: string;
+      testCount: number;
+      requestId: string | null;
+      requestNumber: string | null;
+      requestStatus: string | null;
+      released: boolean;
+      badge: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'RELEASED';
+    }> = [];
+
+    for (const v of visits) {
+      const payload =
+        v.payload && typeof v.payload === 'object'
+          ? (v.payload as { labOrder?: { tests?: unknown[] } })
+          : null;
+      const testCount = Array.isArray(payload?.labOrder?.tests)
+        ? payload!.labOrder!.tests!.length
+        : 0;
+      const requestNumber = `LAB-${v.id.slice(0, 8).toUpperCase()}`;
+      const request = await this.prisma.laboratoryRequests.findFirst({
+        where: {
+          OR: [
+            { request_number: requestNumber },
+            { notes: { contains: v.id } },
+          ],
+        },
+        select: { id: true, request_number: true, status: true, notes: true },
+        orderBy: { updated_at: 'desc' },
+      });
+
+      const parsed = this.parseNotes(request?.notes ?? null);
+      const released = Boolean(parsed.releasedToDoctorAt);
+      // Released visits should not linger on the lab work queue
+      if (released) continue;
+
+      let badge: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'RELEASED' =
+        'PENDING';
+      if (request?.status === 'IN_PROGRESS') badge = 'IN_PROGRESS';
+      else if (request?.status === 'COMPLETED') badge = 'COMPLETED';
+      else if (request?.status === 'PENDING') badge = 'PENDING';
+
+      queue.push({
+        visitId: v.id,
+        mrn: v.mrn,
+        patientName: v.patient_name,
+        testCount,
+        requestId: request?.id ?? null,
+        requestNumber: request?.request_number ?? requestNumber,
+        requestStatus: request?.status ?? null,
+        released: false,
+        badge,
+      });
+    }
+
+    return queue;
   }
 
   // ── Test types ────────────────────────────────────────────

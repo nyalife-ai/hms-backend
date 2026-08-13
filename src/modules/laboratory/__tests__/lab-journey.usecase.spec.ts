@@ -70,7 +70,8 @@ describe('LabJourneyUseCase', () => {
       }),
     } as unknown as LabOperationsUseCase;
     prisma.user = { findFirst: jest.fn() };
-    prisma.outpatientVisits = { updateMany: jest.fn().mockResolvedValue({ count: 1 }) };
+    prisma.outpatientVisits = { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findFirst: jest.fn() };
+    prisma.$queryRaw = jest.fn().mockResolvedValue([]);
     journey = new LabJourneyUseCase(prisma, events, audit as any, ops);
     jest.clearAllMocks();
   });
@@ -250,12 +251,15 @@ describe('LabJourneyUseCase', () => {
     prisma.laboratoryRequests.findFirst.mockResolvedValue({
       id: 'r1',
       status: 'COMPLETED',
+      request_number: 'LAB-VISIT001',
       notes: JSON.stringify({
         orderedTestTypeIds: ['tt1'],
         visitId: 'visit-1',
       }),
     });
+    prisma.outpatientVisits.findFirst.mockResolvedValue({ id: 'visit-1' });
     prisma.laboratoryRequests.update.mockResolvedValue({});
+    prisma.outpatientVisits.updateMany.mockResolvedValue({ count: 1 });
     (ops.getRequest as jest.Mock).mockResolvedValue({
       id: 'r1',
       status: 'COMPLETED',
@@ -281,6 +285,44 @@ describe('LabJourneyUseCase', () => {
       'lab.result.released',
       expect.objectContaining({ requestId: 'r1', visitId: 'visit-1' }),
     );
+  });
+
+  it('recovers visitId from LAB- request number when notes lost it', async () => {
+    const visitId = '4a49d555-5c81-4455-8dfa-32a0e664c124';
+    prisma.laboratoryRequests.findFirst.mockResolvedValue({
+      id: 'r1',
+      status: 'COMPLETED',
+      request_number: 'LAB-4A49D555',
+      notes: JSON.stringify({
+        orderedTestTypeIds: ['tt1'],
+        releasedToDoctorAt: '2026-08-13T12:00:00.000Z',
+        releasedToDoctorBy: 'tech-1',
+      }),
+    });
+    prisma.outpatientVisits.findFirst.mockResolvedValue(null);
+    prisma.$queryRaw.mockResolvedValue([{ id: visitId }]);
+    prisma.laboratoryRequests.update.mockResolvedValue({});
+    prisma.outpatientVisits.updateMany.mockResolvedValue({ count: 1 });
+    (ops.getRequest as jest.Mock).mockResolvedValue({
+      id: 'r1',
+      status: 'COMPLETED',
+      releasedToDoctor: true,
+      visitId,
+    });
+
+    await journey.releaseToDoctor({
+      requestId: 'r1',
+      actorUserId: 'tech-1',
+    });
+
+    expect(prisma.$queryRaw).toHaveBeenCalled();
+    expect(ops.encodeNotesPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ visitId }),
+    );
+    expect(prisma.outpatientVisits.updateMany).toHaveBeenCalledWith({
+      where: { id: visitId, stage: 'LAB_PENDING' },
+      data: { stage: 'RESULTS_READY' },
+    });
   });
 
   it('cancels open request and related samples', async () => {

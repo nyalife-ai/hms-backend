@@ -56,6 +56,16 @@ export class LaboratoryController {
     return this.ops.overview();
   }
 
+  @Post('repair-released-visits')
+  @Roles('ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({
+    summary:
+      'Repair LAB_PENDING visits whose lab requests were already released to the doctor',
+  })
+  repairReleasedVisits(@CurrentUser() user: AuthUserPublic) {
+    return this.journey.repairReleasedVisitStages(user.id);
+  }
+
   @Get('visit-report')
   @Roles(...LAB_READ)
   @ApiOperation({

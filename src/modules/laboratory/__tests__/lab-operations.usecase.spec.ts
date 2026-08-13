@@ -37,6 +37,11 @@ describe('LabOperationsUseCase', () => {
       },
       samples: { findMany: jest.fn(), findFirst: jest.fn(), count: jest.fn() },
       results: { findMany: jest.fn(), count: jest.fn() },
+      outpatientVisits: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn(),
+        updateMany: jest.fn(),
+      },
       services: {
         findMany: jest.fn(),
         count: jest.fn(),

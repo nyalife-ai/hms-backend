@@ -640,42 +640,155 @@ export class LabJourneyUseCase {
     }
 
     const parsed = this.ops.parseNotes(request.notes);
-    if (parsed.releasedToDoctorAt) {
-      // Idempotent — still ensure visit stage is RESULTS_READY
-      await this.syncVisitResultsReady(parsed.visitId);
-      return this.ops.getRequest(input.requestId);
-    }
+    const visitId = await this.resolveVisitIdForRequest(request);
+    const releasedAt = parsed.releasedToDoctorAt || new Date().toISOString();
 
-    const releasedAt = new Date().toISOString();
+    // Always persist visitId + release metadata (repairs stripped notes)
     const notes = this.ops.encodeNotesPayload({
       ...parsed,
+      ...(visitId ? { visitId } : {}),
       releasedToDoctorAt: releasedAt,
-      releasedToDoctorBy: input.actorUserId,
+      releasedToDoctorBy: parsed.releasedToDoctorBy || input.actorUserId,
     });
     await this.prisma.laboratoryRequests.update({
       where: { id: input.requestId },
       data: { notes },
     });
 
-    await this.syncVisitResultsReady(parsed.visitId);
+    await this.syncVisitResultsReady(visitId);
 
-    await this.audit.recordMutation({
-      userId: input.actorUserId,
-      action: 'UPDATE',
-      entityType: 'laboratory.requests',
-      entityId: input.requestId,
-      newValues: {
-        releasedToDoctorAt: releasedAt,
-        releasedToDoctorBy: input.actorUserId,
-      },
-    });
-    this.events.emit(LAB_EVENTS.RESULT_RELEASED, {
-      requestId: input.requestId,
-      visitId: parsed.visitId ?? null,
-      releasedAt,
-    });
+    if (!parsed.releasedToDoctorAt) {
+      await this.audit.recordMutation({
+        userId: input.actorUserId,
+        action: 'UPDATE',
+        entityType: 'laboratory.requests',
+        entityId: input.requestId,
+        newValues: {
+          releasedToDoctorAt: releasedAt,
+          releasedToDoctorBy: input.actorUserId,
+          visitId: visitId ?? null,
+        },
+      });
+      this.events.emit(LAB_EVENTS.RESULT_RELEASED, {
+        requestId: input.requestId,
+        visitId: visitId ?? null,
+        releasedAt,
+      });
+    }
 
     return this.ops.getRequest(input.requestId);
+  }
+
+  /**
+   * One-shot / admin repair: advance visits stuck in LAB_PENDING when the
+   * linked lab request was already released to the doctor.
+   */
+  public async repairReleasedVisitStages(actorUserId?: string) {
+    const candidates = await this.prisma.laboratoryRequests.findMany({
+      where: {
+        status: 'COMPLETED',
+        notes: { contains: 'releasedToDoctorAt' },
+      },
+      select: {
+        id: true,
+        request_number: true,
+        notes: true,
+      },
+      take: 500,
+    });
+
+    let repaired = 0;
+    const items: Array<{
+      requestId: string;
+      visitId: string | null;
+      stageUpdated: boolean;
+      visitIdRestored: boolean;
+    }> = [];
+
+    for (const request of candidates) {
+      const parsed = this.ops.parseNotes(request.notes);
+      if (!parsed.releasedToDoctorAt) continue;
+
+      const visitId = await this.resolveVisitIdForRequest(request);
+      const visitIdRestored = Boolean(visitId && visitId !== parsed.visitId);
+      if (visitIdRestored || !parsed.visitId) {
+        const notes = this.ops.encodeNotesPayload({
+          ...parsed,
+          ...(visitId ? { visitId } : {}),
+        });
+        await this.prisma.laboratoryRequests.update({
+          where: { id: request.id },
+          data: { notes },
+        });
+      }
+
+      let stageUpdated = false;
+      if (visitId) {
+        const result = await this.prisma.outpatientVisits.updateMany({
+          where: { id: visitId, stage: 'LAB_PENDING' },
+          data: { stage: 'RESULTS_READY' },
+        });
+        stageUpdated = result.count > 0;
+      }
+
+      if (stageUpdated || visitIdRestored) {
+        repaired += 1;
+        if (actorUserId) {
+          await this.audit.recordMutation({
+            userId: actorUserId,
+            action: 'UPDATE',
+            entityType: 'laboratory.requests',
+            entityId: request.id,
+            newValues: {
+              repair: 'released_visit_sync',
+              visitId,
+              stageUpdated,
+            },
+          });
+        }
+      }
+
+      items.push({
+        requestId: request.id,
+        visitId,
+        stageUpdated,
+        visitIdRestored,
+      });
+    }
+
+    return { scanned: candidates.length, repaired, items };
+  }
+
+  /**
+   * Resolve outpatient visit id from notes.visitId or LAB-{uuidPrefix} request number.
+   */
+  private async resolveVisitIdForRequest(request: {
+    request_number: string | null;
+    notes: string | null;
+  }): Promise<string | null> {
+    const parsed = this.ops.parseNotes(request.notes);
+    if (parsed.visitId?.trim()) {
+      const byId = await this.prisma.outpatientVisits.findFirst({
+        where: { id: parsed.visitId.trim() },
+        select: { id: true },
+      });
+      if (byId) return byId.id;
+    }
+
+    const num = (request.request_number || '').trim().toUpperCase();
+    const match = /^LAB-([0-9A-F]{8})$/.exec(num);
+    if (!match) return null;
+    const prefix = match[1].toLowerCase();
+
+    // UuidFilter has no startsWith — match via SQL on clinical.outpatient_visits
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM clinical.outpatient_visits
+      WHERE id::text LIKE ${prefix + '%'}
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `;
+    return rows[0]?.id ?? null;
   }
 
   private async syncVisitResultsReady(visitId?: string | null) {
