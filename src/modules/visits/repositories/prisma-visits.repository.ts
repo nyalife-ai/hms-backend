@@ -103,6 +103,8 @@ export class PrismaVisitsRepository implements IVisitsRepository {
       firstVisit: boolean;
       reasonForVisit?: string | null;
       additionalNotes?: string | null;
+      triagePriority?: string | null;
+      triageCompletedAt?: Date | null;
       payload: unknown;
     },
   ): Promise<VisitRow> {
@@ -118,6 +120,12 @@ export class PrismaVisitsRepository implements IVisitsRepository {
         first_visit: data.firstVisit,
         reason_for_visit: data.reasonForVisit ?? null,
         additional_notes: data.additionalNotes ?? null,
+        ...(data.triagePriority !== undefined
+          ? { triage_priority: data.triagePriority }
+          : {}),
+        ...(data.triageCompletedAt !== undefined
+          ? { triage_completed_at: data.triageCompletedAt }
+          : {}),
         payload: data.payload as Prisma.InputJsonValue,
       },
     });

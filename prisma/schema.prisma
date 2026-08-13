@@ -446,12 +446,18 @@ model OutpatientVisits {
   checked_in_at DateTime @db.Timestamptz(6) @default(now())
   reason_for_visit String?
   additional_notes String?
+  /// Denormalized from payload.triage.priority for reporting/index (nullable)
+  triage_priority String? @db.VarChar(20)
+  /// Denormalized from payload.triage.completedAt
+  triage_completed_at DateTime? @db.Timestamptz(6)
   payload Json @default("{}")
   created_at DateTime @db.Timestamptz(6) @default(now())
   updated_at DateTime @db.Timestamptz(6) @updatedAt
   patient Patients? @relation(fields: [patient_id], references: [id], name: "OutpatientVisits_Patients_patient_id", onDelete: SetNull)
   @@index([stage])
   @@index([mrn])
+  @@index([triage_priority])
+  @@index([triage_completed_at])
   @@map("outpatient_visits")
   @@schema("clinical")
 }

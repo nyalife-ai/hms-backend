@@ -19,6 +19,14 @@ import { FollowUpsService } from '../follow-ups/follow-ups.service';
 import { PharmacyJourneyUseCase } from '../pharmacy/use-cases/pharmacy-journey.usecase';
 import type { AuthUserPublic } from '../auth/auth.types';
 import type { ClinicalRecord } from './clinical-record.types';
+import type { TriageDto } from './dto/visits.dto';
+import {
+  SYMPTOM_CATALOGUE,
+  TRIAGE_CONDITIONS,
+  TRIAGE_REASON_OPTIONS,
+  TRIAGE_RED_FLAGS,
+} from './symptom-catalogue';
+import type { TriageRecord } from './triage.types';
 import type {
   LabTestOrder,
   OrderedClinicalItem,
@@ -43,6 +51,9 @@ type VisitPayload = {
   doctorName?: string;
   /** Staff profile id of the assigned doctor (set at triage). */
   doctorStaffId?: string;
+  triage?: TriageRecord;
+  triagePriority?: Visit['triagePriority'];
+  triageCompletedAt?: string;
   labOrder?: Visit['labOrder'];
   diagnosis?: string;
   prescriptions?: PrescriptionLine[];
@@ -148,10 +159,43 @@ export class VisitsService implements OnModuleInit {
       }
       visits = visits.filter((v) => v.appointmentId === appointmentId);
     }
-    if (actor?.role !== 'DOCTOR') {
-      return visits;
+    if (actor?.role === 'DOCTOR') {
+      visits = visits.filter((v) => this.isVisitAssignedToDoctor(v, actor));
     }
-    return visits.filter((v) => this.isVisitAssignedToDoctor(v, actor));
+    return this.sortVisitsForQueue(visits);
+  }
+
+  /**
+   * Queue order: Emergency → Urgent → Normal, then oldest triage completion
+   * (fallback: checked-in time) within each priority. Completed visits stay
+   * at the end in reverse check-in order for billing lists.
+   */
+  private sortVisitsForQueue(visits: Visit[]): Visit[] {
+    const priorityRank = (p?: string) => {
+      if (p === 'EMERGENCY') return 0;
+      if (p === 'URGENT') return 1;
+      return 2;
+    };
+    const active = visits.filter((v) => v.stage !== 'COMPLETED');
+    const done = visits.filter((v) => v.stage === 'COMPLETED');
+    active.sort((a, b) => {
+      const pr =
+        priorityRank(a.triagePriority ?? a.triage?.priority) -
+        priorityRank(b.triagePriority ?? b.triage?.priority);
+      if (pr !== 0) return pr;
+      const aTime = new Date(
+        a.triageCompletedAt ?? a.triage?.completedAt ?? a.checkedInAt,
+      ).getTime();
+      const bTime = new Date(
+        b.triageCompletedAt ?? b.triage?.completedAt ?? b.checkedInAt,
+      ).getTime();
+      return aTime - bTime;
+    });
+    done.sort(
+      (a, b) =>
+        new Date(b.checkedInAt).getTime() - new Date(a.checkedInAt).getTime(),
+    );
+    return [...active, ...done];
   }
 
   /** DOCTOR scope: prefer staff id; fall back to legacy doctorName display match. */
@@ -280,10 +324,8 @@ export class VisitsService implements OnModuleInit {
 
   async recordTriage(
     id: string,
-    vitals: Vitals,
-    doctorName: string,
-    nurseName: string,
-    doctorStaffId?: string,
+    body: TriageDto,
+    actor?: AuthUserPublic,
   ): Promise<Visit> {
     const visit = await this.findOne(id);
     if (visit.stage === 'AWAITING_PAYMENT') {
@@ -299,13 +341,201 @@ export class VisitsService implements OnModuleInit {
         'Consultation fee is still pending payment.',
       );
     }
+
+    const priority = body.priority || 'NORMAL';
+    if (
+      (priority === 'URGENT' || priority === 'EMERGENCY') &&
+      !body.priorityReason?.trim()
+    ) {
+      throw new BadRequestException(
+        'priorityReason is required when priority is URGENT or EMERGENCY.',
+      );
+    }
+    if (!body.reasonForVisit?.trim()) {
+      throw new BadRequestException('reasonForVisit is required at triage.');
+    }
+    if (!body.chiefComplaint?.trim()) {
+      throw new BadRequestException('chiefComplaint is required at triage.');
+    }
+
+    this.assertVitalsRanges(body.vitals);
+
+    const completedAt = new Date().toISOString();
+    const vitals = this.normalizeTriageVitals(
+      body.vitals,
+      body.nurseName,
+      completedAt,
+    );
+
+    const clinicalReason =
+      body.reasonForVisit.trim() === 'Other' && body.reasonForVisitOther?.trim()
+        ? body.reasonForVisitOther.trim()
+        : body.reasonForVisit.trim();
+
+    const triage: TriageRecord = {
+      reasonForVisit: clinicalReason,
+      reasonForVisitOther: body.reasonForVisitOther?.trim() || undefined,
+      chiefComplaint: body.chiefComplaint.trim(),
+      symptoms: (body.symptoms ?? []).map((s) => ({
+        symptomId: s.symptomId,
+        symptom: s.symptom,
+        category: s.category,
+        onset: s.onset,
+        durationValue: s.durationValue,
+        durationUnit: s.durationUnit,
+        severity: s.severity,
+        progression: s.progression,
+        associatedSymptoms: s.associatedSymptoms,
+        notes: s.notes,
+      })),
+      relevantHistory: body.relevantHistory,
+      contextsEnabled: (body.contextsEnabled ?? []).filter((c) =>
+        ['ANTENATAL', 'PAEDIATRIC', 'GYNAECOLOGICAL', 'CHRONIC', 'OTHER'].includes(
+          c,
+        ),
+      ) as TriageRecord['contextsEnabled'],
+      antenatal: body.antenatal as TriageRecord['antenatal'],
+      gynaecological: body.gynaecological as TriageRecord['gynaecological'],
+      paediatric: body.paediatric as TriageRecord['paediatric'],
+      chronic: body.chronic as TriageRecord['chronic'],
+      assessment: body.assessment,
+      notes: body.notes?.trim() || undefined,
+      priority,
+      priorityReason: body.priorityReason?.trim() || undefined,
+      disposition: body.disposition ?? 'SEND_TO_DOCTOR',
+      dispositionNotes: body.dispositionNotes?.trim() || undefined,
+      completedAt,
+      recordedByName: body.nurseName,
+      recordedByUserId: actor?.id,
+      receptionReasonSnapshot: visit.reasonForVisit,
+    };
+
     return this.patch(id, {
       vitals,
-      doctorName,
-      nurseName,
-      doctorStaffId: doctorStaffId?.trim() || undefined,
+      doctorName: body.doctorName,
+      nurseName: body.nurseName,
+      doctorStaffId: body.doctorStaffId?.trim() || undefined,
+      // Clinical RFV becomes authoritative; reception snapshot kept in triage.
+      reasonForVisit: clinicalReason,
+      triage,
+      triagePriority: priority,
+      triageCompletedAt: completedAt,
       stage: 'WAITING_DOCTOR',
     });
+  }
+
+  private normalizeTriageVitals(
+    raw: TriageDto['vitals'],
+    recordedBy: string,
+    recordedAt: string,
+  ): Vitals {
+    const height = Number(raw.heightCm);
+    const weight = Number(raw.weightKg);
+    let bmi = raw.bmi?.trim() || undefined;
+    if (
+      !bmi &&
+      Number.isFinite(height) &&
+      height > 0 &&
+      Number.isFinite(weight) &&
+      weight > 0
+    ) {
+      const meters = height / 100;
+      bmi = (weight / (meters * meters)).toFixed(1);
+    }
+    return {
+      temperature: raw.temperature.trim(),
+      systolic: raw.systolic.trim(),
+      diastolic: raw.diastolic.trim(),
+      pulse: raw.pulse.trim(),
+      respRate: raw.respRate.trim(),
+      spo2: raw.spo2.trim(),
+      weightKg: raw.weightKg.trim(),
+      heightCm: raw.heightCm?.trim() || undefined,
+      bmi,
+      painScore: raw.painScore?.trim() || undefined,
+      painLocation: raw.painLocation?.trim() || undefined,
+      bloodGlucose: raw.bloodGlucose?.trim() || undefined,
+      bloodGlucoseContext: raw.bloodGlucoseContext,
+      headCircumferenceCm: raw.headCircumferenceCm?.trim() || undefined,
+      muacCm: raw.muacCm?.trim() || undefined,
+      temperatureMethod: raw.temperatureMethod?.trim() || undefined,
+      recordedAt,
+      recordedBy,
+    };
+  }
+
+  /** Soft clinical range checks — reject impossible values only. */
+  private assertVitalsRanges(v: TriageDto['vitals']): void {
+    const num = (s: string) => Number(String(s).trim());
+    const temp = num(v.temperature);
+    if (!Number.isFinite(temp) || temp < 30 || temp > 45) {
+      throw new BadRequestException('temperature must be between 30 and 45 °C');
+    }
+    const sys = num(v.systolic);
+    const dia = num(v.diastolic);
+    if (!Number.isFinite(sys) || sys < 50 || sys > 300) {
+      throw new BadRequestException('systolic BP must be between 50 and 300');
+    }
+    if (!Number.isFinite(dia) || dia < 20 || dia > 200) {
+      throw new BadRequestException('diastolic BP must be between 20 and 200');
+    }
+    const pulse = num(v.pulse);
+    if (!Number.isFinite(pulse) || pulse < 20 || pulse > 250) {
+      throw new BadRequestException('pulse must be between 20 and 250 bpm');
+    }
+    const rr = num(v.respRate);
+    if (!Number.isFinite(rr) || rr < 4 || rr > 80) {
+      throw new BadRequestException('respRate must be between 4 and 80 /min');
+    }
+    const spo2 = num(v.spo2);
+    if (!Number.isFinite(spo2) || spo2 < 50 || spo2 > 100) {
+      throw new BadRequestException('spo2 must be between 50 and 100%');
+    }
+    const wt = num(v.weightKg);
+    if (!Number.isFinite(wt) || wt < 0.5 || wt > 500) {
+      throw new BadRequestException('weightKg must be between 0.5 and 500');
+    }
+    if (v.heightCm?.trim()) {
+      const h = num(v.heightCm);
+      if (!Number.isFinite(h) || h < 20 || h > 272) {
+        throw new BadRequestException('heightCm must be between 20 and 272');
+      }
+    }
+    if (v.painScore?.trim()) {
+      const p = num(v.painScore);
+      if (!Number.isFinite(p) || p < 0 || p > 10) {
+        throw new BadRequestException('painScore must be between 0 and 10');
+      }
+    }
+  }
+
+  listSymptomCatalogue() {
+    return {
+      symptoms: SYMPTOM_CATALOGUE,
+      reasonOptions: [...TRIAGE_REASON_OPTIONS],
+      conditions: [...TRIAGE_CONDITIONS],
+      redFlags: [...TRIAGE_RED_FLAGS],
+    };
+  }
+
+  getTriageSummary(id: string, actor?: AuthUserPublic) {
+    return this.findOne(id, actor).then((visit) => ({
+      visitId: visit.id,
+      patientName: visit.patientName,
+      mrn: visit.mrn,
+      age: visit.age,
+      gender: visit.gender,
+      triage: visit.triage ?? null,
+      vitals: visit.vitals ?? null,
+      triagePriority: visit.triagePriority ?? visit.triage?.priority ?? null,
+      triageCompletedAt:
+        visit.triageCompletedAt ?? visit.triage?.completedAt ?? null,
+      reasonForVisit: visit.reasonForVisit ?? null,
+      additionalNotes: visit.additionalNotes ?? null,
+      nurseName: visit.nurseName ?? null,
+      doctorName: visit.doctorName ?? null,
+      doctorStaffId: visit.doctorStaffId ?? null,
+    }));
   }
 
   /**
@@ -1101,6 +1331,12 @@ export class VisitsService implements OnModuleInit {
       firstVisit: next.firstVisit,
       reasonForVisit: next.reasonForVisit ?? null,
       additionalNotes: next.additionalNotes ?? null,
+      triagePriority: next.triagePriority ?? next.triage?.priority ?? null,
+      triageCompletedAt: next.triageCompletedAt
+        ? new Date(next.triageCompletedAt)
+        : next.triage?.completedAt
+          ? new Date(next.triage.completedAt)
+          : null,
       payload,
     });
     return this.fromRow(row);
@@ -1140,6 +1376,9 @@ export class VisitsService implements OnModuleInit {
       nurseName: visit.nurseName,
       doctorName: visit.doctorName,
       doctorStaffId: visit.doctorStaffId,
+      triage: visit.triage,
+      triagePriority: visit.triagePriority,
+      triageCompletedAt: visit.triageCompletedAt,
       labOrder: visit.labOrder,
       diagnosis: visit.diagnosis,
       prescriptions: visit.prescriptions,
@@ -1172,6 +1411,10 @@ export class VisitsService implements OnModuleInit {
       nurseName: payload.nurseName,
       doctorName: payload.doctorName,
       doctorStaffId: payload.doctorStaffId,
+      triage: payload.triage,
+      triagePriority: payload.triagePriority ?? payload.triage?.priority,
+      triageCompletedAt:
+        payload.triageCompletedAt ?? payload.triage?.completedAt,
       labOrder: payload.labOrder,
       diagnosis: payload.diagnosis,
       prescriptions: payload.prescriptions,

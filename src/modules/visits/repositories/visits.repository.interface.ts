@@ -54,6 +54,8 @@ export interface IVisitsRepository {
       firstVisit: boolean;
       reasonForVisit?: string | null;
       additionalNotes?: string | null;
+      triagePriority?: string | null;
+      triageCompletedAt?: Date | null;
       payload: unknown;
     },
   ): Promise<VisitRow>;

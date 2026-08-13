@@ -48,6 +48,29 @@ export class VisitsController {
     return this.visits.findAll(user, appointmentId);
   }
 
+  @Get('symptom-catalogue')
+  @Roles(...VISIT_FLOW_ROLES)
+  @ApiOperation({
+    summary:
+      'Symptom catalogue + triage reason/condition/red-flag options for clinical intake',
+  })
+  symptomCatalogue() {
+    return this.visits.listSymptomCatalogue();
+  }
+
+  @Get(':id/triage-summary')
+  @Roles(...VISIT_FLOW_ROLES)
+  @ApiOperation({
+    summary:
+      'Structured triage summary for doctor consultation (read-only intake record)',
+  })
+  triageSummary(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.visits.getTriageSummary(id, user);
+  }
+
   @Get(':id')
   @Roles(...VISIT_FLOW_ROLES)
   findOne(@Param('id') id: string, @CurrentUser() user: AuthUserPublic) {
@@ -69,7 +92,10 @@ export class VisitsController {
 
   @Patch(':id/reception')
   @Roles('ADMIN', 'SUPER_ADMIN', 'RECEPTIONIST')
-  @ApiOperation({ summary: 'Update reception reason / notes for a visit' })
+  @ApiOperation({
+    summary:
+      'Update reception administrative reason / notes (clinical RFV is owned by triage after intake)',
+  })
   updateReception(
     @Param('id') id: string,
     @Body() body: UpdateReceptionDto,
@@ -79,14 +105,16 @@ export class VisitsController {
 
   @Post(':id/triage')
   @Roles('ADMIN', 'SUPER_ADMIN', 'NURSE')
-  recordTriage(@Param('id') id: string, @Body() body: TriageDto) {
-    return this.visits.recordTriage(
-      id,
-      body.vitals,
-      body.doctorName,
-      body.nurseName,
-      body.doctorStaffId,
-    );
+  @ApiOperation({
+    summary:
+      'Complete structured clinical triage intake (vitals, symptoms, history, screening, urgency) and send to doctor queue',
+  })
+  recordTriage(
+    @Param('id') id: string,
+    @Body() body: TriageDto,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.visits.recordTriage(id, body, user);
   }
 
   @Post(':id/charge-consult-fee')

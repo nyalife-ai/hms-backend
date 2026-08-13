@@ -1,4 +1,18 @@
 import type { ClinicalRecord } from './clinical-record.types';
+import type {
+  TriagePriority,
+  TriageRecord,
+  TriageVitals,
+} from './triage.types';
+
+export type { TriagePriority, TriageRecord, TriageVitals };
+export type {
+  TriageSymptom,
+  TriageRelevantHistory,
+  TriageAssessment,
+  TriageDisposition,
+  SymptomCatalogueItem,
+} from './triage.types';
 
 export type VisitStage =
   | 'CHECKED_IN'
@@ -17,6 +31,7 @@ export type ConsultFeeStatus = 'PENDING' | 'PAID' | 'WAIVED';
 
 export type InsuranceStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
+/** Core OPD vitals — optional fields added for structured triage intake. */
 export interface Vitals {
   temperature: string;
   systolic: string;
@@ -25,6 +40,17 @@ export interface Vitals {
   respRate: string;
   spo2: string;
   weightKg: string;
+  heightCm?: string;
+  bmi?: string;
+  painScore?: string;
+  painLocation?: string;
+  bloodGlucose?: string;
+  bloodGlucoseContext?: 'RANDOM' | 'FASTING' | 'OTHER' | 'UNKNOWN';
+  headCircumferenceCm?: string;
+  muacCm?: string;
+  temperatureMethod?: string;
+  recordedAt?: string;
+  recordedBy?: string;
 }
 
 export interface LabTestOrder {
@@ -64,10 +90,19 @@ export interface Visit {
   firstVisit: boolean;
   /** clinical.appointments id when checked in from the schedule */
   appointmentId?: string;
-  /** Reception: why the patient is presenting */
+  /**
+   * Clinical reason for visit — reception may seed at check-in;
+   * after triage this is overwritten from TriageRecord (authoritative).
+   */
   reasonForVisit?: string;
-  /** Reception free-text notes cascaded with the visit */
+  /** Reception administrative notes (not clinical triage notes) */
   additionalNotes?: string;
+  /** Structured clinical triage intake (authoritative after triage) */
+  triage?: TriageRecord;
+  /** Denormalized for queue: NORMAL | URGENT | EMERGENCY */
+  triagePriority?: TriagePriority;
+  /** When triage was completed (queue secondary sort key) */
+  triageCompletedAt?: string;
   payment: {
     method: 'CASH' | 'INSURANCE';
     provider?: string;

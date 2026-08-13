@@ -131,13 +131,116 @@ export class CheckInDto {
 }
 
 export class VitalsDto {
-  @ApiProperty() @IsString() temperature!: string;
-  @ApiProperty() @IsString() systolic!: string;
-  @ApiProperty() @IsString() diastolic!: string;
-  @ApiProperty() @IsString() pulse!: string;
-  @ApiProperty() @IsString() respRate!: string;
-  @ApiProperty() @IsString() spo2!: string;
-  @ApiProperty() @IsString() weightKg!: string;
+  @ApiProperty({ example: '36.8' }) @IsString() temperature!: string;
+  @ApiProperty({ example: '120' }) @IsString() systolic!: string;
+  @ApiProperty({ example: '80' }) @IsString() diastolic!: string;
+  @ApiProperty({ example: '72' }) @IsString() pulse!: string;
+  @ApiProperty({ example: '16' }) @IsString() respRate!: string;
+  @ApiProperty({ example: '98' }) @IsString() spo2!: string;
+  @ApiProperty({ example: '70' }) @IsString() weightKg!: string;
+
+  @ApiPropertyOptional({ description: 'Height in cm' })
+  @IsOptional()
+  @IsString()
+  heightCm?: string;
+
+  @ApiPropertyOptional({
+    description: 'BMI — server calculates from height+weight when omitted',
+  })
+  @IsOptional()
+  @IsString()
+  bmi?: string;
+
+  @ApiPropertyOptional({ description: 'Pain score 0–10' })
+  @IsOptional()
+  @IsString()
+  painScore?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  painLocation?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  bloodGlucose?: string;
+
+  @ApiPropertyOptional({ enum: ['RANDOM', 'FASTING', 'OTHER', 'UNKNOWN'] })
+  @IsOptional()
+  @IsIn(['RANDOM', 'FASTING', 'OTHER', 'UNKNOWN'])
+  bloodGlucoseContext?: 'RANDOM' | 'FASTING' | 'OTHER' | 'UNKNOWN';
+
+  @ApiPropertyOptional({ description: 'Paediatric head circumference cm' })
+  @IsOptional()
+  @IsString()
+  headCircumferenceCm?: string;
+
+  @ApiPropertyOptional({ description: 'MUAC cm when clinically relevant' })
+  @IsOptional()
+  @IsString()
+  muacCm?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  temperatureMethod?: string;
+}
+
+export class TriageSymptomDto {
+  @ApiProperty() @IsString() symptomId!: string;
+  @ApiProperty() @IsString() symptom!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() category?: string;
+  @ApiPropertyOptional({ enum: ['SUDDEN', 'GRADUAL', 'UNKNOWN'] })
+  @IsOptional()
+  @IsIn(['SUDDEN', 'GRADUAL', 'UNKNOWN'])
+  onset?: 'SUDDEN' | 'GRADUAL' | 'UNKNOWN';
+  @ApiPropertyOptional() @IsOptional() @IsString() durationValue?: string;
+  @ApiPropertyOptional({
+    enum: ['HOURS', 'DAYS', 'WEEKS', 'MONTHS', 'YEARS'],
+  })
+  @IsOptional()
+  @IsIn(['HOURS', 'DAYS', 'WEEKS', 'MONTHS', 'YEARS'])
+  durationUnit?: 'HOURS' | 'DAYS' | 'WEEKS' | 'MONTHS' | 'YEARS';
+  @ApiPropertyOptional({ enum: ['MILD', 'MODERATE', 'SEVERE'] })
+  @IsOptional()
+  @IsIn(['MILD', 'MODERATE', 'SEVERE'])
+  severity?: 'MILD' | 'MODERATE' | 'SEVERE';
+  @ApiPropertyOptional({
+    enum: ['IMPROVING', 'STABLE', 'WORSENING', 'UNKNOWN'],
+  })
+  @IsOptional()
+  @IsIn(['IMPROVING', 'STABLE', 'WORSENING', 'UNKNOWN'])
+  progression?: 'IMPROVING' | 'STABLE' | 'WORSENING' | 'UNKNOWN';
+  @ApiPropertyOptional() @IsOptional() @IsString() associatedSymptoms?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
+}
+
+export class TriageRelevantHistoryDto {
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  conditions?: string[];
+
+  @ApiPropertyOptional() @IsOptional() @IsString() conditionsOther?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() currentMedications?: string;
+  @ApiPropertyOptional() @IsOptional() allergiesKnown?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsString() allergens?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() allergyReaction?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() surgicalHistory?: string;
+}
+
+export class TriageAssessmentDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() generalAppearance?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() mentalStatus?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() mobility?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() respiratoryEffort?: string;
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  redFlags?: string[];
 }
 
 export class TriageDto {
@@ -146,7 +249,7 @@ export class TriageDto {
   @Type(() => VitalsDto)
   vitals!: VitalsDto;
 
-  @ApiProperty()
+  @ApiProperty({ description: 'Assigned doctor display name' })
   @IsString()
   doctorName!: string;
 
@@ -157,9 +260,103 @@ export class TriageDto {
   @IsString()
   doctorStaffId?: string;
 
-  @ApiProperty()
+  @ApiProperty({ description: 'Triage officer display name' })
   @IsString()
   nurseName!: string;
+
+  @ApiProperty({
+    description: 'Clinical reason for visit (authoritative after triage)',
+  })
+  @IsString()
+  reasonForVisit!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  reasonForVisitOther?: string;
+
+  @ApiProperty({ description: 'Short presenting / chief complaint' })
+  @IsString()
+  chiefComplaint!: string;
+
+  @ApiPropertyOptional({ type: [TriageSymptomDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => TriageSymptomDto)
+  symptoms?: TriageSymptomDto[];
+
+  @ApiPropertyOptional({ type: TriageRelevantHistoryDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TriageRelevantHistoryDto)
+  relevantHistory?: TriageRelevantHistoryDto;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Enabled screening contexts',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  contextsEnabled?: string[];
+
+  @ApiPropertyOptional({ description: 'Antenatal screening object' })
+  @IsOptional()
+  @IsObject()
+  antenatal?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Gynaecological screening object' })
+  @IsOptional()
+  @IsObject()
+  gynaecological?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Paediatric screening object' })
+  @IsOptional()
+  @IsObject()
+  paediatric?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Chronic disease screening object' })
+  @IsOptional()
+  @IsObject()
+  chronic?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ type: TriageAssessmentDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TriageAssessmentDto)
+  assessment?: TriageAssessmentDto;
+
+  @ApiPropertyOptional({ description: 'Clinical triage notes' })
+  @IsOptional()
+  @IsString()
+  notes?: string;
+
+  @ApiProperty({
+    enum: ['NORMAL', 'URGENT', 'EMERGENCY'],
+    description: 'Triage urgency — drives doctor queue order',
+  })
+  @IsIn(['NORMAL', 'URGENT', 'EMERGENCY'])
+  priority!: 'NORMAL' | 'URGENT' | 'EMERGENCY';
+
+  @ApiPropertyOptional({
+    description: 'Required when priority is URGENT or EMERGENCY',
+  })
+  @IsOptional()
+  @IsString()
+  priorityReason?: string;
+
+  @ApiPropertyOptional({
+    enum: ['SEND_TO_DOCTOR', 'OBSERVE', 'REFER_EMERGENCY', 'OTHER'],
+  })
+  @IsOptional()
+  @IsIn(['SEND_TO_DOCTOR', 'OBSERVE', 'REFER_EMERGENCY', 'OTHER'])
+  disposition?: 'SEND_TO_DOCTOR' | 'OBSERVE' | 'REFER_EMERGENCY' | 'OTHER';
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  dispositionNotes?: string;
 }
 
 export class LabTestDto {
