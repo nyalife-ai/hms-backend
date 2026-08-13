@@ -40,4 +40,17 @@ export class LaboratoryListener {
         (payload.parameterId ? ` (parameter ${payload.parameterId})` : ''),
     );
   }
+
+  @OnEvent(LAB_EVENTS.RESULT_RELEASED)
+  onReleased(payload: {
+    requestId: string;
+    visitId: string | null;
+    releasedAt: string;
+  }): void {
+    this.logger.log(
+      `Lab results released to doctor: request=${payload.requestId}` +
+        (payload.visitId ? ` visit=${payload.visitId}` : '') +
+        ` at=${payload.releasedAt}`,
+    );
+  }
 }

@@ -56,6 +56,16 @@ export class LaboratoryController {
     return this.ops.overview();
   }
 
+  @Get('visit-report')
+  @Roles(...LAB_READ)
+  @ApiOperation({
+    summary:
+      'Doctor Lab Report — released LIS results for an outpatient visit',
+  })
+  visitReport(@Query('visitId') visitId?: string) {
+    return this.ops.getVisitLabReport(visitId ?? '');
+  }
+
   // ── Clinical services / procedures / surgeries (before :id routes)
   @Get('clinical-services')
   @Roles(...LAB_READ)
@@ -291,6 +301,22 @@ export class LaboratoryController {
   @Roles(...LAB_READ)
   getRequest(@Param('id', ParseUUIDPipe) id: string) {
     return this.ops.getRequest(id);
+  }
+
+  @Post('requests/:id/release-to-doctor')
+  @Roles(...LAB_VERIFY)
+  @ApiOperation({
+    summary:
+      'Release verified results to the ordering doctor (LAB_RESULT_RELEASED)',
+  })
+  releaseToDoctor(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.journey.releaseToDoctor({
+      requestId: id,
+      actorUserId: user.id,
+    });
   }
 
   @Patch('requests/:id/findings')

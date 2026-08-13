@@ -48,6 +48,20 @@ export type LabNotesPayload = {
   observations?: string;
   conclusion?: string;
   evidenceName?: string;
+  /** Soft link to OutpatientVisits — must survive findings updates */
+  visitId?: string;
+  doctorName?: string;
+  comments?: string;
+  tests?: Array<{
+    name?: string;
+    unit?: string;
+    range?: string;
+    result?: string;
+    testTypeId?: string;
+  }>;
+  /** Set when lab releases verified results to the ordering doctor */
+  releasedToDoctorAt?: string;
+  releasedToDoctorBy?: string;
 };
 
 function ageFromDob(dob: Date | null | undefined): number {
@@ -620,6 +634,10 @@ export class LabOperationsUseCase {
       observations: parsed.observations ?? null,
       conclusion: parsed.conclusion ?? null,
       evidenceName: parsed.evidenceName ?? null,
+      visitId: parsed.visitId ?? null,
+      releasedToDoctorAt: parsed.releasedToDoctorAt ?? null,
+      releasedToDoctorBy: parsed.releasedToDoctorBy ?? null,
+      releasedToDoctor: Boolean(parsed.releasedToDoctorAt),
       createdAt: r.created_at.toISOString(),
       updatedAt: r.updated_at.toISOString(),
       samples: r.laboratory_samples_request_id.map((s) => this.mapSample(s)),
@@ -637,6 +655,70 @@ export class LabOperationsUseCase {
           testName: t.testName,
         })),
       ),
+    };
+  }
+
+  /**
+   * Doctor Consultation Lab Report — authoritative LIS results for a visit.
+   * Only includes requests that have been released to the doctor.
+   */
+  public async getVisitLabReport(visitId: string) {
+    const id = visitId?.trim();
+    if (!id) throw new BadRequestException('visitId is required');
+
+    const listed = await this.listRequests({ visitId: id, take: 50, skip: 0 });
+    const details = await Promise.all(
+      listed.items.map((item) => this.getRequest(item.id)),
+    );
+    const released = details.filter((d) =>
+      Boolean((d as { releasedToDoctorAt?: string | null }).releasedToDoctorAt),
+    );
+
+    const lines = released.flatMap((d) =>
+      (d.results as Array<ReturnType<LabOperationsUseCase['mapResult']>>).map(
+        (r) => ({
+          ...r,
+          requestId: d.id,
+          requestNumber: d.requestNumber,
+          requestStatus: d.status,
+        }),
+      ),
+    );
+
+    const releasedAts = released
+      .map((d) => (d as { releasedToDoctorAt?: string | null }).releasedToDoctorAt)
+      .filter((v): v is string => Boolean(v));
+    releasedAts.sort();
+
+    return {
+      visitId: id,
+      released: released.length > 0,
+      releasedAt: releasedAts.length
+        ? releasedAts[releasedAts.length - 1]
+        : null,
+      requestCount: listed.items.length,
+      releasedRequestCount: released.length,
+      requests: released.map((d) => ({
+        id: d.id,
+        requestNumber: d.requestNumber,
+        status: d.status,
+        observations: d.observations,
+        conclusion: d.conclusion,
+        releasedToDoctorAt: (d as { releasedToDoctorAt?: string | null })
+          .releasedToDoctorAt,
+        resultCount: d.resultCount,
+        verifiedCount: d.verifiedCount,
+        criticalCount: d.criticalCount,
+      })),
+      lines,
+      observations: released
+        .map((d) => d.observations)
+        .filter((v): v is string => Boolean(v?.trim()))
+        .join('\n\n') || null,
+      conclusion: released
+        .map((d) => d.conclusion)
+        .filter((v): v is string => Boolean(v?.trim()))
+        .join('\n\n') || null,
     };
   }
 
@@ -674,6 +756,13 @@ export class LabOperationsUseCase {
         input.evidenceName !== undefined
           ? input.evidenceName?.trim() || undefined
           : parsed.evidenceName,
+      // Preserve soft links / release metadata — never wipe on findings save
+      visitId: parsed.visitId,
+      doctorName: parsed.doctorName,
+      comments: parsed.comments,
+      tests: parsed.tests,
+      releasedToDoctorAt: parsed.releasedToDoctorAt,
+      releasedToDoctorBy: parsed.releasedToDoctorBy,
     });
     await this.prisma.laboratoryRequests.update({
       where: { id },
@@ -970,12 +1059,27 @@ export class LabOperationsUseCase {
     if (payload.conclusion?.trim()) next.conclusion = payload.conclusion.trim();
     if (payload.evidenceName?.trim())
       next.evidenceName = payload.evidenceName.trim();
+    if (payload.visitId?.trim()) next.visitId = payload.visitId.trim();
+    if (payload.doctorName?.trim()) next.doctorName = payload.doctorName.trim();
+    if (payload.comments?.trim()) next.comments = payload.comments.trim();
+    if (Array.isArray(payload.tests) && payload.tests.length) {
+      next.tests = payload.tests;
+    }
+    if (payload.releasedToDoctorAt?.trim()) {
+      next.releasedToDoctorAt = payload.releasedToDoctorAt.trim();
+    }
+    if (payload.releasedToDoctorBy?.trim()) {
+      next.releasedToDoctorBy = payload.releasedToDoctorBy.trim();
+    }
     if (
       !next.orderedTestTypeIds.length &&
       !next.text &&
       !next.observations &&
       !next.conclusion &&
-      !next.evidenceName
+      !next.evidenceName &&
+      !next.visitId &&
+      !next.releasedToDoctorAt &&
+      !(next.tests && next.tests.length)
     ) {
       return null;
     }
@@ -989,6 +1093,23 @@ export class LabOperationsUseCase {
         tests?: Array<{ name?: string; testTypeId?: string }>;
         doctorNotes?: string;
       };
+      const softLink = {
+        visitId:
+          typeof parsed.visitId === 'string' ? parsed.visitId : undefined,
+        doctorName:
+          typeof parsed.doctorName === 'string' ? parsed.doctorName : undefined,
+        comments:
+          typeof parsed.comments === 'string' ? parsed.comments : undefined,
+        tests: Array.isArray(parsed.tests) ? parsed.tests : undefined,
+        releasedToDoctorAt:
+          typeof parsed.releasedToDoctorAt === 'string'
+            ? parsed.releasedToDoctorAt
+            : undefined,
+        releasedToDoctorBy:
+          typeof parsed.releasedToDoctorBy === 'string'
+            ? parsed.releasedToDoctorBy
+            : undefined,
+      };
       const extras = {
         observations:
           typeof parsed.observations === 'string'
@@ -1000,6 +1121,7 @@ export class LabOperationsUseCase {
           typeof parsed.evidenceName === 'string'
             ? parsed.evidenceName
             : undefined,
+        ...softLink,
       };
       if (Array.isArray(parsed?.orderedTestTypeIds)) {
         return {
@@ -1314,6 +1436,10 @@ export class LabOperationsUseCase {
       notes: parsed.text ?? (parsed.orderedTestTypeIds.length ? null : r.notes),
       orderedTestTypeIds: parsed.orderedTestTypeIds,
       requestedBy: r.requested_by,
+      visitId: parsed.visitId ?? null,
+      releasedToDoctorAt: parsed.releasedToDoctorAt ?? null,
+      releasedToDoctorBy: parsed.releasedToDoctorBy ?? null,
+      releasedToDoctor: Boolean(parsed.releasedToDoctorAt),
     };
   }
 

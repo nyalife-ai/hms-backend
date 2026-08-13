@@ -143,4 +143,22 @@ describe('LabOperationsUseCase', () => {
     expect(parsed.text).toBe('fasting');
     expect(ops.parseNotes('plain notes').text).toBe('plain notes');
   });
+
+  it('preserves visitId and release metadata across encode/parse', () => {
+    const raw = ops.encodeNotesPayload({
+      orderedTestTypeIds: ['tt1'],
+      text: 'note',
+      visitId: 'visit-uuid',
+      doctorName: 'Dr X',
+      tests: [{ name: 'CBC', unit: 'g/dL' }],
+      releasedToDoctorAt: '2026-08-13T12:00:00.000Z',
+      releasedToDoctorBy: 'user-1',
+    });
+    const parsed = ops.parseNotes(raw);
+    expect(parsed.visitId).toBe('visit-uuid');
+    expect(parsed.doctorName).toBe('Dr X');
+    expect(parsed.tests?.[0]?.name).toBe('CBC');
+    expect(parsed.releasedToDoctorAt).toBe('2026-08-13T12:00:00.000Z');
+    expect(parsed.releasedToDoctorBy).toBe('user-1');
+  });
 });

@@ -29,6 +29,8 @@ export const LAB_EVENTS = {
   RESULT_VERIFIED: 'lab.result.verified',
   RESULT_CRITICAL: 'lab.result.critical',
   REQUEST_COMPLETED: 'lab.request.completed',
+  /** Verified results released for doctor retrieval (no WebSocket yet) */
+  RESULT_RELEASED: 'lab.result.released',
 } as const;
 
 const SAMPLE_TRANSITIONS: Record<string, string[]> = {
@@ -609,25 +611,83 @@ export class LabJourneyUseCase {
       this.events.emit(LAB_EVENTS.REQUEST_COMPLETED, {
         requestId: input.requestId,
       });
-      try {
-        const req = await this.prisma.laboratoryRequests.findFirst({
-          where: { id: input.requestId },
-          select: { notes: true },
-        });
-        const parsed = req?.notes ? JSON.parse(req.notes) : null;
-        const visitId =
-          parsed && typeof parsed.visitId === 'string' ? parsed.visitId : null;
-        if (visitId) {
-          await this.prisma.outpatientVisits.updateMany({
-            where: { id: visitId, stage: 'LAB_PENDING' },
-            data: { stage: 'RESULTS_READY' },
-          });
-        }
-      } catch {
-        /* visit sync is best-effort */
-      }
+      // Visit stage stays LAB_PENDING until explicit releaseToDoctor.
     }
     return this.ops.getRequest(input.requestId);
+  }
+
+  /**
+   * Release verified / completed lab results to the ordering doctor.
+   * Persists release metadata on the request notes and advances the visit
+   * to RESULTS_READY. Doctor Lab Report queries LIS via visitId — it does
+   * not rely on visit.payload.labOrder result values.
+   */
+  public async releaseToDoctor(input: {
+    requestId: string;
+    actorUserId: string;
+  }) {
+    const request = await this.prisma.laboratoryRequests.findFirst({
+      where: { id: input.requestId },
+    });
+    if (!request) throw new NotFoundException('Lab request not found');
+    if (request.status === 'CANCELLED') {
+      throw new BadRequestException('Cannot release a cancelled request');
+    }
+    if (request.status !== 'COMPLETED') {
+      throw new BadRequestException(
+        'Request must be COMPLETED (all results verified) before releasing to doctor',
+      );
+    }
+
+    const parsed = this.ops.parseNotes(request.notes);
+    if (parsed.releasedToDoctorAt) {
+      // Idempotent — still ensure visit stage is RESULTS_READY
+      await this.syncVisitResultsReady(parsed.visitId);
+      return this.ops.getRequest(input.requestId);
+    }
+
+    const releasedAt = new Date().toISOString();
+    const notes = this.ops.encodeNotesPayload({
+      ...parsed,
+      releasedToDoctorAt: releasedAt,
+      releasedToDoctorBy: input.actorUserId,
+    });
+    await this.prisma.laboratoryRequests.update({
+      where: { id: input.requestId },
+      data: { notes },
+    });
+
+    await this.syncVisitResultsReady(parsed.visitId);
+
+    await this.audit.recordMutation({
+      userId: input.actorUserId,
+      action: 'UPDATE',
+      entityType: 'laboratory.requests',
+      entityId: input.requestId,
+      newValues: {
+        releasedToDoctorAt: releasedAt,
+        releasedToDoctorBy: input.actorUserId,
+      },
+    });
+    this.events.emit(LAB_EVENTS.RESULT_RELEASED, {
+      requestId: input.requestId,
+      visitId: parsed.visitId ?? null,
+      releasedAt,
+    });
+
+    return this.ops.getRequest(input.requestId);
+  }
+
+  private async syncVisitResultsReady(visitId?: string | null) {
+    if (!visitId?.trim()) return;
+    try {
+      await this.prisma.outpatientVisits.updateMany({
+        where: { id: visitId, stage: 'LAB_PENDING' },
+        data: { stage: 'RESULTS_READY' },
+      });
+    } catch {
+      /* visit sync is best-effort */
+    }
   }
 
   /** @deprecated Prefer verifyResult — kept for existing callers/tests */
@@ -692,7 +752,41 @@ export class LabJourneyUseCase {
         where: { user_id: staffOrUserId, deleted_at: null },
       });
     }
-    if (!staff) throw new NotFoundException('Collecting staff not found');
+    if (staff) return staff;
+
+    const user = await this.prisma.user.findFirst({
+      where: { id: staffOrUserId, deleted_at: null },
+      select: { id: true },
+    });
+    if (!user) {
+      throw new NotFoundException(
+        'Collecting staff not found. Pass collectedBy as a staff profile id, or ensure the signed-in user has a StaffProfiles row.',
+      );
+    }
+
+    // Auto-provision a minimal staff profile so lab techs can register samples
+    // without a separate HR setup step blocking the LIS workflow.
+    const suffix = `${user.id.replace(/-/g, '').slice(0, 8).toUpperCase()}`;
+    try {
+      staff = await this.prisma.staffProfiles.create({
+        data: {
+          user_id: user.id,
+          employee_id: `LAB-${suffix}`,
+          position: 'Laboratory',
+          join_date: new Date(),
+          is_active: true,
+        },
+      });
+    } catch {
+      staff = await this.prisma.staffProfiles.findFirst({
+        where: { user_id: user.id, deleted_at: null },
+      });
+    }
+    if (!staff) {
+      throw new BadRequestException(
+        'Could not resolve or create a staff profile for the collecting user. Ask an admin to link StaffProfiles.user_id to this account.',
+      );
+    }
     return staff;
   }
 }

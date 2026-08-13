@@ -46,6 +46,9 @@ describe('LabJourneyUseCase', () => {
       encodeNotes: jest.fn((ids: string[], text?: string) =>
         JSON.stringify({ orderedTestTypeIds: ids, text }),
       ),
+      encodeNotesPayload: jest.fn((payload: Record<string, unknown>) =>
+        JSON.stringify(payload),
+      ),
       parseNotes: jest.fn((raw: string | null) => {
         if (!raw) return { orderedTestTypeIds: [] };
         try {
@@ -66,6 +69,8 @@ describe('LabJourneyUseCase', () => {
         ],
       }),
     } as unknown as LabOperationsUseCase;
+    prisma.user = { findFirst: jest.fn() };
+    prisma.outpatientVisits = { updateMany: jest.fn().mockResolvedValue({ count: 1 }) };
     journey = new LabJourneyUseCase(prisma, events, audit as any, ops);
     jest.clearAllMocks();
   });
@@ -239,6 +244,43 @@ describe('LabJourneyUseCase', () => {
       verifiedBy: 'u1',
     });
     expect(done.status).toBe('COMPLETED');
+  });
+
+  it('releases completed request to doctor and advances visit stage', async () => {
+    prisma.laboratoryRequests.findFirst.mockResolvedValue({
+      id: 'r1',
+      status: 'COMPLETED',
+      notes: JSON.stringify({
+        orderedTestTypeIds: ['tt1'],
+        visitId: 'visit-1',
+      }),
+    });
+    prisma.laboratoryRequests.update.mockResolvedValue({});
+    (ops.getRequest as jest.Mock).mockResolvedValue({
+      id: 'r1',
+      status: 'COMPLETED',
+      releasedToDoctor: true,
+    });
+
+    const released = await journey.releaseToDoctor({
+      requestId: 'r1',
+      actorUserId: 'tech-1',
+    });
+    expect(released.releasedToDoctor).toBe(true);
+    expect(ops.encodeNotesPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        visitId: 'visit-1',
+        releasedToDoctorBy: 'tech-1',
+      }),
+    );
+    expect(prisma.outpatientVisits.updateMany).toHaveBeenCalledWith({
+      where: { id: 'visit-1', stage: 'LAB_PENDING' },
+      data: { stage: 'RESULTS_READY' },
+    });
+    expect(events.emit).toHaveBeenCalledWith(
+      'lab.result.released',
+      expect.objectContaining({ requestId: 'r1', visitId: 'visit-1' }),
+    );
   });
 
   it('cancels open request and related samples', async () => {
