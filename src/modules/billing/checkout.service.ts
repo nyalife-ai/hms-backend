@@ -13,6 +13,10 @@ import { ConfigService } from '@nestjs/config';
 import type { Visit } from '../visits/visit.types';
 import { BillingSettlementService } from './billing-settlement.service';
 import { loadMpesaConfigFromEnv, MpesaClient } from './mpesa.client';
+import {
+  isMpesaCallbackIpAllowed,
+  resolveMpesaCallbackAllowlist,
+} from './mpesa-callback-security';
 import { PharmacyDispenseService } from './pharmacy-dispense.service';
 import {
   BILLING_REPOSITORY,
@@ -125,18 +129,16 @@ export class CheckoutService {
   }
 
   private async visitLines(visit: Visit): Promise<BillLine[]> {
-    const fees = await this.billing.getFeeSchedule();
-    return [
-      { description: 'Consultation', amount: fees.consult },
-      ...(visit.labOrder?.tests ?? []).map((t) => ({
-        description: `Lab: ${t.name}`,
-        amount: fees.lab,
-      })),
-      ...(visit.prescriptions ?? []).map((p) => ({
-        description: `Medication: ${p.medication}`,
-        amount: fees.medication,
-      })),
-    ];
+    const consultAlreadyPaid = visit.billing?.consultFeeStatus === 'PAID';
+    const priced = await this.billing.priceVisitBillLines({
+      includeConsult: !consultAlreadyPaid,
+      labTests: visit.labOrder?.tests ?? [],
+      medications: visit.prescriptions ?? [],
+    });
+    return priced.map((l) => ({
+      description: l.description,
+      amount: l.amount,
+    }));
   }
 
   async initiateStk(input: {
@@ -297,10 +299,20 @@ export class CheckoutService {
     }
 
     const demoMs = Number(process.env.MPESA_DEMO_AUTO_CONFIRM_MS || 0);
-    if (demoMs > 0 && Date.now() - tx.created_at.getTime() > demoMs) {
+    const mpesaEnv = (
+      this.config.get<string>('MPESA_ENV') ||
+      process.env.MPESA_ENV ||
+      'sandbox'
+    ).toLowerCase();
+    if (
+      demoMs > 0 &&
+      mpesaEnv !== 'production' &&
+      process.env.NODE_ENV !== 'production' &&
+      Date.now() - tx.created_at.getTime() > demoMs
+    ) {
       return this.finalizeSuccess(tx.id, {
         mpesaReceipt: `DEMO${Date.now().toString(36).toUpperCase()}`,
-        resultDesc: 'Demo auto-confirm',
+        resultDesc: 'Demo auto-confirm (sandbox only)',
       });
     }
 
@@ -309,7 +321,7 @@ export class CheckoutService {
 
   async handleCallback(
     body: Record<string, unknown>,
-    opts?: { secretHeader?: string },
+    opts?: { secretHeader?: string; remoteIp?: string },
   ) {
     this.requireDb();
     const requiredSecret = (
@@ -331,6 +343,17 @@ export class CheckoutService {
       );
     }
 
+    const allowlist = resolveMpesaCallbackAllowlist(
+      this.config.get<string>('MPESA_CALLBACK_ALLOWED_IPS') ||
+        process.env.MPESA_CALLBACK_ALLOWED_IPS,
+    );
+    if (
+      env === 'production' &&
+      !isMpesaCallbackIpAllowed(opts?.remoteIp, allowlist)
+    ) {
+      throw new BadRequestException('Callback origin not allowed');
+    }
+
     const stk = (body.Body as { stkCallback?: Record<string, unknown> } | undefined)
       ?.stkCallback;
     if (!stk) return { ResultCode: 0, ResultDesc: 'Accepted' };
@@ -344,6 +367,9 @@ export class CheckoutService {
     const receiptItem = meta?.find((i) => i.Name === 'MpesaReceiptNumber');
     const mpesaReceipt =
       receiptItem?.Value != null ? String(receiptItem.Value) : undefined;
+    const amountItem = meta?.find((i) => i.Name === 'Amount');
+    const callbackAmount =
+      amountItem?.Value != null ? Number(amountItem.Value) : null;
 
     const tx = await this.billingRepo.findMpesaByCheckoutRequestId(
       checkoutRequestId,
@@ -353,6 +379,22 @@ export class CheckoutService {
     }
 
     if (resultCode === '0') {
+      if (
+        callbackAmount != null &&
+        Number.isFinite(callbackAmount) &&
+        Math.abs(callbackAmount - Number(tx.amount)) > 0.009
+      ) {
+        await this.billingRepo.updateMpesaTransaction(tx.id, {
+          status: 'FAILED',
+          resultCode: 'AMOUNT_MISMATCH',
+          resultDesc: `Callback amount ${callbackAmount} does not match expected ${tx.amount}`,
+          payload: {
+            ...((tx.payload as object) || {}),
+            callback: body,
+          },
+        });
+        return { ResultCode: 0, ResultDesc: 'Accepted' };
+      }
       await this.finalizeSuccess(tx.id, { mpesaReceipt, resultDesc });
     } else {
       await this.billingRepo.updateMpesaTransaction(tx.id, {
@@ -376,7 +418,17 @@ export class CheckoutService {
       receipt.patient_id,
     );
     const profile = patient?.profile;
-    const meta = (receipt.meta ?? {}) as Record<string, unknown>;
+    const meta = { ...((receipt.meta ?? {}) as Record<string, unknown>) };
+
+    const currentPayment = Number(
+      meta.currentPayment ?? receipt.amount ?? 0,
+    );
+    const previousPaid = Number(meta.previousPaid ?? 0);
+    const invoiceTotal = Number(
+      meta.invoiceTotal ?? currentPayment + previousPaid,
+    );
+    const balance = Number(meta.balance ?? 0);
+
     return {
       id: receipt.id,
       receiptNumber: receipt.receipt_number,
@@ -387,7 +439,24 @@ export class CheckoutService {
       invoiceId: receipt.invoice_id,
       paymentId: receipt.payment_id,
       lineItems: receipt.line_items as BillLine[],
-      meta,
+      meta: {
+        ...meta,
+        invoiceNumber: meta.invoiceNumber,
+        invoiceTotal,
+        previousPaid,
+        currentPayment,
+        balance,
+      },
+      paymentContext: {
+        invoiceNumber: meta.invoiceNumber
+          ? String(meta.invoiceNumber)
+          : undefined,
+        invoiceTotal,
+        previousPaid,
+        currentPayment,
+        balance,
+        totalPaid: previousPaid + currentPayment,
+      },
       patient: {
         mrn: patient?.patient_number || String(meta.mrn || ''),
         name: profile

@@ -1803,6 +1803,17 @@ export class BillingFinanceService {
         });
 
         if (input.allocateToInvoiceId) {
+          const inv = await tx.invoices.findUnique({
+            where: { id: input.allocateToInvoiceId },
+          });
+          if (!inv || inv.deleted_at) {
+            throw new NotFoundException('Invoice not found');
+          }
+          if (inv.status === 'PAID' || inv.status === 'VOIDED') {
+            throw new BadRequestException(
+              `Invoice ${inv.invoice_number} is already ${inv.status}`,
+            );
+          }
           await this.allocatePaymentInTx(tx, {
             paymentId: payment.id,
             invoiceId: input.allocateToInvoiceId,
@@ -1886,6 +1897,12 @@ export class BillingFinanceService {
     });
     if (!invoice || invoice.deleted_at) {
       throw new NotFoundException('Invoice not found');
+    }
+    // Re-read under transaction to reduce double-pay races (status may flip to PAID)
+    if (invoice.status === 'PAID' || invoice.status === 'VOIDED') {
+      throw new BadRequestException(
+        `Cannot allocate payment — invoice is ${invoice.status}`,
+      );
     }
     if (!['ISSUED', 'PARTIALLY_PAID'].includes(invoice.status)) {
       throw new BadRequestException(

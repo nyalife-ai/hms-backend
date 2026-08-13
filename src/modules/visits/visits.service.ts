@@ -1025,40 +1025,26 @@ export class VisitsService implements OnModuleInit {
       visit.billing?.claimStatus === 'REJECTED';
 
     const fees = await this.billing.getFeeSchedule();
-    const labCount = visit.labOrder?.tests?.length ?? 0;
-    const medCount = visit.prescriptions?.length ?? 0;
     const consultAlreadyPaid = visit.billing?.consultFeeStatus === 'PAID';
     const orderedExtras = [
       ...(visit.orderedServices ?? []),
       ...(visit.orderedSurgeries ?? []),
     ];
     const extraServiceIds = orderedExtras.map((s) => s.id).filter(Boolean);
-    const lines = [
-      ...(consultAlreadyPaid
-        ? []
-        : [{ description: 'Consultation', amount: fees.consult }]),
-      ...(visit.labOrder?.tests ?? []).map((t) => ({
-        description: `Lab: ${t.name}`,
-        amount: fees.lab,
-      })),
-      ...(visit.prescriptions ?? []).map((p) => ({
-        description: `Medication: ${p.medication}`,
-        amount: fees.medication,
-      })),
-      ...orderedExtras.map((s) => ({
-        description: s.name,
-        amount: Number(s.unitPrice) || 0,
-      })),
-    ];
+    const priced = await this.billing.priceVisitBillLines({
+      includeConsult: !consultAlreadyPaid,
+      labTests: visit.labOrder?.tests ?? [],
+      medications: visit.prescriptions ?? [],
+      orderedExtras,
+    });
+    const lines = priced.map((l) => ({
+      description: l.description,
+      amount: l.amount,
+    }));
     // Server is authoritative — client `total` is ignored
     void total;
-    const quote = await this.billing.quoteVisit({
-      consultCount: consultAlreadyPaid ? 0 : 1,
-      labCount,
-      medCount,
-      extraServiceIds,
-    });
-    const quoteTotal = Number(quote.totalAmount);
+    void fees;
+    const quoteTotal = lines.reduce((s, l) => s + l.amount, 0);
 
     const persistedClaim = claimId;
 
@@ -1096,6 +1082,7 @@ export class VisitsService implements OnModuleInit {
       });
       const billTotal = Number(settled.totalAmount);
       const pharmacy = await this.dispenseVisitMeds(visit, actorUserId);
+      const receiptLines = await this.receiptLinesFromInvoice(settled.invoiceId);
       const receipt = await this.issueCashReceipt({
         visitId: visit.id,
         mrn: visit.mrn,
@@ -1104,13 +1091,25 @@ export class VisitsService implements OnModuleInit {
         invoiceId: settled.invoiceId,
         paymentId: settled.paymentId,
         amount: billTotal,
-        lines,
+        lines: receiptLines.length ? receiptLines : lines,
         actorUserId,
         diagnosis: visit.diagnosis,
+        invoiceTotal:
+          billTotal +
+          (consultAlreadyPaid ? (visit.billing?.consultFeeAmount ?? 0) : 0),
+        previousPaid: consultAlreadyPaid
+          ? (visit.billing?.consultFeeAmount ?? 0)
+          : 0,
+        currentPayment: billTotal,
+        balance: 0,
+        invoiceNumber: settled.invoiceNumber,
       });
       return this.patch(id, {
         billing: {
-          total: billTotal + (consultAlreadyPaid ? (visit.billing?.consultFeeAmount ?? 0) : 0),
+          // Lifetime visit charges = this invoice + previously paid consult (if any)
+          total:
+            billTotal +
+            (consultAlreadyPaid ? (visit.billing?.consultFeeAmount ?? 0) : 0),
           mode: 'CASH',
           claimId: visit.billing?.claimId,
           claimStatus: cashFallback ? 'REJECTED' : undefined,
@@ -1181,6 +1180,19 @@ export class VisitsService implements OnModuleInit {
     });
   }
 
+  private async receiptLinesFromInvoice(
+    invoiceId: string,
+  ): Promise<Array<{ description: string; amount: number }>> {
+    const items = await this.prisma.invoiceItems.findMany({
+      where: { invoice_id: invoiceId },
+      orderBy: { created_at: 'asc' },
+    });
+    return items.map((i) => ({
+      description: i.description,
+      amount: Number(i.total_price),
+    }));
+  }
+
   private async issueCashReceipt(input: {
     visitId: string;
     mrn: string;
@@ -1192,6 +1204,11 @@ export class VisitsService implements OnModuleInit {
     lines: Array<{ description: string; amount: number }>;
     actorUserId: string;
     diagnosis?: string;
+    invoiceTotal?: number;
+    previousPaid?: number;
+    currentPayment?: number;
+    balance?: number;
+    invoiceNumber?: string;
   }): Promise<{ id: string; receipt_number: string } | null> {
     try {
       const patient = await this.prisma.patients.findUnique({
@@ -1217,6 +1234,11 @@ export class VisitsService implements OnModuleInit {
             phone: input.phone,
             diagnosis: input.diagnosis,
             channel: 'CASH',
+            invoiceNumber: input.invoiceNumber,
+            invoiceTotal: input.invoiceTotal,
+            previousPaid: input.previousPaid ?? 0,
+            currentPayment: input.currentPayment ?? input.amount,
+            balance: input.balance ?? 0,
           },
         },
         select: { id: true, receipt_number: true },

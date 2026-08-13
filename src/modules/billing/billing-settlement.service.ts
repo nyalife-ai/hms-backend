@@ -100,8 +100,139 @@ export class BillingSettlementService {
   }
 
   /**
+   * Authoritative OPD line pricing (catalog snapshot):
+   * Lab → TestTypes.standard_price (fallback LAB service)
+   * Medication → Medications.standard_selling_price (fallback MED)
+   * Consultation → resolveConsultFeeService()
+   */
+  async priceVisitBillLines(input: {
+    includeConsult: boolean;
+    labTests?: Array<{ name: string }>;
+    medications?: Array<{ medication: string; medicationId?: string }>;
+    orderedExtras?: Array<{ id: string; name: string; unitPrice?: string | number }>;
+  }): Promise<Array<{ description: string; amount: number; serviceId?: string }>> {
+    await this.ensureFeeSchedule();
+    const fees = await this.getFeeSchedule();
+    const lines: Array<{ description: string; amount: number; serviceId?: string }> =
+      [];
+
+    const [labSvc, medSvc] = await Promise.all([
+      this.prisma.services.findFirst({
+        where: { service_code: 'LAB', is_active: true },
+      }),
+      this.prisma.services.findFirst({
+        where: { service_code: 'MED', is_active: true },
+      }),
+    ]);
+
+    if (input.includeConsult) {
+      try {
+        const consult = await this.finance.resolveConsultFeeService();
+        lines.push({
+          description: 'Consultation',
+          amount: Number(consult.standardPrice),
+          serviceId: consult.id,
+        });
+      } catch {
+        lines.push({ description: 'Consultation', amount: fees.consult });
+      }
+    }
+
+    for (const t of input.labTests ?? []) {
+      const name = t.name?.trim();
+      if (!name) continue;
+      const tt = await this.prisma.testTypes.findFirst({
+        where: {
+          is_active: true,
+          test_name: { equals: name, mode: 'insensitive' },
+        },
+        select: { standard_price: true },
+      });
+      const amount = tt
+        ? Number(tt.standard_price)
+        : Number(labSvc?.standard_price ?? fees.lab);
+      lines.push({
+        description: `Lab: ${name}`,
+        amount: Number.isFinite(amount) && amount >= 0 ? amount : fees.lab,
+        serviceId: labSvc?.id,
+      });
+    }
+
+    for (const p of input.medications ?? []) {
+      const name = p.medication?.trim();
+      if (!name) continue;
+      let price: number | null = null;
+      if (p.medicationId) {
+        const byId = await this.prisma.medications.findFirst({
+          where: { id: p.medicationId, deleted_at: null },
+          select: { standard_selling_price: true },
+        });
+        if (byId) price = Number(byId.standard_selling_price);
+      }
+      if (price === null) {
+        const byName = await this.prisma.medications.findFirst({
+          where: {
+            deleted_at: null,
+            medication_name: { equals: name, mode: 'insensitive' },
+          },
+          select: { standard_selling_price: true },
+        });
+        if (byName) price = Number(byName.standard_selling_price);
+      }
+      const amount =
+        price !== null && Number.isFinite(price) && price >= 0
+          ? price
+          : Number(medSvc?.standard_price ?? fees.medication);
+      lines.push({
+        description: `Medication: ${name}`,
+        amount,
+        serviceId: medSvc?.id,
+      });
+    }
+
+    for (const s of input.orderedExtras ?? []) {
+      if (!s.id) continue;
+      const row = await this.prisma.services.findFirst({
+        where: { id: s.id, is_active: true },
+        select: { id: true, service_name: true, standard_price: true },
+      });
+      if (!row) continue;
+      lines.push({
+        description: row.service_name || s.name,
+        amount: Number(row.standard_price),
+        serviceId: row.id,
+      });
+    }
+
+    return lines;
+  }
+
+  private async resolveDefaultTaxRateId(): Promise<string | undefined> {
+    try {
+      const enabledRow = await this.prisma.settings.findUnique({
+        where: { key: 'tax_enabled' },
+      });
+      if (enabledRow) {
+        const v = enabledRow.value.trim().toLowerCase();
+        if (['false', '0', 'no', 'off'].includes(v)) return undefined;
+      }
+      const rate = await this.prisma.taxRates.findFirst({
+        where: { is_active: true },
+        orderBy: { created_at: 'asc' },
+        select: { id: true, rate_percentage: true },
+      });
+      if (!rate || Number(rate.rate_percentage) === 0) return undefined;
+      return rate.id;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Settle an OPD visit using formal invoices + journals.
-   * Line amounts from the client are ignored — prices come from billing.services.
+   * When input.lines carry amounts, those are treated as server-priced
+   * catalog snapshots (one invoice item per line). Otherwise falls back
+   * to legacy flat LAB/MED fee-schedule counts.
    */
   async settleVisit(input: SettleVisitInput): Promise<{
     invoiceId: string;
@@ -140,40 +271,125 @@ export class BillingSettlementService {
       consultCount === 0 &&
       labCount === 0 &&
       medCount === 0 &&
-      extraIds.length === 0
+      extraIds.length === 0 &&
+      input.lines.length === 0
     ) {
       throw new BadRequestException(
         'Nothing to bill — no consultation, lab, medication, or service lines',
       );
     }
 
-    const quote =
-      consultCount + labCount + medCount > 0
-        ? await this.finance.quoteVisitLines({
-            consultCount,
-            labCount,
-            medCount,
+    const useCatalogLines =
+      input.lines.length > 0 &&
+      input.lines.every(
+        (l) => Number.isFinite(Number(l.amount)) && Number(l.amount) >= 0,
+      );
+
+    let mergedLines: Array<{
+      serviceId: string;
+      description: string;
+      quantity: string;
+      unitPrice: string;
+    }> = [];
+
+    if (useCatalogLines) {
+      const labSvc = await this.prisma.services.findFirst({
+        where: { service_code: 'LAB', is_active: true },
+      });
+      const medSvc = await this.prisma.services.findFirst({
+        where: { service_code: 'MED', is_active: true },
+      });
+      let consultId: string | undefined;
+      try {
+        consultId = (await this.finance.resolveConsultFeeService()).id;
+      } catch {
+        consultId = (
+          await this.prisma.services.findFirst({
+            where: { service_code: 'CONSULT', is_active: true },
+            select: { id: true },
           })
-        : { lines: [] as Array<{
-            serviceId: string;
-            description: string;
-            quantity: string;
-            unitPrice: string;
-          }> };
+        )?.id;
+      }
 
-    const extras = extraIds.length
-      ? await this.prisma.services.findMany({
+      for (const line of input.lines) {
+        const d = line.description.toLowerCase();
+        let serviceId: string | undefined;
+        if (d.startsWith('consultation')) serviceId = consultId;
+        else if (d.startsWith('lab')) serviceId = labSvc?.id;
+        else if (d.startsWith('medication') || d.startsWith('med'))
+          serviceId = medSvc?.id;
+        else {
+          const byName = await this.prisma.services.findFirst({
+            where: {
+              is_active: true,
+              service_name: {
+                equals: line.description,
+                mode: 'insensitive',
+              },
+            },
+            select: { id: true },
+          });
+          serviceId = byName?.id ?? labSvc?.id ?? medSvc?.id ?? consultId;
+        }
+        if (!serviceId) {
+          throw new BadRequestException(
+            `No billing service mapped for line: ${line.description}`,
+          );
+        }
+        mergedLines.push({
+          serviceId,
+          description: line.description,
+          quantity: '1',
+          unitPrice: String(line.amount),
+        });
+      }
+
+      if (extraIds.length) {
+        const already = new Set(mergedLines.map((l) => l.serviceId));
+        const extras = await this.prisma.services.findMany({
           where: { id: { in: extraIds }, is_active: true },
-        })
-      : [];
-    const extraLines = extras.map((s) => ({
-      serviceId: s.id,
-      description: s.service_name,
-      quantity: '1',
-      unitPrice: s.standard_price.toString(),
-    }));
+        });
+        for (const s of extras) {
+          if (already.has(s.id)) continue;
+          mergedLines.push({
+            serviceId: s.id,
+            description: s.service_name,
+            quantity: '1',
+            unitPrice: s.standard_price.toString(),
+          });
+        }
+      }
+    } else {
+      const quote =
+        consultCount + labCount + medCount > 0
+          ? await this.finance.quoteVisitLines({
+              consultCount,
+              labCount,
+              medCount,
+            })
+          : {
+              lines: [] as Array<{
+                serviceId: string;
+                description: string;
+                quantity: string;
+                unitPrice: string;
+              }>,
+            };
 
-    const mergedLines = [...quote.lines, ...extraLines];
+      const extras = extraIds.length
+        ? await this.prisma.services.findMany({
+            where: { id: { in: extraIds }, is_active: true },
+          })
+        : [];
+      const extraLines = extras.map((s) => ({
+        serviceId: s.id,
+        description: s.service_name,
+        quantity: '1',
+        unitPrice: s.standard_price.toString(),
+      }));
+      mergedLines = [...quote.lines, ...extraLines];
+    }
+
     if (!mergedLines.length) {
       throw new BadRequestException(
         'Nothing to bill — fee schedule or services unavailable',
@@ -181,6 +397,8 @@ export class BillingSettlementService {
     }
     // Validate totals (authoritative path still uses line unit prices)
     void calculateInvoiceTotals({ lines: mergedLines });
+
+    const taxRateId = await this.resolveDefaultTaxRateId();
 
     const invoice = await this.finance.createInvoice({
       patientId: patient.id,
@@ -193,6 +411,7 @@ export class BillingSettlementService {
         quantity: l.quantity,
         unitPrice: l.unitPrice,
       })),
+      taxRateId,
       actorUserId: input.createdByUserId,
     });
 
