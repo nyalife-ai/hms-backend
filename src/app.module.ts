@@ -119,6 +119,8 @@ import { PatientPortalModule } from './modules/patient-portal/patient-portal.mod
             ? passwordRaw.trim()
             : undefined;
         return {
+          // Isolate Bull keys from other tenants on shared Redis
+          prefix: config.get<string>('BULL_PREFIX')?.trim() || 'nyalife',
           redis: {
             host: config.get<string>('redis.host') || '127.0.0.1',
             port: config.get<number>('redis.port') || 6379,

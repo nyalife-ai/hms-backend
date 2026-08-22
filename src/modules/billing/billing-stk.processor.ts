@@ -30,6 +30,13 @@ export class BillingStkProcessor {
 
   @OnQueueFailed()
   onFailed(job: Job, error: Error): void {
+    // Shared Redis used to deliver foreign job names (e.g. session.create) here.
+    if (job?.name && job.name !== BILLING_STK_JOB) {
+      this.logger.warn(
+        `Ignoring non-STK job name=${job.name} id=${job.id}: ${error.message}`,
+      );
+      return;
+    }
     this.logger.warn(
       `STK job failed id=${job.id} attempt=${job.attemptsMade}: ${error.message}`,
     );

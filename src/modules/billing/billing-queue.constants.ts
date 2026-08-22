@@ -1,8 +1,11 @@
 /**
- * Billing Bull queue names / job payloads — shared constants (no circular imports).
+ * Billing Bull queue names / job payloads.
+ * Namespaced so a shared Redis is not polluted by other apps' `payments-queue`.
  */
 
-export const BILLING_PAYMENTS_QUEUE = 'payments-queue';
+export const BILLING_PAYMENTS_QUEUE =
+  process.env.BULL_PAYMENTS_QUEUE?.trim() || 'nyalife-payments';
+
 export const BILLING_STK_JOB = 'payment.stk_push';
 
 export type BillingStkJobData = {

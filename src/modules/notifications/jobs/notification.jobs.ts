@@ -14,7 +14,8 @@ export const PAYMENT_JOBS = {
   STK_PUSH: 'payment.stk_push',
 } as const;
 
-export const PAYMENTS_QUEUE_NAME = 'payments-queue';
+export const PAYMENTS_QUEUE_NAME =
+  process.env.BULL_PAYMENTS_QUEUE?.trim() || 'nyalife-payments';
 
 /** Durable in-app notification to persist before channel delivery. */
 export type DurableNotificationSpec = {

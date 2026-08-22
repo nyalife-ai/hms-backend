@@ -16,6 +16,13 @@ import type {
   RefreshTokenRecord,
 } from './auth-user.repository.interface';
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string): boolean {
+  return UUID_RE.test(value);
+}
+
 interface MemoryRefresh {
   userId: string;
   expiresAt: Date;
@@ -31,22 +38,17 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
 
   public async findByEmail(email: string): Promise<AuthUser | null> {
     if (this.prisma.isConnected) {
-      try {
-        const row = await this.prisma.user.findFirst({
-          where: {
-            email: { equals: email, mode: 'insensitive' },
-            deleted_at: null,
-            is_active: true,
-          },
-          include: this.userInclude(),
-        });
-        return this.mapDbUser(row);
-      } catch {
-        const mem = AUTH_USERS.find(
-          (u) => u.email.toLowerCase() === email.toLowerCase(),
-        );
-        return mem ? this.withFallbackPermissions(mem) : null;
-      }
+      // Never fall back to AUTH_USERS (ids like "u-admin") while Prisma is up —
+      // those are not UUIDs and break refresh_tokens.user_id.
+      const row = await this.prisma.user.findFirst({
+        where: {
+          email: { equals: email, mode: 'insensitive' },
+          deleted_at: null,
+          is_active: true,
+        },
+        include: this.userInclude(),
+      });
+      return this.mapDbUser(row);
     }
     const mem = AUTH_USERS.find(
       (u) => u.email.toLowerCase() === email.toLowerCase(),
@@ -56,6 +58,7 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
 
   public async findById(id: string): Promise<AuthUser | null> {
     if (this.prisma.isConnected) {
+      if (!isUuid(id)) return null;
       const row = await this.prisma.user.findFirst({
         where: { id, deleted_at: null, is_active: true },
         include: this.userInclude(),
@@ -144,7 +147,8 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
     userAgent?: string;
     ip?: string;
   }): Promise<void> {
-    if (this.prisma.isConnected) {
+    // Demo / memory users use ids like "u-admin" — never write those to UUID columns.
+    if (this.prisma.isConnected && isUuid(input.userId)) {
       await this.prisma.refreshTokens.create({
         data: {
           user_id: input.userId,
@@ -170,12 +174,13 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
       const row = await this.prisma.refreshTokens.findUnique({
         where: { token_hash: tokenHash },
       });
-      if (!row) return null;
-      return {
-        userId: row.user_id,
-        expiresAt: row.expires_at,
-        revokedAt: row.revoked_at,
-      };
+      if (row) {
+        return {
+          userId: row.user_id,
+          expiresAt: row.expires_at,
+          revokedAt: row.revoked_at,
+        };
+      }
     }
     const mem = this.memoryRefresh.get(tokenHash);
     if (!mem) return null;
@@ -194,21 +199,19 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
           data: { revoked_at: new Date() },
         })
         .catch(() => undefined);
-      return;
     }
     const mem = this.memoryRefresh.get(tokenHash);
     if (mem) mem.revokedAt = new Date();
   }
 
   public async revokeAllForUser(userId: string): Promise<void> {
-    if (this.prisma.isConnected) {
+    if (this.prisma.isConnected && isUuid(userId)) {
       await this.prisma.refreshTokens
         .updateMany({
           where: { user_id: userId, revoked_at: null },
           data: { revoked_at: new Date() },
         })
         .catch(() => undefined);
-      return;
     }
     for (const [hash, row] of this.memoryRefresh) {
       if (row.userId === userId) {
@@ -293,12 +296,13 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
           user_agent: userAgent,
         },
       });
-      if (!row) return null;
-      return {
-        userId: row.user_id,
-        expiresAt: row.expires_at,
-        revokedAt: row.revoked_at,
-      };
+      if (row) {
+        return {
+          userId: row.user_id,
+          expiresAt: row.expires_at,
+          revokedAt: row.revoked_at,
+        };
+      }
     }
     const mem = this.memoryRefresh.get(tokenHash);
     if (!mem || mem.userAgent !== userAgent) return null;
@@ -314,7 +318,7 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
     userAgents: string[],
   ): Promise<void> {
     if (!userAgents.length) return;
-    if (this.prisma.isConnected) {
+    if (this.prisma.isConnected && isUuid(userId)) {
       await this.prisma.refreshTokens
         .updateMany({
           where: {
@@ -325,7 +329,6 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
           data: { revoked_at: new Date() },
         })
         .catch(() => undefined);
-      return;
     }
     for (const [hash, mem] of this.memoryRefresh.entries()) {
       if (
