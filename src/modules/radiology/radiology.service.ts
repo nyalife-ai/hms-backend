@@ -23,6 +23,8 @@ import { FindRadiologyByIdUseCase } from './use-cases/find-radiology-by-id.useca
 import { FindAllRadiologyUseCase } from './use-cases/find-all-radiology.usecase';
 import { UpdateRadiologyUseCase } from './use-cases/update-radiology.usecase';
 import { SoftDeleteRadiologyUseCase } from './use-cases/soft-delete-radiology.usecase';
+import { createDomainEventEnvelope } from '../notifications/infrastructure/domain-event.envelope';
+import { DOMAIN_EVENT_TYPES } from '../notifications/policy/notification-policy.service';
 
 @Injectable()
 export class RadiologyService {
@@ -41,6 +43,17 @@ export class RadiologyService {
     const result = await this.createUseCase.execute(dto);
     const entity = this.unwrap(result);
     this.events.emit(RADIOLOGY_EVENTS.CREATED, new RadiologyCreatedEvent(entity.getId()));
+    try {
+      this.events.emit(
+        DOMAIN_EVENT_TYPES.RADIOLOGY_REQUEST_CREATED,
+        createDomainEventEnvelope({
+          type: DOMAIN_EVENT_TYPES.RADIOLOGY_REQUEST_CREATED,
+          payload: { requestId: entity.getId() },
+        }),
+      );
+    } catch {
+      // Notification failure must not roll back radiology request creation.
+    }
     return RadiologyMapper.toResponse(entity);
   }
 

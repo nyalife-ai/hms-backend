@@ -27,6 +27,9 @@ import type {
   CreateAppointmentDto,
   AppointmentsQueryDto,
   UpdateAppointmentDto,
+  CancelAppointmentDto,
+  CheckInAppointmentDto,
+  RescheduleAppointmentDto,
 } from './dto';
 import { AppointmentsService } from './appointments.service';
 
@@ -56,6 +59,27 @@ export class AppointmentsController {
   @ApiOperation({ summary: 'Get appointment by id' })
   findOne(@Param('id') id: string) {
     return this.service.findById(id);
+  }
+
+  @Post(':id/check-in')
+  @Roles(...FRONT_DESK_ROLES)
+  @ApiOperation({ summary: 'Check in appointment' })
+  checkIn(@Param('id') id: string, @Body() dto: CheckInAppointmentDto) {
+    return this.service.checkIn(id, dto);
+  }
+
+  @Post(':id/cancel')
+  @Roles(...FRONT_DESK_ROLES)
+  @ApiOperation({ summary: 'Cancel appointment' })
+  cancel(@Param('id') id: string, @Body() dto: CancelAppointmentDto) {
+    return this.service.cancel(id, dto);
+  }
+
+  @Post(':id/reschedule')
+  @Roles(...FRONT_DESK_ROLES)
+  @ApiOperation({ summary: 'Reschedule appointment' })
+  reschedule(@Param('id') id: string, @Body() dto: RescheduleAppointmentDto) {
+    return this.service.reschedule(id, dto);
   }
 
   @Patch(':id')

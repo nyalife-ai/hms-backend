@@ -60,7 +60,9 @@ export interface IVisitsRepository {
     },
   ): Promise<VisitRow>;
   findPatientIdByMrn(mrn: string): Promise<string | null>;
-  findAppointment(id: string): Promise<{ id: string; status: string } | null>;
+  findAppointment(
+    id: string,
+  ): Promise<{ id: string; status: string; doctorId: string } | null>;
   markAppointmentArrived(id: string): Promise<void>;
   upsertLabRequest(input: {
     requestNumber: string;
@@ -69,6 +71,7 @@ export interface IVisitsRepository {
     notes: string;
     requestedBy: string;
     consultationId?: string | null;
-  }): Promise<void>;
+    requestingDoctorId?: string | null;
+  }): Promise<{ id: string }>;
   findAdminUserId(): Promise<string | undefined>;
 }

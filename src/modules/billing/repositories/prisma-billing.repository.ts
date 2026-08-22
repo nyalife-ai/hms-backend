@@ -306,6 +306,32 @@ export class PrismaBillingRepository implements IBillingRepository {
     });
   }
 
+  public async claimMpesaPending(
+    id: string,
+    data: UpdateMpesaTransactionInput,
+  ): Promise<MpesaTransactionRow | null> {
+    const result = await this.prisma.mpesaTransactions.updateMany({
+      where: { id, status: 'PENDING' },
+      data: {
+        ...(data.status !== undefined ? { status: data.status } : {}),
+        ...(data.resultCode !== undefined
+          ? { result_code: data.resultCode }
+          : {}),
+        ...(data.resultDesc !== undefined
+          ? { result_desc: data.resultDesc }
+          : {}),
+        ...(data.mpesaReceiptNumber !== undefined
+          ? { mpesa_receipt_number: data.mpesaReceiptNumber }
+          : {}),
+        ...(data.payload !== undefined
+          ? { payload: data.payload as Prisma.InputJsonValue }
+          : {}),
+      },
+    });
+    if (result.count === 0) return null;
+    return this.findMpesaById(id);
+  }
+
   public async findReceiptByMpesaTxId(
     mpesaTxId: string,
   ): Promise<ReceiptRow | null> {

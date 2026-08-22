@@ -83,4 +83,40 @@ export class CreatePatientDto {
   @IsString()
   @MaxLength(30)
   patientNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  address?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  city?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  country?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  postalCode?: string;
+
+  @ApiPropertyOptional({ description: 'Next of kin / emergency contact name' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  emergencyContactName?: string;
+
+  @ApiPropertyOptional({ description: 'Next of kin / emergency contact phone' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  emergencyContactPhone?: string;
 }

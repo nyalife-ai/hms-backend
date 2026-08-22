@@ -150,6 +150,14 @@ export interface IBillingRepository {
     id: string,
     data: UpdateMpesaTransactionInput,
   ): Promise<MpesaTransactionRow>;
+  /**
+   * Atomically claim a PENDING row (updateMany where status=PENDING).
+   * Returns the row when this caller won the race; otherwise null.
+   */
+  claimMpesaPending(
+    id: string,
+    data: UpdateMpesaTransactionInput,
+  ): Promise<MpesaTransactionRow | null>;
   findReceiptByMpesaTxId(mpesaTxId: string): Promise<ReceiptRow | null>;
   findReceiptById(id: string): Promise<ReceiptRow | null>;
   countReceipts(): Promise<number>;

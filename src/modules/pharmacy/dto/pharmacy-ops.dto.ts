@@ -101,7 +101,7 @@ export class UpdateCategoryDto {
   isActive?: boolean;
 }
 
-export class CreateMedicationDto {
+export class PharmacyCreateMedicationDto {
   @ApiProperty({ example: 'Amoxicillin 500mg' })
   @IsString()
   medicationName!: string;
@@ -155,7 +155,7 @@ export class CreateMedicationDto {
   contraindications?: string;
 }
 
-export class UpdateMedicationDto {
+export class PharmacyUpdateMedicationDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

@@ -103,9 +103,13 @@ export class PrismaPatientRepository implements IPatientRepository {
             date_of_birth: dto.dateOfBirth
               ? new Date(dto.dateOfBirth)
               : null,
+            address: dto.address?.trim() || null,
+            city: dto.city?.trim() || null,
+            country: dto.country?.trim() || null,
+            postal_code: dto.postalCode?.trim() || null,
           },
         });
-        return tx.patients.create({
+        const patient = await tx.patients.create({
           data: {
             user_id: user.id,
             patient_number: patientNumber,
@@ -119,6 +123,22 @@ export class PrismaPatientRepository implements IPatientRepository {
             user: { include: { core_profiles_user_id: true } },
           },
         });
+
+        const kinName = dto.emergencyContactName?.trim();
+        const kinPhone = dto.emergencyContactPhone?.trim();
+        if (kinName || kinPhone) {
+          await tx.emergencyContacts.create({
+            data: {
+              patient_id: patient.id,
+              name: kinName || 'Next of kin',
+              phone: kinPhone || '—',
+              relationship: 'NEXT_OF_KIN',
+              is_primary: true,
+            },
+          });
+        }
+
+        return patient;
       });
 
       return this.toDomain(created);

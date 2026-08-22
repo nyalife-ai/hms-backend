@@ -90,8 +90,9 @@ async function bootstrap(): Promise<void> {
     const swaggerConfig = new DocumentBuilder()
       .setTitle('NyaLife HMS API')
       .setDescription(
-        'Hospital management API — visits, pharmacy, IPD, laboratory, billing, auth, and operations. ' +
+        'Hospital management API — visits, pharmacy, IPD, laboratory, billing, auth, notifications/SMS, and operations. ' +
           'Pharmacy domain lives under /pharmacy/* (suppliers, categories, medications, batches, stock, prescriptions, purchase orders). ' +
+          'M-Pesa STK: POST /billing/checkout/stk. SMS: POST /notifications/sms (Africa\'s Talking). ' +
           'Legacy /pharmacy, /medications, and /prescriptions aliases are deprecated.',
       )
       .setVersion(process.env.npm_package_version || '1.0.0')
@@ -99,10 +100,14 @@ async function bootstrap(): Promise<void> {
       .addTag('Pharmacy', 'Formulary, stock, prescriptions, and purchase orders')
       .addTag('IPD Journey', 'Wards, beds, admissions, discharge')
       .addTag('visits', 'Outpatient visit pipeline')
-      .addTag('Billing', 'Invoices, payments, claims, M-Pesa')
+      .addTag('billing', 'Fees, M-Pesa STK checkout, receipts, callbacks')
+      .addTag('Notifications', 'In-app notifications and Africa\'s Talking SMS')
       .build();
 
-    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    const document = SwaggerModule.createDocument(app, swaggerConfig, {
+      extraModels: [],
+      deepScanRoutes: true,
+    });
     SwaggerModule.setup('api/docs', app, document);
   }
 

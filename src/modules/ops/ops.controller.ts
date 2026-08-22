@@ -97,7 +97,7 @@ class UpdateOpsStaffDto {
   @ApiPropertyOptional() @IsOptional() @IsString() specialty?: string;
 }
 
-class CreateMedicationDto {
+class OpsCreateMedicationDto {
   @ApiProperty() @IsString() name!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() category?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() unit?: string;
@@ -230,7 +230,7 @@ export class OpsController {
   @Post('medications')
   @Roles('ADMIN', 'PHARMACIST')
   createMedication(
-    @Body() body: CreateMedicationDto,
+    @Body() body: OpsCreateMedicationDto,
     @CurrentUser() user: AuthUserPublic,
   ) {
     return this.ops.createMedication({ ...body, createdBy: user.id });

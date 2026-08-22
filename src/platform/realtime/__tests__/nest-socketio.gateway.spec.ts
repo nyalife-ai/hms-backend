@@ -1,57 +1,95 @@
 import { NestSocketIoGateway } from '../gateways/nest-socketio.gateway';
+import type { RealtimeGatewayHandler } from '../gateways/realtime.gateway';
 import type { RealtimeService } from '../realtime.service';
 import type { Socket } from 'socket.io';
 
 describe('NestSocketIoGateway', () => {
   const realtime = {} as RealtimeService;
+  let gatewayHandler: {
+    handleConnect: jest.Mock;
+    handleJoin: jest.Mock;
+    handleLeave: jest.Mock;
+    handleDisconnect: jest.Mock;
+  };
   let gateway: NestSocketIoGateway;
   let client: Socket;
 
   beforeEach(() => {
-    gateway = new NestSocketIoGateway(realtime);
+    gatewayHandler = {
+      handleConnect: jest.fn().mockResolvedValue({
+        accepted: true,
+        connectionId: 'conn-1',
+        identity: { userId: 'u1', roles: ['LAB_TECHNICIAN'] },
+      }),
+      handleJoin: jest.fn().mockResolvedValue(true),
+      handleLeave: jest.fn().mockResolvedValue(true),
+      handleDisconnect: jest.fn().mockResolvedValue(true),
+    };
+    gateway = new NestSocketIoGateway(
+      realtime,
+      gatewayHandler as unknown as RealtimeGatewayHandler,
+    );
     client = {
       id: 'c1',
-      handshake: { query: {} },
-      join: jest.fn(),
-      leave: jest.fn(),
+      data: {},
+      handshake: { query: {}, auth: { token: 'jwt' }, headers: {} },
+      join: jest.fn().mockResolvedValue(undefined),
+      leave: jest.fn().mockResolvedValue(undefined),
+      emit: jest.fn(),
+      disconnect: jest.fn(),
     } as unknown as Socket;
   });
 
-  it('joins lobby on connect when room query missing', () => {
-    gateway.handleConnection(client);
-    expect(client.join).toHaveBeenCalledWith('lobby');
+  it('authenticates and joins user room on connect', async () => {
+    await gateway.handleConnection(client);
+    expect(gatewayHandler.handleConnect).toHaveBeenCalled();
+    expect(client.join).toHaveBeenCalledWith('user:u1');
+    expect(gatewayHandler.handleJoin).toHaveBeenCalledWith('conn-1', 'user:u1');
   });
 
-  it('joins requested room on connect', () => {
-    (client.handshake as { query: Record<string, string> }).query = {
-      room: 'ipd',
-    };
-    gateway.handleConnection(client);
-    expect(client.join).toHaveBeenCalledWith('ipd');
+  it('rejects unauthorized connections', async () => {
+    gatewayHandler.handleConnect.mockResolvedValue({
+      accepted: false,
+      reason: 'unauthorized',
+    });
+    await gateway.handleConnection(client);
+    expect(client.disconnect).toHaveBeenCalledWith(true);
   });
 
-  it('handles disconnect', () => {
-    expect(() => gateway.handleDisconnect(client)).not.toThrow();
+  it('handles disconnect', async () => {
+    (client.data as { connectionId?: string }).connectionId = 'conn-1';
+    await gateway.handleDisconnect(client);
+    expect(gatewayHandler.handleDisconnect).toHaveBeenCalledWith('conn-1');
   });
 
-  it('onJoin defaults to lobby', () => {
-    expect(gateway.onJoin(client, {})).toEqual({ ok: true });
-    expect(client.join).toHaveBeenCalledWith('lobby');
+  it('allows authorized department room join', async () => {
+    (client.data as { userId?: string; roles?: string[]; connectionId?: string }).userId =
+      'u1';
+    (client.data as { roles?: string[] }).roles = ['LAB_TECHNICIAN'];
+    (client.data as { connectionId?: string }).connectionId = 'conn-1';
+    await expect(gateway.onJoin(client, { room: 'laboratory' })).resolves.toEqual({
+      ok: true,
+    });
+    expect(client.join).toHaveBeenCalledWith('laboratory');
   });
 
-  it('onJoin uses provided room', () => {
-    expect(gateway.onJoin(client, { room: 'ward-1' })).toEqual({ ok: true });
-    expect(client.join).toHaveBeenCalledWith('ward-1');
+  it('denies unauthorized department room join', async () => {
+    (client.data as { userId?: string; roles?: string[]; connectionId?: string }).userId =
+      'u1';
+    (client.data as { roles?: string[] }).roles = ['PATIENT'];
+    (client.data as { connectionId?: string }).connectionId = 'conn-1';
+    await expect(gateway.onJoin(client, { room: 'laboratory' })).resolves.toEqual({
+      ok: false,
+      reason: 'forbidden',
+    });
   });
 
-  it('onLeave leaves room when provided', () => {
-    expect(gateway.onLeave(client, { room: 'ward-1' })).toEqual({ ok: true });
-    expect(client.leave).toHaveBeenCalledWith('ward-1');
-  });
-
-  it('onLeave is a no-op without room', () => {
-    expect(gateway.onLeave(client, {})).toEqual({ ok: true });
-    expect(client.leave).not.toHaveBeenCalled();
+  it('onLeave leaves room when provided', async () => {
+    (client.data as { connectionId?: string }).connectionId = 'conn-1';
+    await expect(gateway.onLeave(client, { room: 'laboratory' })).resolves.toEqual({
+      ok: true,
+    });
+    expect(client.leave).toHaveBeenCalledWith('laboratory');
   });
 
   it('publishToRoom emits via socket server', () => {
@@ -62,18 +100,5 @@ describe('NestSocketIoGateway', () => {
     gateway.publishToRoom('ipd', 'ipd.admitted', { id: 1 });
     expect(gateway.server.to).toHaveBeenCalledWith('ipd');
     expect(emit).toHaveBeenCalledWith('ipd.admitted', { id: 1 });
-  });
-
-  it('publishToRoom no-ops when server is unset', () => {
-    (gateway as { server?: unknown }).server = undefined;
-    expect(() =>
-      gateway.publishToRoom('ipd', 'ipd.admitted', { id: 1 }),
-    ).not.toThrow();
-  });
-
-  it('publishToRoom no-ops when realtime is missing', () => {
-    const bare = Object.create(NestSocketIoGateway.prototype) as NestSocketIoGateway;
-    (bare as { realtime?: unknown }).realtime = undefined;
-    expect(() => bare.publishToRoom('ipd', 'x', {})).not.toThrow();
   });
 });

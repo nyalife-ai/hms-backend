@@ -77,6 +77,7 @@ model User {
   communications_message_reactions_user_id MessageReactions[] @relation(name: "MessageReactions_User_user_id")
   communications_message_edit_history_edited_by MessageEditHistory[] @relation(name: "MessageEditHistory_User_edited_by")
   communications_notifications_user_id Notifications[] @relation(name: "Notifications_User_user_id")
+  communications_device_tokens_user_id DeviceTokens[] @relation(name: "DeviceTokens_User_user_id")
   core_refresh_tokens_user_id RefreshTokens[] @relation(name: "RefreshTokens_User_user_id")
   @@map("users")
   @@schema("core")
@@ -95,6 +96,7 @@ model Profiles {
   country String? @db.VarChar(100)
   postal_code String? @db.VarChar(20)
   profile_image String? @db.VarChar(500)
+  notification_sound_enabled Boolean @default(true)
   created_at DateTime @db.Timestamptz(6) @default(now())
   updated_at DateTime @db.Timestamptz(6) @updatedAt
   deleted_at DateTime? @db.Timestamptz(6)
@@ -1606,9 +1608,17 @@ model Notifications {
   is_read Boolean @default(false)
   read_at DateTime? @db.Timestamptz(6)
   expires_at DateTime? @db.Timestamptz(6)
+  idempotency_key String? @unique @db.VarChar(200)
+  entity_type String? @db.VarChar(80)
+  entity_id String? @db.Uuid
+  action_path String? @db.VarChar(255)
+  /// QUEUED | DELIVERED | PARTIAL | FAILED — distinct from is_read
+  delivery_status String @db.VarChar(20) @default("QUEUED")
+  ws_delivered_at DateTime? @db.Timestamptz(6)
   created_at DateTime @db.Timestamptz(6) @default(now())
   user User @relation(fields: [user_id], references: [id], name: "Notifications_User_user_id", onDelete: Cascade)
   communications_notification_delivery_logs_notification_id NotificationDeliveryLogs[] @relation(name: "NotificationDeliveryLogs_Notifications_notification_id")
+  @@index([user_id, is_read])
   @@map("notifications")
   @@schema("communications")
 }
@@ -1629,6 +1639,24 @@ model NotificationDeliveryLogs {
   notification Notifications @relation(fields: [notification_id], references: [id], name: "NotificationDeliveryLogs_Notifications_notification_id", onDelete: Cascade)
   provider NotificationProviders @relation(fields: [provider_id], references: [id], name: "NotificationDeliveryLogs_NotificationProviders_provider_id")
   @@map("notification_delivery_logs")
+  @@schema("communications")
+}
+
+/// FCM / APNs registration tokens for mobile & web clients (one row per token).
+model DeviceTokens {
+  id          String    @id @default(uuid()) @db.Uuid
+  user_id     String    @db.Uuid
+  token       String    @unique @db.VarChar(512)
+  platform    String    @db.VarChar(20)
+  device_id   String?   @db.VarChar(100)
+  is_active   Boolean   @default(true)
+  last_seen_at DateTime? @db.Timestamptz(6)
+  created_at  DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime  @updatedAt @db.Timestamptz(6)
+  user        User      @relation(fields: [user_id], references: [id], name: "DeviceTokens_User_user_id", onDelete: Cascade)
+
+  @@index([user_id, is_active])
+  @@map("device_tokens")
   @@schema("communications")
 }
 

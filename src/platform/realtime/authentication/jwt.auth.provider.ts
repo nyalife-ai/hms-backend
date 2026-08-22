@@ -64,15 +64,22 @@ export class JwtRealtimeAuthProvider implements RealtimeAuthProvider {
             ? payload.userId
             : undefined;
       if (!userId) return undefined;
+      const rolesFromArray = Array.isArray(payload.roles)
+        ? payload.roles.filter(
+            (role): role is string => typeof role === 'string',
+          )
+        : undefined;
+      const roleSingular =
+        typeof payload.role === 'string' && payload.role
+          ? [payload.role]
+          : undefined;
       return {
         userId,
         tenantId:
           typeof payload.tenantId === 'string' ? payload.tenantId : undefined,
-        roles: Array.isArray(payload.roles)
-          ? payload.roles.filter(
-              (role): role is string => typeof role === 'string',
-            )
-          : undefined,
+        roles: rolesFromArray?.length
+          ? rolesFromArray
+          : roleSingular,
         anonymous: false,
       };
     } catch {

@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsString } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Public } from '../../common/decorators/public.decorator';
@@ -12,11 +12,14 @@ import { BillingSettlementService } from './billing-settlement.service';
 import { CheckoutService } from './checkout.service';
 
 class StkCheckoutDto {
-  @ApiProperty()
+  @ApiProperty({
+    format: 'uuid',
+    description: 'Outpatient visit UUID',
+  })
   @IsString()
   visitId!: string;
 
-  @ApiProperty({ example: '254708374149' })
+  @ApiProperty({ example: '254708374149', description: 'M-Pesa MSISDN (2547…)' })
   @IsString()
   phone!: string;
 
@@ -55,6 +58,7 @@ export class BillingController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST', 'PHARMACIST')
   @ApiOperation({ summary: 'Start M-Pesa STK Push for a visit checkout' })
+  @ApiBody({ type: StkCheckoutDto })
   stk(
     @Body() body: StkCheckoutDto,
     @CurrentUser() user: AuthUserPublic,
@@ -80,10 +84,11 @@ export class BillingController {
   @Post('mpesa/callback')
   @ApiOperation({
     summary:
-      'Safaricom Daraja STK callback (public; requires MPESA_CALLBACK_SECRET in production)',
+      'Safaricom Daraja STK callback (public; requires MPESA_CALLBACK_SECRET in production — prefer ?secret= on callback URL)',
   })
   callback(
     @Body() body: Record<string, unknown>,
+    @Query('secret') secretQuery: string | undefined,
     @Req()
     req: {
       headers: Record<string, string | string[] | undefined>;
@@ -96,6 +101,7 @@ export class BillingController {
       ? forwarded[0]
       : forwarded?.split(',')[0]?.trim();
     return this.checkout.handleCallback(body, {
+      secretQuery: secretQuery || '',
       secretHeader: String(
         req.headers['x-mpesa-callback-secret'] ||
           req.headers['x-callback-secret'] ||

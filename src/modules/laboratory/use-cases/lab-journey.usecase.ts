@@ -127,7 +127,11 @@ export class LabJourneyUseCase {
       entityType: 'laboratory.requests',
       entityId: request.id,
     });
-    this.events.emit(LAB_EVENTS.REQUESTED, { requestId: request.id });
+    this.events.emit(LAB_EVENTS.REQUESTED, {
+      requestId: request.id,
+      priority: request.priority,
+      patientId: request.patient_id,
+    });
     return this.ops.getRequest(request.id);
   }
 

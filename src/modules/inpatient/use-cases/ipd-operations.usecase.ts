@@ -10,10 +10,12 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../../database/prisma/prisma.service';
 import { HmsAuditWriter } from '../../audit/hms-audit.writer';
 import { PharmacyJourneyUseCase } from '../../pharmacy/use-cases/pharmacy-journey.usecase';
+import { IPD_EVENTS } from './ipd-journey.usecase';
 
 const BED_STATUSES = [
   'AVAILABLE',
@@ -84,6 +86,7 @@ export class IpdOperationsUseCase {
     private readonly prisma: PrismaService,
     private readonly audit: HmsAuditWriter,
     @Optional() private readonly pharmacy?: PharmacyJourneyUseCase,
+    @Optional() private readonly events?: EventEmitter2,
   ) {}
 
   // ── Overview ──────────────────────────────────────────────
@@ -872,6 +875,14 @@ export class IpdOperationsUseCase {
           admissionId: result.admission.id,
         },
       });
+      try {
+        this.events?.emit(IPD_EVENTS.PATIENT_ADMITTED, {
+          admissionId: result.admission.id,
+          patientId: result.admission.patient_id,
+        });
+      } catch {
+        // Notification failure must not roll back admission.
+      }
       return result;
     });
   }

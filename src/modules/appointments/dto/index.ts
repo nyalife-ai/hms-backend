@@ -9,3 +9,4 @@ export * from './update-appointment.dto';
 export * from './appointments-query.dto';
 export * from './appointment-response.dto';
 export * from './appointments-paginated-response.dto';
+export * from './appointment-lifecycle.dto';

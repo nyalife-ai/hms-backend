@@ -84,6 +84,7 @@ describe('AuthService RC1 journeys', () => {
       users,
       audit as any,
       mail as unknown as AuthMailService,
+      { emit: jest.fn() } as any,
     );
   });
 

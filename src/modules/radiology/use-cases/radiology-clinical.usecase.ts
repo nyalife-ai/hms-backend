@@ -8,6 +8,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { createDomainEventId } from '../../../core/domain';
 import { PrismaService } from '../../../database/prisma/prisma.service';
 
 const REQUEST_STATUSES = [
@@ -21,7 +23,10 @@ const REQUEST_STATUSES = [
 
 @Injectable()
 export class RadiologyClinicalUseCase {
-  public constructor(private readonly prisma: PrismaService) {}
+  public constructor(
+    private readonly prisma: PrismaService,
+    private readonly events: EventEmitter2,
+  ) {}
 
   public async listScanTypes(filters?: { active?: boolean; search?: string }) {
     const q = filters?.search?.trim();
@@ -220,11 +225,35 @@ export class RadiologyClinicalUseCase {
       radiologist_signature: input.signature ?? null,
       signed_at: input.signature ? new Date() : null,
     };
-    return existing
-      ? this.prisma.reports.update({ where: { id: existing.id }, data })
-      : this.prisma.reports.create({
+    const report = existing
+      ? await this.prisma.reports.update({ where: { id: existing.id }, data })
+      : await this.prisma.reports.create({
           data: { request_id: requestId, ...data },
         });
+
+    if (input.signature) {
+      await this.prisma.radiologyRequests.update({
+        where: { id: requestId },
+        data: { status: 'COMPLETED' },
+      });
+      const req = await this.prisma.radiologyRequests.findFirst({
+        where: { id: requestId },
+        select: {
+          id: true,
+          requesting_doctor: { select: { user_id: true } },
+        },
+      });
+      this.events.emit('radiology.report_ready', {
+        id: createDomainEventId(),
+        type: 'radiology.report_ready',
+        occurredAt: new Date().toISOString(),
+        payload: {
+          requestId,
+          doctorUserId: req?.requesting_doctor?.user_id ?? undefined,
+        },
+      });
+    }
+    return report;
   }
 
   public async addImage(

@@ -36,10 +36,26 @@ export interface MpesaConfig {
   transactionType: string;
 }
 
-export class MpesaClient {
-  private cachedToken: { value: string; expiresAt: number } | null = null;
+type CachedToken = { value: string; expiresAt: number };
 
-  constructor(private readonly config: MpesaConfig) {}
+/**
+ * Process-wide Daraja OAuth cache (survives MpesaClient rebuilds in CheckoutService).
+ * Keyed by env + consumer key. Refresh ~200s before Daraja expiry (≈3400s of a 3600s token).
+ */
+const TOKEN_CACHE = new Map<string, CachedToken>();
+const TOKEN_REFRESH_SKEW_MS = 200_000;
+
+function tokenCacheKey(config: MpesaConfig): string {
+  return `${config.env}:${config.consumerKey}`;
+}
+
+export class MpesaClient {
+  constructor(private config: MpesaConfig) {}
+
+  /** Update credentials/callback without dropping the shared OAuth cache. */
+  updateConfig(next: MpesaConfig): void {
+    this.config = next;
+  }
 
   get configured(): boolean {
     return Boolean(
@@ -58,9 +74,12 @@ export class MpesaClient {
 
   async getAccessToken(): Promise<string> {
     const now = Date.now();
-    if (this.cachedToken && this.cachedToken.expiresAt > now + 30_000) {
-      return this.cachedToken.value;
+    const key = tokenCacheKey(this.config);
+    const hit = TOKEN_CACHE.get(key);
+    if (hit && hit.expiresAt > now) {
+      return hit.value;
     }
+
     const creds = Buffer.from(
       `${this.config.consumerKey}:${this.config.consumerSecret}`,
     ).toString('base64');
@@ -70,13 +89,34 @@ export class MpesaClient {
     );
     const text = await res.text();
     if (!res.ok) {
-      throw new Error(`M-Pesa OAuth failed (${res.status}): ${text.slice(0, 200)}`);
+      throw new Error(
+        `M-Pesa OAuth failed (${res.status}): ${text.slice(0, 200)}`,
+      );
     }
-    const json = JSON.parse(text) as { access_token?: string; expires_in?: string };
-    if (!json.access_token) throw new Error('M-Pesa OAuth missing access_token');
-    const ttl = Math.max(60, Number(json.expires_in || 3599)) * 1000;
-    this.cachedToken = { value: json.access_token, expiresAt: now + ttl };
+    const json = JSON.parse(text) as {
+      access_token?: string;
+      expires_in?: string | number;
+    };
+    if (!json.access_token) {
+      throw new Error('M-Pesa OAuth missing access_token');
+    }
+
+    const expiresInSec = Math.max(60, Number(json.expires_in || 3599));
+    // Use token for expires_in - 200s (≈3400s when Daraja returns 3600).
+    const usableMs = Math.max(
+      60_000,
+      expiresInSec * 1000 - TOKEN_REFRESH_SKEW_MS,
+    );
+    TOKEN_CACHE.set(key, {
+      value: json.access_token,
+      expiresAt: now + usableMs,
+    });
     return json.access_token;
+  }
+
+  /** Test helper — clear process cache. */
+  static clearTokenCache(): void {
+    TOKEN_CACHE.clear();
   }
 
   private password(timestamp: string): string {
@@ -98,7 +138,9 @@ export class MpesaClient {
   static normalizePhone(phone: string): string {
     const digits = phone.replace(/\D/g, '');
     if (digits.startsWith('254') && digits.length === 12) return digits;
-    if (digits.startsWith('0') && digits.length === 10) return `254${digits.slice(1)}`;
+    if (digits.startsWith('0') && digits.length === 10) {
+      return `254${digits.slice(1)}`;
+    }
     if (digits.length === 9 && digits.startsWith('7')) return `254${digits}`;
     throw new Error('Enter a valid Kenyan mobile number (e.g. 07XXXXXXXX).');
   }
@@ -182,23 +224,38 @@ export class MpesaClient {
   }
 }
 
+function firstEnv(
+  env: NodeJS.ProcessEnv,
+  ...keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const v = env[key];
+    if (v != null && String(v).trim() !== '') return String(v);
+  }
+  return undefined;
+}
+
 export function loadMpesaConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): MpesaConfig {
-  const publicUrl = (env.PUBLIC_URL || 'http://localhost:4000').replace(/\/$/, '');
+  const publicUrl = (
+    firstEnv(env, 'PUBLIC_URL') || 'http://localhost:4000'
+  ).replace(/\/$/, '');
   return {
-    consumerKey: (env.MPESA_CONSUMER_KEY || '').trim(),
-    consumerSecret: (env.MPESA_CONSUMER_SECRET || '').trim(),
-    shortcode: (env.MPESA_SHORTCODE || '174379').trim(),
-    passkey: (env.MPESA_PASSKEY || '').trim(),
+    consumerKey: (firstEnv(env, 'MPESA_CONSUMER_KEY') || '').trim(),
+    consumerSecret: (firstEnv(env, 'MPESA_CONSUMER_SECRET') || '').trim(),
+    shortcode: (firstEnv(env, 'MPESA_SHORTCODE') || '174379').trim(),
+    passkey: (firstEnv(env, 'MPESA_PASSKEY') || '').trim(),
     callbackUrl: (
-      env.MPESA_CALLBACK_URL || `${publicUrl}/billing/mpesa/callback`
+      firstEnv(env, 'MPESA_CALLBACK_URL') ||
+      `${publicUrl}/billing/mpesa/callback`
     ).trim(),
-    env: (env.MPESA_ENV || 'sandbox').toLowerCase() === 'production'
-      ? 'production'
-      : 'sandbox',
+    env:
+      (firstEnv(env, 'MPESA_ENV') || 'sandbox').toLowerCase() === 'production'
+        ? 'production'
+        : 'sandbox',
     transactionType: (
-      env.MPESA_TRANSACTION_TYPE || 'CustomerPayBillOnline'
+      firstEnv(env, 'MPESA_TRANSACTION_TYPE') || 'CustomerPayBillOnline'
     ).trim(),
   };
 }

@@ -12,6 +12,7 @@ import { createRealtimeProvider } from './providers/create-realtime.provider';
 import { PresenceService } from './presence/presence.service';
 import { JsonRealtimeSerializer } from './events/json-realtime.serializer';
 import { RealtimeGatewayHandler } from './gateways/realtime.gateway';
+import { NestSocketIoGateway } from './gateways/nest-socketio.gateway';
 import { RealtimeHealthIndicator } from './health/realtime-health.indicator';
 import {
   InMemoryRealtimeMetrics,
@@ -62,6 +63,9 @@ export class RealtimeModule {
       metrics,
     );
     const health = new RealtimeHealthIndicator(provider, config, metrics);
+    const nestGatewayEnabled =
+      config.enabled &&
+      (config.provider === 'socketio' || config.provider === 'nest-ws');
 
     return {
       module: RealtimeModule,
@@ -75,6 +79,7 @@ export class RealtimeModule {
         { provide: RealtimeService, useValue: service },
         { provide: RealtimeGatewayHandler, useValue: gateway },
         { provide: RealtimeHealthIndicator, useValue: health },
+        ...(nestGatewayEnabled ? [NestSocketIoGateway] : []),
       ],
       exports: [
         REALTIME_CONFIG,
@@ -86,6 +91,7 @@ export class RealtimeModule {
         RealtimeService,
         RealtimeGatewayHandler,
         RealtimeHealthIndicator,
+        ...(nestGatewayEnabled ? [NestSocketIoGateway] : []),
       ],
     };
   }

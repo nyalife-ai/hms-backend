@@ -7,6 +7,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { createDomainEventId } from '../../core/domain';
 import type { Prisma } from '../../generated/prisma';
 import { PrismaService } from '../../database/prisma/prisma.service';
 import { HmsAuditWriter } from '../audit/hms-audit.writer';
@@ -112,6 +114,7 @@ export class BillingFinanceService {
   public constructor(
     private readonly prisma: PrismaService,
     private readonly audit: HmsAuditWriter,
+    private readonly events: EventEmitter2,
   ) {}
 
   // ── Helpers ──────────────────────────────────────────────────────────────
@@ -1548,7 +1551,13 @@ export class BillingFinanceService {
         totalAmount: invoiceId.totals.totalAmount,
       },
     });
-    return this.getInvoice(invoiceId.invoiceId);
+    const issued = await this.getInvoice(invoiceId.invoiceId);
+    this.emitDomainEvent('invoice.issued', {
+      invoiceId: issued.id,
+      invoiceNumber: issued.invoiceNumber,
+      patientId: issued.patientId,
+    });
+    return issued;
   }
 
   async voidInvoice(id: string, reason: string, actorUserId: string) {
@@ -2113,6 +2122,19 @@ export class BillingFinanceService {
     return this.getClaim(created.id);
   }
 
+
+  private emitDomainEvent(
+    type: string,
+    payload: Record<string, string | undefined>,
+  ): void {
+    this.events.emit(type, {
+      id: createDomainEventId(),
+      type,
+      occurredAt: new Date().toISOString(),
+      payload,
+    });
+  }
+
   async transitionClaim(
     id: string,
     input: {
@@ -2163,6 +2185,27 @@ export class BillingFinanceService {
       oldValues: { status: existing.status },
       newValues: { status: row.status },
     });
+    
+    const nextStatus = next;
+    if (nextStatus === 'SUBMITTED') {
+      this.emitDomainEvent('insurance_claim.submitted', {
+        claimId: row.id,
+        claimNumber: row.claim_number,
+        patientId: row.patient_id,
+      });
+    } else if (nextStatus === 'APPROVED') {
+      this.emitDomainEvent('insurance_claim.approved', {
+        claimId: row.id,
+        claimNumber: row.claim_number,
+        patientId: row.patient_id,
+      });
+    } else if (nextStatus === 'DENIED' || nextStatus === 'REJECTED') {
+      this.emitDomainEvent('insurance_claim.denied', {
+        claimId: row.id,
+        claimNumber: row.claim_number,
+        patientId: row.patient_id,
+      });
+    }
     return this.getClaim(row.id);
   }
 

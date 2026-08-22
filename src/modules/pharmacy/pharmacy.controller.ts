@@ -32,7 +32,7 @@ import {
   CancelPrescriptionDto,
   CreateBatchDto,
   CreateCategoryDto,
-  CreateMedicationDto,
+  PharmacyCreateMedicationDto,
   CreatePrescriptionDto,
   CreatePurchaseOrderDto,
   CreateSupplierDto,
@@ -43,7 +43,7 @@ import {
   ReturnStockDto,
   UpdateBatchDto,
   UpdateCategoryDto,
-  UpdateMedicationDto,
+  PharmacyUpdateMedicationDto,
   UpdateSupplierDto,
   VisitDispenseDto,
   VoidPrescriptionDto,
@@ -248,7 +248,7 @@ export class PharmacyController {
   @ApiOperation({ summary: 'Create medication' })
   createMedication(
     @CurrentUser() user: AuthUserPublic,
-    @Body() body: CreateMedicationDto,
+    @Body() body: PharmacyCreateMedicationDto,
   ) {
     return this.ops.createMedication({ ...body, actorUserId: user.id });
   }
@@ -259,7 +259,7 @@ export class PharmacyController {
   updateMedication(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUserPublic,
-    @Body() body: UpdateMedicationDto,
+    @Body() body: PharmacyUpdateMedicationDto,
   ) {
     return this.ops.updateMedication(id, {
       ...body,

@@ -140,12 +140,13 @@ export class PrismaVisitsRepository implements IVisitsRepository {
 
   public async findAppointment(
     id: string,
-  ): Promise<{ id: string; status: string } | null> {
+  ): Promise<{ id: string; status: string; doctorId: string } | null> {
     const appt = await this.prisma.appointments.findFirst({
       where: { id, deleted_at: null },
-      select: { id: true, status: true },
+      select: { id: true, status: true, doctor_id: true },
     });
-    return appt;
+    if (!appt) return null;
+    return { id: appt.id, status: appt.status, doctorId: appt.doctor_id };
   }
 
   public async markAppointmentArrived(id: string): Promise<void> {
@@ -162,8 +163,9 @@ export class PrismaVisitsRepository implements IVisitsRepository {
     notes: string;
     requestedBy: string;
     consultationId?: string | null;
-  }): Promise<void> {
-    await this.prisma.laboratoryRequests.upsert({
+    requestingDoctorId?: string | null;
+  }): Promise<{ id: string }> {
+    const row = await this.prisma.laboratoryRequests.upsert({
       where: { request_number: input.requestNumber },
       create: {
         request_number: input.requestNumber,
@@ -173,6 +175,7 @@ export class PrismaVisitsRepository implements IVisitsRepository {
         notes: input.notes,
         requested_by: input.requestedBy,
         consultation_id: input.consultationId || null,
+        requesting_doctor_id: input.requestingDoctorId || null,
       },
       update: {
         status: input.status,
@@ -180,8 +183,13 @@ export class PrismaVisitsRepository implements IVisitsRepository {
         ...(input.consultationId
           ? { consultation_id: input.consultationId }
           : {}),
+        ...(input.requestingDoctorId
+          ? { requesting_doctor_id: input.requestingDoctorId }
+          : {}),
       },
+      select: { id: true },
     });
+    return { id: row.id };
   }
 
   public async findAdminUserId(): Promise<string | undefined> {

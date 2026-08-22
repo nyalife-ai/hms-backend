@@ -11,11 +11,14 @@ import {
   OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { createDomainEventId } from '../../core/domain';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../database/prisma/prisma.service';
 import { BillingSettlementService } from '../billing/billing-settlement.service';
 import { PharmacyDispenseService } from '../billing/pharmacy-dispense.service';
 import { FollowUpsService } from '../follow-ups/follow-ups.service';
+import { LAB_EVENTS } from '../laboratory/use-cases/lab-journey.usecase';
 import { PharmacyJourneyUseCase } from '../pharmacy/use-cases/pharmacy-journey.usecase';
 import type { AuthUserPublic } from '../auth/auth.types';
 import type { ClinicalRecord } from './clinical-record.types';
@@ -125,6 +128,7 @@ export class VisitsService implements OnModuleInit {
     private readonly dispense: PharmacyDispenseService,
     private readonly pharmacyJourney: PharmacyJourneyUseCase,
     private readonly followUps: FollowUpsService,
+    private readonly events: EventEmitter2,
   ) {}
 
   private requireDb(): void {
@@ -306,7 +310,8 @@ export class VisitsService implements OnModuleInit {
         `Cannot check in appointment in status ${appt.status}`,
       );
     }
-    if (appt.status !== 'ARRIVED') {
+    const wasArrived = appt.status === 'ARRIVED';
+    if (!wasArrived) {
       await this.visits.markAppointmentArrived(appointmentId);
     }
     const reason = cascade?.reasonForVisit?.trim();
@@ -319,6 +324,17 @@ export class VisitsService implements OnModuleInit {
           ...(notes ? { notes } : {}),
         },
       });
+    }
+    if (!wasArrived) {
+      try {
+        const doctorUserId = await this.resolveDoctorUserId(appt.doctorId);
+        this.emitDomain('appointment.checked_in', {
+          appointmentId,
+          doctorUserId,
+        });
+      } catch {
+        // Notification failure must not roll back check-in.
+      }
     }
   }
 
@@ -729,6 +745,14 @@ export class VisitsService implements OnModuleInit {
       stage: 'RESULTS_READY',
     });
     await this.persistLabRequest(next, actorUserId, 'COMPLETED');
+    
+    const patientId = await this.resolvePatientIdByMrn(next.mrn);
+    const doctorUserId = await this.resolveDoctorUserId(next.doctorStaffId);
+    this.emitDomain('visit.results_ready', {
+      visitId: next.id,
+      patientId,
+      doctorUserId,
+    });
     return next;
   }
 
@@ -831,7 +855,7 @@ export class VisitsService implements OnModuleInit {
       }
     }
 
-    return this.patch(id, {
+    const completed = await this.patch(id, {
       diagnosis,
       prescriptions: outcome.prescriptions,
       followUpDate: outcome.followUpDate,
@@ -843,6 +867,11 @@ export class VisitsService implements OnModuleInit {
       pharmacy: pharmacyMeta,
       stage: 'READY_FOR_BILLING',
     });
+    this.emitDomain('visit.ready_for_billing', {
+      visitId: completed.id,
+      patientId: patientId ?? undefined,
+    });
+    return completed;
   }
 
   /** Best-effort mirror into clinical.consultations for appointment/catalog views. */
@@ -1053,7 +1082,7 @@ export class VisitsService implements OnModuleInit {
       if (lines.length === 0 || quoteTotal <= 0) {
         // Consult fee already collected at triage; nothing left to bill.
         const pharmacy = await this.dispenseVisitMeds(visit, actorUserId);
-        return this.patch(id, {
+        const done = await this.patch(id, {
           billing: {
             total: visit.billing?.consultFeeAmount ?? 0,
             mode: 'CASH',
@@ -1069,6 +1098,8 @@ export class VisitsService implements OnModuleInit {
           pharmacy,
           stage: 'COMPLETED',
         });
+        await this.emitVisitCompleted(done);
+        return done;
       }
       const settled = await this.billing.settleVisit({
         createdByUserId: actorUserId,
@@ -1104,7 +1135,7 @@ export class VisitsService implements OnModuleInit {
         balance: 0,
         invoiceNumber: settled.invoiceNumber,
       });
-      return this.patch(id, {
+      const done = await this.patch(id, {
         billing: {
           // Lifetime visit charges = this invoice + previously paid consult (if any)
           total:
@@ -1125,6 +1156,8 @@ export class VisitsService implements OnModuleInit {
         pharmacy,
         stage: 'COMPLETED',
       });
+      await this.emitVisitCompleted(done);
+      return done;
     }
 
     if (!claimId) {
@@ -1134,7 +1167,7 @@ export class VisitsService implements OnModuleInit {
     }
 
     // Claim already created by InsuranceService — hold visit until payer accepts.
-    return this.patch(id, {
+    const held = await this.patch(id, {
       billing: {
         total: quoteTotal,
         mode: 'CLAIM',
@@ -1145,6 +1178,14 @@ export class VisitsService implements OnModuleInit {
       },
       stage: 'CLAIM_SUBMITTED',
     });
+    const patientId = await this.resolvePatientIdByMrn(held.mrn);
+    this.emitDomain('insurance_claim.submitted', {
+      visitId: held.id,
+      patientId,
+      claimId: persistedClaim,
+      claimNumber: persistedClaim,
+    });
+    return held;
   }
 
   async updateClaimStatus(
@@ -1169,7 +1210,30 @@ export class VisitsService implements OnModuleInit {
       signedOff && performedBy
         ? await this.dispenseVisitMeds(visit, performedBy)
         : visit.pharmacy;
-    return this.patch(id, {
+    const patientId = await this.resolvePatientIdByMrn(visit.mrn);
+    if (status === 'ACCEPTED') {
+      this.emitDomain('insurance_claim.approved', {
+        visitId: visit.id,
+        patientId,
+        claimId: visit.billing?.claimId,
+        claimNumber: visit.billing?.claimId,
+      });
+    } else if (status === 'REJECTED') {
+      this.emitDomain('insurance_claim.denied', {
+        visitId: visit.id,
+        patientId,
+        claimId: visit.billing?.claimId,
+        claimNumber: visit.billing?.claimId,
+      });
+    } else if (status === 'SUBMITTED') {
+      this.emitDomain('insurance_claim.submitted', {
+        visitId: visit.id,
+        patientId,
+        claimId: visit.billing?.claimId,
+        claimNumber: visit.billing?.claimId,
+      });
+    }
+    const updated = await this.patch(id, {
       billing: { ...visit.billing, claimStatus: status },
       pharmacy,
       stage: signedOff
@@ -1178,6 +1242,10 @@ export class VisitsService implements OnModuleInit {
           ? 'CLAIM_SUBMITTED'
           : visit.stage,
     });
+    if (signedOff) {
+      await this.emitVisitCompleted(updated);
+    }
+    return updated;
   }
 
   private async receiptLinesFromInvoice(
@@ -1276,7 +1344,9 @@ export class VisitsService implements OnModuleInit {
         'Cannot sign off — insurer has not accepted the claim yet.',
       );
     }
-    return this.patch(id, { stage: 'COMPLETED' });
+    const done = await this.patch(id, { stage: 'COMPLETED' });
+    await this.emitVisitCompleted(done);
+    return done;
   }
 
   private async persistLabRequest(
@@ -1325,14 +1395,25 @@ export class VisitsService implements OnModuleInit {
       patientId,
     );
 
-    await this.visits.upsertLabRequest({
+    const created = await this.visits.upsertLabRequest({
       requestNumber,
       patientId,
       status,
       notes,
       requestedBy: actorUserId,
       consultationId,
+      requestingDoctorId: visit.doctorStaffId ?? null,
     });
+
+    // Notify lab queue when a doctor places a new order (not when results are patched in).
+    if (status === 'PENDING') {
+      this.events.emit(LAB_EVENTS.REQUESTED, {
+        requestId: created.id,
+        priority: 'NORMAL',
+        patientId,
+        visitId: visit.id,
+      });
+    }
   }
 
   private async patch(id: string, patch: Partial<Visit>): Promise<Visit> {
@@ -1448,4 +1529,48 @@ export class VisitsService implements OnModuleInit {
       pharmacy: payload.pharmacy,
     };
   }
+
+  private async emitVisitCompleted(visit: Visit): Promise<void> {
+    const patientId = await this.resolvePatientIdByMrn(visit.mrn);
+    this.emitDomain('visit.completed', {
+      visitId: visit.id,
+      patientId,
+    });
+  }
+
+  private emitDomain(
+    type: string,
+    payload: Record<string, string | undefined>,
+  ): void {
+    this.events.emit(type, {
+      id: createDomainEventId(),
+      type,
+      occurredAt: new Date().toISOString(),
+      payload,
+    });
+  }
+
+  private async resolvePatientIdByMrn(mrn: string): Promise<string | undefined> {
+    try {
+      return (await this.visits.findPatientIdByMrn(mrn)) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async resolveDoctorUserId(
+    doctorStaffId?: string | null,
+  ): Promise<string | undefined> {
+    if (!doctorStaffId) return undefined;
+    try {
+      const staff = await this.prisma.staffProfiles.findFirst({
+        where: { id: doctorStaffId, deleted_at: null },
+        select: { user_id: true },
+      });
+      return staff?.user_id ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
 }

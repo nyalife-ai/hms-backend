@@ -31,6 +31,9 @@ import {
   AUTH_USER_REPOSITORY,
   type IAuthUserRepository,
 } from './repositories/auth-user.repository.interface';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { createDomainEventEnvelope } from '../notifications/infrastructure/domain-event.envelope';
+import { DOMAIN_EVENT_TYPES } from '../notifications/policy/notification-policy.service';
 
 const OTP_UA = 'password-reset-otp';
 const RESET_UA = 'password-reset';
@@ -76,6 +79,7 @@ export class AuthService implements OnModuleInit {
     private readonly users: IAuthUserRepository,
     private readonly audit: HmsAuditWriter,
     private readonly mail: AuthMailService,
+    private readonly events: EventEmitter2,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -107,10 +111,18 @@ export class AuthService implements OnModuleInit {
   ): Promise<LoginResult> {
     const user = await this.users.findByEmail(email);
     if (!user?.passwordHash) {
+      this.emitAuthEvent(DOMAIN_EVENT_TYPES.AUTH_LOGIN_FAILED, {
+        email,
+        reason: 'unknown_user',
+      });
       throw new UnauthorizedException('Invalid email or password');
     }
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) {
+      this.emitAuthEvent(DOMAIN_EVENT_TYPES.AUTH_LOGIN_FAILED, {
+        userId: user.id,
+        reason: 'bad_password',
+      });
       throw new UnauthorizedException('Invalid email or password');
     }
 
@@ -162,6 +174,9 @@ export class AuthService implements OnModuleInit {
       newValues: { event: 'LOGIN' },
       ipAddress: meta?.ip,
       userAgent: meta?.userAgent,
+    });
+    this.emitAuthEvent(DOMAIN_EVENT_TYPES.AUTH_LOGIN_SUCCESS, {
+      userId: user.id,
     });
     return session;
   }
@@ -251,6 +266,10 @@ export class AuthService implements OnModuleInit {
       entityType: 'auth.two_factor',
       entityId: userId,
       newValues: { enabled },
+    });
+    this.emitAuthEvent(DOMAIN_EVENT_TYPES.AUTH_ACCOUNT_SECURITY_CHANGED, {
+      userId,
+      twoFactorEnabled: enabled,
     });
     const refreshed = await this.users.findById(userId);
     if (!refreshed) {
@@ -530,6 +549,7 @@ export class AuthService implements OnModuleInit {
       entityId: userId,
       newValues: { event: 'LOGOUT' },
     });
+    this.emitAuthEvent(DOMAIN_EVENT_TYPES.AUTH_LOGOUT, { userId });
     return { ok: true };
   }
 
@@ -563,6 +583,7 @@ export class AuthService implements OnModuleInit {
       entityId: userId,
       newValues: { event: 'PASSWORD_CHANGED' },
     });
+    this.emitAuthEvent(DOMAIN_EVENT_TYPES.AUTH_PASSWORD_CHANGED, { userId });
     return { ok: true };
   }
 
@@ -698,6 +719,20 @@ export class AuthService implements OnModuleInit {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private emitAuthEvent(
+    type: string,
+    payload: Record<string, unknown>,
+  ): void {
+    try {
+      this.events.emit(
+        type,
+        createDomainEventEnvelope({ type, payload }),
+      );
+    } catch {
+      // Auth must never fail because notification infrastructure is down.
+    }
   }
 
   private toPublic(user: AuthUser): AuthUserPublic {

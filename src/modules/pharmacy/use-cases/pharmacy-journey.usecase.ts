@@ -8,9 +8,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../../database/prisma/prisma.service';
 import type { Prisma } from '../../../generated/prisma';
 import { HmsAuditWriter } from '../../audit/hms-audit.writer';
+import { createDomainEventEnvelope } from '../../notifications/infrastructure/domain-event.envelope';
+import { DOMAIN_EVENT_TYPES } from '../../notifications/policy/notification-policy.service';
 import { profileName, USER_PROFILE_INCLUDE } from '../pharmacy-names';
 
 function paginateParams(page?: number, limit?: number) {
@@ -28,6 +31,7 @@ export class PharmacyJourneyUseCase {
   public constructor(
     private readonly prisma: PrismaService,
     private readonly audit: HmsAuditWriter,
+    private readonly events: EventEmitter2,
   ) {}
 
   // ── Prescriptions ─────────────────────────────────────────
@@ -275,6 +279,20 @@ export class PharmacyJourneyUseCase {
       entityType: 'pharmacy.prescriptions',
       entityId: created,
     });
+
+    try {
+      this.events.emit(
+        DOMAIN_EVENT_TYPES.PRESCRIPTION_CREATED,
+        createDomainEventEnvelope({
+          type: DOMAIN_EVENT_TYPES.PRESCRIPTION_CREATED,
+          payload: { prescriptionId: created },
+          actorId: input.actorUserId,
+        }),
+      );
+    } catch {
+      // Notification failure must not roll back prescription creation.
+    }
+
     return this.getPrescription(created);
   }
 

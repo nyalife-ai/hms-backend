@@ -2,6 +2,7 @@
  * Checkout orchestration — M-Pesa STK + receipt; persistence via IBillingRepository.
  */
 
+import { InjectQueue } from '@nestjs/bull';
 import {
   BadRequestException,
   Inject,
@@ -10,8 +11,16 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createDomainEventId } from '../../core/domain';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import type { Queue } from 'bull';
 import type { Visit } from '../visits/visit.types';
 import { BillingSettlementService } from './billing-settlement.service';
+import {
+  BILLING_PAYMENTS_QUEUE,
+  BILLING_STK_JOB,
+  type BillingStkJobData,
+} from './billing-queue.constants';
 import { loadMpesaConfigFromEnv, MpesaClient } from './mpesa.client';
 import {
   isMpesaCallbackIpAllowed,
@@ -36,6 +45,8 @@ export class CheckoutService {
     @Inject(BILLING_REPOSITORY) private readonly billingRepo: IBillingRepository,
     private readonly billing: BillingSettlementService,
     private readonly dispense: PharmacyDispenseService,
+    @InjectQueue(BILLING_PAYMENTS_QUEUE) private readonly paymentsQueue: Queue,
+    private readonly events: EventEmitter2,
   ) {
     this.client = new MpesaClient(loadMpesaConfigFromEnv(process.env));
   }
@@ -46,43 +57,52 @@ export class CheckoutService {
       process.env.PUBLIC_URL ||
       'http://localhost:4000'
     ).replace(/\/$/, '');
-    this.client = new MpesaClient({
-      consumerKey: (
-        this.config.get<string>('MPESA_CONSUMER_KEY') ||
-        process.env.MPESA_CONSUMER_KEY ||
-        ''
-      ).trim(),
-      consumerSecret: (
-        this.config.get<string>('MPESA_CONSUMER_SECRET') ||
-        process.env.MPESA_CONSUMER_SECRET ||
-        ''
-      ).trim(),
-      shortcode: (
-        this.config.get<string>('MPESA_SHORTCODE') ||
-        process.env.MPESA_SHORTCODE ||
-        '174379'
-      ).trim(),
-      passkey: (
-        this.config.get<string>('MPESA_PASSKEY') ||
-        process.env.MPESA_PASSKEY ||
-        ''
-      ).trim(),
-      callbackUrl: (
-        this.config.get<string>('MPESA_CALLBACK_URL') ||
-        process.env.MPESA_CALLBACK_URL ||
-        `${publicUrl}/billing/mpesa/callback`
-      ).trim(),
-      env:
-        (this.config.get<string>('MPESA_ENV') || process.env.MPESA_ENV || 'sandbox')
-          .toLowerCase() === 'production'
-          ? 'production'
-          : 'sandbox',
-      transactionType: (
-        this.config.get<string>('MPESA_TRANSACTION_TYPE') ||
-        process.env.MPESA_TRANSACTION_TYPE ||
-        'CustomerPayBillOnline'
-      ).trim(),
-    });
+    const pick = (...keys: string[]): string => {
+      for (const key of keys) {
+        const v = this.config.get<string>(key) || process.env[key];
+        if (v != null && String(v).trim() !== '') return String(v).trim();
+      }
+      return '';
+    };
+    const next = {
+      consumerKey: pick('MPESA_CONSUMER_KEY'),
+      consumerSecret: pick('MPESA_CONSUMER_SECRET'),
+      shortcode: pick('MPESA_SHORTCODE') || '174379',
+      passkey: pick('MPESA_PASSKEY'),
+      callbackUrl: this.buildCallbackUrl(publicUrl),
+      env: (pick('MPESA_ENV') || 'sandbox').toLowerCase() === 'production'
+        ? ('production' as const)
+        : ('sandbox' as const),
+      transactionType:
+        pick('MPESA_TRANSACTION_TYPE') || 'CustomerPayBillOnline',
+    };
+    // Reuse the same client instance so process-level OAuth cache stays warm.
+    this.client.updateConfig(next);
+  }
+
+  /** Daraja cannot set custom headers — embed secret as query when configured. */
+  private buildCallbackUrl(publicUrl: string): string {
+    const base = (
+      this.config.get<string>('MPESA_CALLBACK_URL') ||
+      process.env.MPESA_CALLBACK_URL ||
+      `${publicUrl}/billing/mpesa/callback`
+    ).trim();
+    const secret = (
+      this.config.get<string>('MPESA_CALLBACK_SECRET') ||
+      process.env.MPESA_CALLBACK_SECRET ||
+      ''
+    ).trim();
+    if (!secret) return base;
+    try {
+      const url = new URL(base);
+      if (!url.searchParams.has('secret')) {
+        url.searchParams.set('secret', secret);
+      }
+      return url.toString();
+    } catch {
+      const join = base.includes('?') ? '&' : '?';
+      return `${base}${join}secret=${encodeURIComponent(secret)}`;
+    }
   }
 
   mode(): 'live' | 'sandbox-sim' {
@@ -141,6 +161,10 @@ export class CheckoutService {
     }));
   }
 
+  /**
+   * Validate visit eligibility then enqueue STK (HTTP returns immediately).
+   * Worker calls {@link executeQueuedStk}.
+   */
   async initiateStk(input: {
     visitId: string;
     phone: string;
@@ -186,6 +210,86 @@ export class CheckoutService {
         ]
       : await this.visitLines(visit);
     const total = lines.reduce((s, l) => s + l.amount, 0);
+    if (!(total > 0)) {
+      throw new BadRequestException(
+        'Checkout amount must be greater than zero before M-Pesa STK',
+      );
+    }
+
+    const phone = MpesaClient.normalizePhone(input.phone);
+    const dedupeKey = `stk:${input.visitId}:${phone}:${total}`;
+    const job = await this.paymentsQueue.add(
+      BILLING_STK_JOB,
+      {
+        visitId: input.visitId,
+        phone,
+        source: input.source,
+        actorUserId: input.actorUserId,
+        dedupeKey,
+      } satisfies BillingStkJobData,
+      {
+        jobId: dedupeKey,
+        attempts: 4,
+        backoff: { type: 'exponential', delay: 3000 },
+        removeOnComplete: 50,
+        removeOnFail: 100,
+      },
+    );
+
+    return {
+      ok: true,
+      queued: true,
+      jobId: String(job.id),
+      phone,
+      amount: total,
+      mode: this.mode(),
+      message:
+        'STK Push queued — payment is not complete until Safaricom callback/result.',
+    };
+  }
+
+  /** Worker entry — performs Daraja STK + persists pending checkout row. */
+  async executeQueuedStk(input: {
+    visitId: string;
+    phone: string;
+    source: CheckoutSource;
+    actorUserId: string;
+  }) {
+    this.requireDb();
+    this.refreshClient();
+    const visit = await this.loadVisit(input.visitId);
+
+    if (visit.billing?.receiptId && visit.stage !== 'AWAITING_PAYMENT') {
+      throw new BadRequestException('This visit is already paid and receipted.');
+    }
+
+    const claimRejected =
+      visit.stage === 'CLAIM_SUBMITTED' &&
+      visit.billing?.claimStatus === 'REJECTED';
+    const consultFeeDue = visit.stage === 'AWAITING_PAYMENT';
+    const ready =
+      visit.stage === 'READY_FOR_BILLING' || claimRejected || consultFeeDue;
+    if (!ready) {
+      throw new BadRequestException(
+        'Visit must be ready for billing (or awaiting consultation-fee payment) before M-Pesa checkout.',
+      );
+    }
+
+    const fees = await this.billing.getFeeSchedule();
+    const lines = consultFeeDue
+      ? [
+          {
+            description: 'Consultation',
+            amount: visit.billing?.consultFeeAmount ?? fees.consult,
+          },
+        ]
+      : await this.visitLines(visit);
+    const total = lines.reduce((s, l) => s + l.amount, 0);
+    if (!(total > 0)) {
+      throw new BadRequestException(
+        'Checkout amount must be greater than zero before M-Pesa STK',
+      );
+    }
     const phone = MpesaClient.normalizePhone(input.phone);
     const accountReference =
       visit.mrn.replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'NYALIFE';
@@ -298,16 +402,27 @@ export class CheckoutService {
       }
     }
 
-    const demoMs = Number(process.env.MPESA_DEMO_AUTO_CONFIRM_MS || 0);
+    const demoMs = Number(
+      process.env.MPESA_DEMO_AUTO_CONFIRM_MS ||
+        process.env.MPESA_DEMO_AUTO_CONFIRM_MS ||
+        0,
+    );
     const mpesaEnv = (
       this.config.get<string>('MPESA_ENV') ||
       process.env.MPESA_ENV ||
       'sandbox'
     ).toLowerCase();
+    const appEnv = (
+      this.config.get<string>('app.environment') ||
+      process.env.NODE_ENV ||
+      'development'
+    ).toLowerCase();
+    // Never demo-confirm when live Daraja keys are present or in production.
     if (
       demoMs > 0 &&
+      !this.client.configured &&
       mpesaEnv !== 'production' &&
-      process.env.NODE_ENV !== 'production' &&
+      appEnv !== 'production' &&
       Date.now() - tx.created_at.getTime() > demoMs
     ) {
       return this.finalizeSuccess(tx.id, {
@@ -321,7 +436,7 @@ export class CheckoutService {
 
   async handleCallback(
     body: Record<string, unknown>,
-    opts?: { secretHeader?: string; remoteIp?: string },
+    opts?: { secretHeader?: string; secretQuery?: string; remoteIp?: string },
   ) {
     this.requireDb();
     const requiredSecret = (
@@ -334,7 +449,9 @@ export class CheckoutService {
       process.env.NODE_ENV ||
       'development';
     if (requiredSecret) {
-      if (!opts?.secretHeader || opts.secretHeader !== requiredSecret) {
+      const provided =
+        (opts?.secretQuery || '').trim() || (opts?.secretHeader || '').trim();
+      if (!provided || provided !== requiredSecret) {
         throw new BadRequestException('Invalid M-Pesa callback secret');
       }
     } else if (env === 'production') {
@@ -406,6 +523,11 @@ export class CheckoutService {
           callback: body,
         },
       });
+      if (resultCode !== '1032') {
+        this.emitPaymentDomain('payment.failed', {
+          visitId: tx.visit_id ?? undefined,
+        });
+      }
     }
     return { ResultCode: 0, ResultDesc: 'Accepted' };
   }
@@ -491,12 +613,26 @@ export class CheckoutService {
     txId: string,
     info: { mpesaReceipt?: string; resultDesc?: string },
   ) {
-    const tx = await this.billingRepo.findMpesaById(txId);
-    if (!tx) throw new NotFoundException('Checkout not found');
-    if (tx.status === 'SUCCESS') {
-      const existing = await this.billingRepo.findReceiptByMpesaTxId(tx.id);
-      return this.toStatusPayload(tx, existing?.id);
+    // Atomic PENDING → FINALIZING claim (poll + callback race).
+    const claimed = await this.billingRepo.claimMpesaPending(txId, {
+      status: 'FINALIZING',
+      resultDesc: info.resultDesc || 'Finalizing',
+      mpesaReceiptNumber: info.mpesaReceipt,
+    });
+    if (!claimed) {
+      const existing = await this.billingRepo.findMpesaById(txId);
+      if (!existing) throw new NotFoundException('Checkout not found');
+      if (existing.status === 'SUCCESS' || existing.status === 'FINALIZING') {
+        const receipt = await this.billingRepo.findReceiptByMpesaTxId(
+          existing.id,
+        );
+        return this.toStatusPayload(existing, receipt?.id);
+      }
+      throw new BadRequestException(
+        `Checkout cannot be finalized from status ${existing.status}`,
+      );
     }
+    const tx = claimed;
     if (!tx.visit_id) {
       throw new BadRequestException('Checkout is not linked to a visit');
     }
@@ -589,6 +725,10 @@ export class CheckoutService {
 
       const updatedTx = await this.billingRepo.findMpesaById(tx.id);
       if (!updatedTx) throw new NotFoundException('Checkout not found');
+      this.emitPaymentDomain('payment.received', {
+        patientId: patient.id,
+        visitId: visit.id,
+      });
       return this.toStatusPayload(updatedTx, receipt.id);
     }
 
@@ -690,6 +830,22 @@ export class CheckoutService {
 
     const updatedTx = await this.billingRepo.findMpesaById(tx.id);
     if (!updatedTx) throw new NotFoundException('Checkout not found');
+    this.emitPaymentDomain('payment.received', {
+      patientId: patient.id,
+      visitId: visit.id,
+    });
     return this.toStatusPayload(updatedTx, receipt.id);
+  }
+
+  private emitPaymentDomain(
+    type: 'payment.received' | 'payment.failed',
+    payload: { patientId?: string; visitId?: string },
+  ): void {
+    this.events.emit(type, {
+      id: createDomainEventId(),
+      type,
+      occurredAt: new Date().toISOString(),
+      payload,
+    });
   }
 }

@@ -24,6 +24,8 @@ import { OpsModule } from './modules/ops/ops.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { HmsPlatformModule } from './modules/_platform/hms-platform.module';
 import { PatientsModule } from './modules/patients/patients.module';
+import { BulkImportsModule } from './modules/bulk-imports/bulk-imports.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 import { StaffModule } from './modules/staff/staff.module';
 import { DepartmentsModule } from './modules/departments/departments.module';
 import { AppointmentsModule } from './modules/appointments/appointments.module';
@@ -73,6 +75,8 @@ import { PatientPortalModule } from './modules/patient-portal/patient-portal.mod
 
     // module.sh domains (new REST surfaces)
     PatientsModule,
+    BulkImportsModule,
+    NotificationsModule,
     StaffModule,
     DepartmentsModule,
     AppointmentsModule,
@@ -104,24 +108,30 @@ import { PatientPortalModule } from './modules/patient-portal/patient-portal.mod
       ignoreErrors: false,
     }),
 
-    // Redis optional: Bull still registers; connection retries soft-fail via strategy
+    // Bull / Redis — keep reconnecting; never enableOfflineQueue:false (Bull workers
+    // issue CLIENT SETNAME on boot and crash with uncaughtException otherwise).
     BullModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        redis: {
-          host: config.get<string>('redis.host') || 'localhost',
-          port: config.get<number>('redis.port') || 6379,
-          password: config.get<string>('redis.password') || undefined,
-          maxRetriesPerRequest: process.env.REDIS_OPTIONAL === 'false' ? null : 1,
-          enableOfflineQueue: false,
-          retryStrategy: (times: number) => {
-            if (process.env.REDIS_OPTIONAL !== 'false' && times > 3) {
-              return null; // stop retrying — Redis optional
-            }
-            return Math.min(times * 50, 2000);
+      useFactory: (config: ConfigService) => {
+        const passwordRaw = config.get<string>('redis.password');
+        const password =
+          passwordRaw && passwordRaw.trim().length > 0
+            ? passwordRaw.trim()
+            : undefined;
+        return {
+          redis: {
+            host: config.get<string>('redis.host') || '127.0.0.1',
+            port: config.get<number>('redis.port') || 6379,
+            ...(password ? { password } : {}),
+            // Bull workers/subscribers require null (ioredis default of 20 breaks them)
+            maxRetriesPerRequest: null,
+            enableReadyCheck: false,
+            enableOfflineQueue: true,
+            retryStrategy: (times: number) =>
+              Math.min(times * 200, 5000),
           },
-        },
-      }),
+        };
+      },
     }),
   ],
   controllers: [AppController, PublicController],

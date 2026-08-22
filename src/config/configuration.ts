@@ -43,9 +43,12 @@ export default (): IConfig => ({
         'prisma' | 'typeorm') || 'prisma',
   },
   redis: {
-    host: process.env.REDIS_HOST || 'localhost',
+    host: process.env.REDIS_HOST || '127.0.0.1',
     port: parseInt(process.env.REDIS_PORT || '6379', 10),
-    password: process.env.REDIS_PASSWORD || undefined,
+    password:
+      process.env.REDIS_PASSWORD && process.env.REDIS_PASSWORD.trim().length > 0
+        ? process.env.REDIS_PASSWORD.trim()
+        : undefined,
   },
   jwt: {
     secret: process.env.JWT_SECRET || 'default-dev-secret-change-in-production',

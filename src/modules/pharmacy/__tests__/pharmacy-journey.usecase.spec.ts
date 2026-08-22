@@ -52,7 +52,7 @@ describe('PharmacyJourneyUseCase', () => {
     };
     journey = new PharmacyJourneyUseCase(prisma, {
       recordMutation: jest.fn().mockResolvedValue(undefined),
-    } as any);
+    } as any, { emit: jest.fn() } as any);
     jest.clearAllMocks();
   });
 
