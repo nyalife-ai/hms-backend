@@ -23,6 +23,7 @@ import {
   changePercent,
   enumerateBuckets,
   resolvePeriod,
+  startOfDay,
   toYmd,
   type ResolvedPeriod,
 } from './period.util';
@@ -233,7 +234,7 @@ export class AnalyticsService {
       this.prisma.followUps.count({
         where: {
           status: 'SCHEDULED',
-          follow_up_date: { lt: toYmd(new Date()) as unknown as Date },
+          follow_up_date: { lt: startOfDay(new Date()) },
         },
       }),
     ]);
@@ -1962,7 +1963,7 @@ export class AnalyticsService {
     const overdue = await this.prisma.followUps.count({
       where: {
         status: 'SCHEDULED',
-        follow_up_date: { lt: new Date(toYmd(new Date())) },
+        follow_up_date: { lt: startOfDay(new Date()) },
       },
     });
 
