@@ -43,6 +43,27 @@ import type { SearchUsersQueryDto } from '../dto/search-users-query.dto';
 import type { SendMessageDto } from '../dto/send-message.dto';
 import { MessagePayloadService } from './message-payload.service';
 
+/** Human-readable preview label for a message attachment. */
+export function attachmentPreviewLabel(
+  mime?: string | null,
+  fileName?: string | null,
+): string {
+  const m = (mime ?? '').toLowerCase();
+  if (m.startsWith('image/')) return '📷 Image';
+  if (m.startsWith('video/')) return '🎬 Video';
+  if (m.startsWith('audio/')) return '🎤 Voice message';
+  const name = (fileName ?? '').trim();
+  return name ? `📎 ${name}` : '📎 Attachment';
+}
+
+function inferMessageTypeFromMime(mime?: string | null): MessageType {
+  const m = (mime ?? '').toLowerCase();
+  if (m.startsWith('image/')) return MESSAGE_TYPES.IMAGE;
+  if (m.startsWith('video/')) return MESSAGE_TYPES.VIDEO;
+  if (m.startsWith('audio/')) return MESSAGE_TYPES.AUDIO;
+  return MESSAGE_TYPES.FILE;
+}
+
 type UploadFile = {
   buffer: Buffer;
   originalname: string;
@@ -474,7 +495,14 @@ export class MessagingService {
       },
       include: {
         sender: { include: { core_profiles_user_id: true } },
-        parent_message: true,
+        parent_message: {
+          include: {
+            communications_message_attachments_message_id: {
+              take: 1,
+              orderBy: { created_at: 'asc' },
+            },
+          },
+        },
         communications_message_attachments_message_id: true,
         communications_message_reactions_message_id: true,
         communications_message_delivery_receipts_message_id: true,
@@ -488,20 +516,41 @@ export class MessagingService {
     const nextCursor = hasMore ? page[page.length - 1]?.id : null;
     const chronological = [...page].reverse();
 
+    const mentionIdSet = new Set<string>();
+    const unpackedByMessageId = new Map<
+      string,
+      { text: string; mentionedUserIds: string[] }
+    >();
+    for (const m of chronological) {
+      if (m.is_deleted) continue;
+      const unpacked = this.payload.unpack(m.encrypted_payload);
+      const rawMentions = unpacked.extras?.mentionedUserIds;
+      const mentionedUserIds = Array.isArray(rawMentions)
+        ? rawMentions.filter((id): id is string => typeof id === 'string')
+        : [];
+      for (const id of mentionedUserIds) mentionIdSet.add(id);
+      unpackedByMessageId.set(m.id, {
+        text: unpacked.text,
+        mentionedUserIds,
+      });
+    }
+    const mentionNames = await this.resolveDisplayNames([...mentionIdSet]);
+
     const items = chronological.map((m) => {
       const profile = m.sender.core_profiles_user_id[0];
       const deleted = m.is_deleted;
-      let body: string | null = null;
-      if (!deleted) {
-        body = this.payload.unpack(m.encrypted_payload).text;
-      }
-      let parentPreview: string | null = null;
-      if (m.parent_message && !m.parent_message.is_deleted) {
-        const parentText = this.payload.unpack(
-          m.parent_message.encrypted_payload,
-        ).text;
-        parentPreview = parentText.slice(0, 120);
-      }
+      const unpacked = unpackedByMessageId.get(m.id);
+      const body = deleted ? null : (unpacked?.text ?? null);
+      const parentPreview = this.buildParentPreview(
+        m.parent_message
+          ? {
+              is_deleted: m.parent_message.is_deleted,
+              encrypted_payload: m.parent_message.encrypted_payload,
+              attachments:
+                m.parent_message.communications_message_attachments_message_id,
+            }
+          : null,
+      );
       const reactionsMap = new Map<string, string[]>();
       for (const r of m.communications_message_reactions_message_id) {
         const list = reactionsMap.get(r.reaction_type) ?? [];
@@ -514,6 +563,10 @@ export class MessagingService {
         actorId,
         receipts,
       );
+      const mentions = (unpacked?.mentionedUserIds ?? []).map((userId) => ({
+        userId,
+        displayName: mentionNames.get(userId) ?? 'Staff',
+      }));
 
       return {
         id: m.id,
@@ -529,6 +582,7 @@ export class MessagingService {
         createdAt: m.created_at.toISOString(),
         parentMessageId: m.parent_message_id,
         parentPreview,
+        mentions,
         attachments: m.communications_message_attachments_message_id.map(
           (a) => ({
             id: a.id,
@@ -555,16 +609,29 @@ export class MessagingService {
     dto: SendMessageDto,
   ) {
     this.requireDb();
-    const messageType = (dto.messageType ?? MESSAGE_TYPES.TEXT) as MessageType;
+    const body = dto.body?.trim() ?? '';
+    const hasAttachments = Boolean(dto.attachmentRefs?.length);
+    const firstMime = dto.attachmentRefs?.[0]?.mimeType ?? null;
+    const messageType = (
+      dto.messageType ??
+      (hasAttachments
+        ? inferMessageTypeFromMime(firstMime)
+        : MESSAGE_TYPES.TEXT)
+    ) as MessageType;
     if (!Object.values(MESSAGE_TYPES).includes(messageType)) {
       throw new BadRequestException(`Invalid message type: ${messageType}`);
     }
-
-    const body = dto.body?.trim() ?? '';
-    const hasAttachments = Boolean(dto.attachmentRefs?.length);
     if (!body && !hasAttachments && messageType === MESSAGE_TYPES.TEXT) {
       throw new BadRequestException('Message body is required');
     }
+
+    const mentionedUserIds = [
+      ...new Set(
+        (dto.mentionedUserIds ?? []).filter(
+          (id): id is string => typeof id === 'string' && id.length > 0,
+        ),
+      ),
+    ].slice(0, 20);
 
     const result = await this.prisma.$transaction(async (tx) => {
       const membership = await tx.conversationParticipants.findFirst({
@@ -585,10 +652,39 @@ export class MessagingService {
         throw new NotFoundException('Conversation not found');
       }
 
+      if (dto.parentMessageId) {
+        const parent = await tx.messages.findFirst({
+          where: {
+            id: dto.parentMessageId,
+            conversation_id: conversationId,
+          },
+          select: { id: true },
+        });
+        if (!parent) {
+          throw new BadRequestException(
+            'Parent message must belong to this conversation',
+          );
+        }
+      }
+
+      const participants = await tx.conversationParticipants.findMany({
+        where: { conversation_id: conversationId, left_at: null },
+        select: { user_id: true, is_muted: true },
+      });
+      const participantIds = new Set(participants.map((p) => p.user_id));
+      for (const mentionedId of mentionedUserIds) {
+        if (!participantIds.has(mentionedId)) {
+          throw new BadRequestException(
+            'Mentioned users must be active conversation participants',
+          );
+        }
+      }
+
       const encrypted = this.payload.pack(body, {
         ...(dto.clientMessageId
           ? { clientMessageId: dto.clientMessageId }
           : {}),
+        ...(mentionedUserIds.length ? { mentionedUserIds } : {}),
       });
 
       const message = await tx.messages.create({
@@ -619,10 +715,6 @@ export class MessagingService {
         }
       }
 
-      const participants = await tx.conversationParticipants.findMany({
-        where: { conversation_id: conversationId, left_at: null },
-        select: { user_id: true, is_muted: true },
-      });
       const others = participants.filter((p) => p.user_id !== actorId);
       if (others.length) {
         await tx.messageDeliveryReceipts.createMany({
@@ -635,10 +727,11 @@ export class MessagingService {
       }
 
       const meta = (conversation.metadata ?? {}) as Record<string, unknown>;
+      const firstRef = dto.attachmentRefs?.[0];
       const preview = body
         ? body.slice(0, 160)
         : hasAttachments
-          ? 'Attachment'
+          ? attachmentPreviewLabel(firstRef?.mimeType, firstRef?.fileName)
           : '';
       await tx.conversations.update({
         where: { id: conversationId },
@@ -655,26 +748,40 @@ export class MessagingService {
       };
     });
 
-    const recipientUserIds = result.participants
-      .filter((p) => p.user_id !== actorId)
-      .map((p) => p.user_id);
+    const recipientUserIds = [
+      ...new Set(
+        result.participants
+          .filter((p) => p.user_id !== actorId)
+          .map((p) => p.user_id)
+          .concat(
+            mentionedUserIds.filter((id) => id !== actorId),
+          ),
+      ),
+    ];
     const mutedUserIds = result.participants
       .filter((p) => p.user_id !== actorId && p.is_muted)
       .map((p) => p.user_id);
 
-    const [senderName, attachments, parentPreview] = await Promise.all([
-      this.resolveDisplayName(actorId),
-      this.prisma.messageAttachments.findMany({
-        where: { message_id: result.message.id },
-        select: {
-          id: true,
-          file_name: true,
-          mime_type: true,
-          file_size: true,
-        },
-      }),
-      this.resolveParentPreview(dto.parentMessageId ?? null),
-    ]);
+    const [senderName, attachments, parentPreview, mentionNames] =
+      await Promise.all([
+        this.resolveDisplayName(actorId),
+        this.prisma.messageAttachments.findMany({
+          where: { message_id: result.message.id },
+          select: {
+            id: true,
+            file_name: true,
+            mime_type: true,
+            file_size: true,
+          },
+        }),
+        this.resolveParentPreview(dto.parentMessageId ?? null),
+        this.resolveDisplayNames(mentionedUserIds),
+      ]);
+
+    const mentions = mentionedUserIds.map((userId) => ({
+      userId,
+      displayName: mentionNames.get(userId) ?? 'Staff',
+    }));
 
     const createdAt = result.message.created_at.toISOString();
     const richMessage = {
@@ -690,6 +797,7 @@ export class MessagingService {
       createdAt,
       parentMessageId: dto.parentMessageId ?? null,
       parentPreview,
+      mentions,
       attachments: attachments.map((a) => ({
         id: a.id,
         fileName: a.file_name,
@@ -723,6 +831,7 @@ export class MessagingService {
         preview: result.preview,
         recipientUserIds,
         mutedUserIds,
+        mentionedUserIds,
       },
     });
     this.events.emit(DOMAIN_EVENT_TYPES.MESSAGE_CREATED, envelope);
@@ -1233,16 +1342,49 @@ export class MessagingService {
   }
 
   private async resolveDisplayName(userId: string): Promise<string> {
-    const user = await this.prisma.user.findFirst({
-      where: { id: userId },
+    const names = await this.resolveDisplayNames([userId]);
+    return names.get(userId) ?? 'Staff';
+  }
+
+  private async resolveDisplayNames(
+    userIds: string[],
+  ): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    const unique = [...new Set(userIds.filter(Boolean))];
+    if (!unique.length) return result;
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: unique } },
       include: { core_profiles_user_id: true },
     });
-    if (!user) return 'Staff';
-    const profile = user.core_profiles_user_id[0];
-    const fromProfile = profile
-      ? `${profile.first_name} ${profile.last_name}`.trim()
-      : '';
-    return fromProfile || user.email || 'Staff';
+    for (const user of users) {
+      const profile = user.core_profiles_user_id[0];
+      const fromProfile = profile
+        ? `${profile.first_name} ${profile.last_name}`.trim()
+        : '';
+      result.set(user.id, fromProfile || user.email || 'Staff');
+    }
+    return result;
+  }
+
+  private buildParentPreview(
+    parent: {
+      is_deleted: boolean;
+      encrypted_payload: string;
+      attachments?: Array<{
+        mime_type: string | null;
+        file_name: string;
+      }>;
+    } | null,
+  ): string | null {
+    if (!parent) return null;
+    if (parent.is_deleted) return 'This message was deleted';
+    const parentText = this.payload.unpack(parent.encrypted_payload).text;
+    if (parentText.trim()) return parentText.slice(0, 120);
+    const first = parent.attachments?.[0];
+    if (first) {
+      return attachmentPreviewLabel(first.mime_type, first.file_name);
+    }
+    return 'Attachment';
   }
 
   private async resolveParentPreview(
@@ -1251,10 +1393,22 @@ export class MessagingService {
     if (!parentMessageId) return null;
     const parent = await this.prisma.messages.findFirst({
       where: { id: parentMessageId },
-      select: { encrypted_payload: true, is_deleted: true },
+      select: {
+        encrypted_payload: true,
+        is_deleted: true,
+        communications_message_attachments_message_id: {
+          take: 1,
+          orderBy: { created_at: 'asc' },
+          select: { mime_type: true, file_name: true },
+        },
+      },
     });
-    if (!parent || parent.is_deleted) return null;
-    return this.payload.unpack(parent.encrypted_payload).text.slice(0, 120);
+    if (!parent) return null;
+    return this.buildParentPreview({
+      is_deleted: parent.is_deleted,
+      encrypted_payload: parent.encrypted_payload,
+      attachments: parent.communications_message_attachments_message_id,
+    });
   }
 
   private async publishRealtime(

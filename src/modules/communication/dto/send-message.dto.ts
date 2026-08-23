@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   IsArray,
   IsIn,
   IsInt,
@@ -89,4 +90,14 @@ export class SendMessageDto {
   @ValidateNested({ each: true })
   @Type(() => AttachmentRefDto)
   attachmentRefs?: AttachmentRefDto[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'User IDs mentioned in the message (max 20)',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsUUID('4', { each: true })
+  mentionedUserIds?: string[];
 }

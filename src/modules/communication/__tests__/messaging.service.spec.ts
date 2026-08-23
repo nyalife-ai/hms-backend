@@ -45,7 +45,24 @@ describe('MessagingService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 2 }),
       },
       user: {
-        findMany: jest.fn().mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]),
+        findMany: jest.fn().mockImplementation(async ({ where }: { where?: { id?: { in?: string[] } } }) => {
+          const ids = where?.id?.in ?? ['u1', 'u2'];
+          return ids.map((id: string) =>
+            id === 'u1'
+              ? {
+                  id: 'u1',
+                  email: 'a@x.com',
+                  core_profiles_user_id: [
+                    { first_name: 'Ada', last_name: 'O' },
+                  ],
+                }
+              : {
+                  id,
+                  email: `${id}@x.com`,
+                  core_profiles_user_id: [],
+                },
+          );
+        }),
         findFirst: jest.fn().mockResolvedValue({
           id: 'u1',
           email: 'a@x.com',
@@ -184,6 +201,7 @@ describe('MessagingService', () => {
         clientMessageId: 'client-1',
         reactions: [],
         attachments: [],
+        mentions: [],
       }),
     );
     expect(events.emit).toHaveBeenCalledWith(

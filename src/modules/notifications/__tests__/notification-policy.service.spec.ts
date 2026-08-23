@@ -232,4 +232,27 @@ describe('NotificationPolicyService', () => {
       }),
     );
   });
+
+  it('uses mention title and durable type for mentioned recipients', () => {
+    const intent = policy.evaluate(
+      envelope(DOMAIN_EVENT_TYPES.MESSAGE_CREATED, {
+        messageId: 'm2',
+        conversationId: 'c1',
+        senderId: 's1',
+        senderName: 'Ada Okello',
+        preview: 'Hey @Bob check this',
+        recipientUserIds: ['r1', 'r2'],
+        mutedUserIds: [],
+        mentionedUserIds: ['r1'],
+      }),
+    );
+    expect(intent).not.toBeNull();
+    expect(intent!.durable).toHaveLength(2);
+    const mention = intent!.durable.find((d) => d.userId === 'r1');
+    const regular = intent!.durable.find((d) => d.userId === 'r2');
+    expect(mention?.title).toBe('You were mentioned by Ada Okello');
+    expect(mention?.notificationType).toBe('message.mention');
+    expect(regular?.title).toBe('New message from Ada Okello');
+    expect(regular?.notificationType).toBe(DOMAIN_EVENT_TYPES.MESSAGE_CREATED);
+  });
 });

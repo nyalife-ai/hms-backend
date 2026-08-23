@@ -19,6 +19,7 @@ type SendMessageSocketBody = {
   messageType?: string;
   parentMessageId?: string;
   clientMessageId?: string;
+  mentionedUserIds?: string[];
   attachmentRefs?: Array<{
     key: string;
     fileName: string;
@@ -57,6 +58,7 @@ export class MessagingSocketGateway {
         messageType: body.messageType as never,
         parentMessageId: body.parentMessageId,
         clientMessageId: body.clientMessageId,
+        mentionedUserIds: body.mentionedUserIds,
         attachmentRefs: body.attachmentRefs,
       });
       return { ok: true, message };

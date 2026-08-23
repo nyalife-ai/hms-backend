@@ -258,6 +258,7 @@ export class NotificationPolicyService {
             preview?: string;
             recipientUserIds?: string[];
             mutedUserIds?: string[];
+            mentionedUserIds?: string[];
           }>,
         );
       case DOMAIN_EVENT_TYPES.AUTH_LOGIN_SUCCESS:
@@ -280,10 +281,14 @@ export class NotificationPolicyService {
       preview?: string;
       recipientUserIds?: string[];
       mutedUserIds?: string[];
+      mentionedUserIds?: string[];
     }>,
   ): NotificationIntent | null {
     const p = event.payload;
     const muted = new Set(p.mutedUserIds ?? []);
+    const mentioned = new Set(
+      (p.mentionedUserIds ?? []).filter((id) => id && id !== p.senderId),
+    );
     const recipients = (p.recipientUserIds ?? []).filter(
       (id) => id && id !== p.senderId && !muted.has(id),
     );
@@ -294,17 +299,24 @@ export class NotificationPolicyService {
     const body = rawPreview
       ? rawPreview.slice(0, 120)
       : 'You have a new message.';
-    const title = `New message from ${senderName}`;
     const durable: DurableNotificationSpec[] = [];
     const jobs: QueuedNotificationJob[] = [];
 
     for (const userId of recipients) {
+      const isMention = mentioned.has(userId);
+      const title = isMention
+        ? `You were mentioned by ${senderName}`
+        : `New message from ${senderName}`;
+      const durableType = isMention
+        ? 'message.mention'
+        : DOMAIN_EVENT_TYPES.MESSAGE_CREATED;
       durable.push(
         staffDurable(event, {
           userId,
-          type: DOMAIN_EVENT_TYPES.MESSAGE_CREATED,
+          type: durableType,
           title,
           body,
+          priority: isMention ? 'HIGH' : 'NORMAL',
           entityType: 'MESSAGE',
           entityId: p.messageId,
           actionPath: `/messages?c=${p.conversationId}`,
@@ -317,7 +329,7 @@ export class NotificationPolicyService {
         jobId: `ws:message-notif:${p.messageId}:${userId}`,
         data: {
           eventId: event.id,
-          type: DOMAIN_EVENT_TYPES.MESSAGE_CREATED,
+          type: durableType,
           userId,
           payload: {
             messageId: p.messageId,
@@ -325,6 +337,7 @@ export class NotificationPolicyService {
             senderId: p.senderId,
             senderName,
             preview: body,
+            mentioned: isMention,
           },
           dedupeKey: `ws:message-notif:${event.id}:${userId}`,
         },
@@ -334,7 +347,9 @@ export class NotificationPolicyService {
         jobId: `fcm:message-created:${p.messageId}:${userId}`,
         data: {
           eventId: event.id,
-          templateKey: 'message.created.push',
+          templateKey: isMention
+            ? 'message.mention.push'
+            : 'message.created.push',
           userId,
           variables: {
             senderName,

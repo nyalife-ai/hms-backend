@@ -191,7 +191,10 @@ export class CommunicationController {
     const file = await this.messaging.getAttachmentBuffer(user.id, id);
     const mimeType = file.mimeType || 'application/octet-stream';
     const inline =
-      mimeType.startsWith('image/') || mimeType === 'application/pdf';
+      mimeType.startsWith('image/') ||
+      mimeType.startsWith('video/') ||
+      mimeType.startsWith('audio/') ||
+      mimeType === 'application/pdf';
     const safeName = (file.fileName || 'attachment').replace(/"/g, '');
     res.set({
       'Content-Type': mimeType,
