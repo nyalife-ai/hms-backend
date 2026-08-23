@@ -22,7 +22,12 @@ type PatientRow = Prisma.PatientsGetPayload<{
   include: {
     user: { include: { core_profiles_user_id: true } };
   };
-}>;
+}> & {
+  patients_emergency_contacts_patient_id?: Array<{
+    name: string;
+    phone: string;
+  }>;
+};
 
 @Injectable()
 export class PrismaPatientRepository implements IPatientRepository {
@@ -138,10 +143,12 @@ export class PrismaPatientRepository implements IPatientRepository {
           });
         }
 
-        return patient;
+        return patient.id;
       });
 
-      return this.toDomain(created);
+      const loaded = await this.findById(created);
+      if (!loaded) throw new Error('Patient missing after create');
+      return loaded;
     } catch (err) {
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&
@@ -167,6 +174,10 @@ export class PrismaPatientRepository implements IPatientRepository {
       where: { id, deleted_at: null },
       include: {
         user: { include: { core_profiles_user_id: true } },
+        patients_emergency_contacts_patient_id: {
+          orderBy: [{ is_primary: 'desc' }, { created_at: 'asc' }],
+          take: 1,
+        },
       },
     });
     return row ? this.toDomain(row) : null;
@@ -178,6 +189,10 @@ export class PrismaPatientRepository implements IPatientRepository {
       take: 100,
       include: {
         user: { include: { core_profiles_user_id: true } },
+        patients_emergency_contacts_patient_id: {
+          orderBy: [{ is_primary: 'desc' }, { created_at: 'asc' }],
+          take: 1,
+        },
       },
       orderBy: { created_at: 'desc' },
     });
@@ -270,6 +285,10 @@ export class PrismaPatientRepository implements IPatientRepository {
         orderBy: { [sortBy]: sortOrder },
         include: {
           user: { include: { core_profiles_user_id: true } },
+          patients_emergency_contacts_patient_id: {
+            orderBy: [{ is_primary: 'desc' }, { created_at: 'asc' }],
+            take: 1,
+          },
         },
       }),
     ]);
@@ -290,21 +309,103 @@ export class PrismaPatientRepository implements IPatientRepository {
   ): Promise<Patient | null> {
     const current = await this.findById(id);
     if (!current) return null;
-    current.update({
-      firstName: dto.firstName ?? current.getFirstName(),
-      lastName: dto.lastName ?? current.getLastName(),
-      phone: dto.phone ?? current.getPhone(),
-      bloodGroup: dto.bloodGroup ?? current.getBloodGroup(),
-      allergies: dto.allergies ?? current.getAllergies(),
-      chronicDiseases: dto.chronicDiseases ?? current.getChronicDiseases(),
-      occupation: dto.occupation ?? current.getOccupation(),
-      maritalStatus: dto.maritalStatus ?? current.getMaritalStatus(),
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.patients.update({
+        where: { id },
+        data: {
+          ...(dto.bloodGroup !== undefined
+            ? { blood_group: dto.bloodGroup }
+            : {}),
+          ...(dto.allergies !== undefined ? { allergies: dto.allergies } : {}),
+          ...(dto.chronicDiseases !== undefined
+            ? { chronic_diseases: dto.chronicDiseases }
+            : {}),
+          ...(dto.occupation !== undefined
+            ? { occupation: dto.occupation }
+            : {}),
+          ...(dto.maritalStatus !== undefined
+            ? { marital_status: dto.maritalStatus }
+            : {}),
+        },
+      });
+
+      await tx.profiles.update({
+        where: { user_id: current.getUserId() },
+        data: {
+          ...(dto.firstName !== undefined ? { first_name: dto.firstName } : {}),
+          ...(dto.lastName !== undefined ? { last_name: dto.lastName } : {}),
+          ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
+          ...(dto.gender !== undefined ? { gender: dto.gender } : {}),
+          ...(dto.dateOfBirth !== undefined
+            ? {
+                date_of_birth: dto.dateOfBirth
+                  ? new Date(dto.dateOfBirth)
+                  : null,
+              }
+            : {}),
+          ...(dto.address !== undefined
+            ? { address: dto.address?.trim() || null }
+            : {}),
+          ...(dto.city !== undefined ? { city: dto.city?.trim() || null } : {}),
+          ...(dto.country !== undefined
+            ? { country: dto.country?.trim() || null }
+            : {}),
+          ...(dto.postalCode !== undefined
+            ? { postal_code: dto.postalCode?.trim() || null }
+            : {}),
+        },
+      });
+
+      if (dto.email !== undefined) {
+        await tx.user.update({
+          where: { id: current.getUserId() },
+          data: { email: dto.email?.trim() || null },
+        });
+      }
+
+      if (
+        dto.emergencyContactName !== undefined ||
+        dto.emergencyContactPhone !== undefined
+      ) {
+        const existing = await tx.emergencyContacts.findFirst({
+          where: { patient_id: id },
+          orderBy: [{ is_primary: 'desc' }, { created_at: 'asc' }],
+        });
+        const name =
+          dto.emergencyContactName?.trim() ||
+          existing?.name ||
+          'Next of kin';
+        const phone =
+          dto.emergencyContactPhone?.trim() || existing?.phone || '—';
+        if (existing) {
+          await tx.emergencyContacts.update({
+            where: { id: existing.id },
+            data: { name, phone, is_primary: true },
+          });
+        } else if (
+          dto.emergencyContactName?.trim() ||
+          dto.emergencyContactPhone?.trim()
+        ) {
+          await tx.emergencyContacts.create({
+            data: {
+              patient_id: id,
+              name,
+              phone,
+              relationship: 'NEXT_OF_KIN',
+              is_primary: true,
+            },
+          });
+        }
+      }
     });
-    return this.save(current);
+
+    return this.findById(id);
   }
 
   protected toDomain(row: PatientRow): Patient {
     const profile = row.user.core_profiles_user_id[0];
+    const emergency = row.patients_emergency_contacts_patient_id?.[0];
     return Patient.reconstitute(
       row.id,
       {
@@ -319,6 +420,16 @@ export class PrismaPatientRepository implements IPatientRepository {
         maritalStatus: row.marital_status,
         phone: profile?.phone,
         email: row.user.email ?? null,
+        gender: profile?.gender ?? null,
+        dateOfBirth: profile?.date_of_birth
+          ? profile.date_of_birth.toISOString().slice(0, 10)
+          : null,
+        address: profile?.address ?? null,
+        city: profile?.city ?? null,
+        country: profile?.country ?? null,
+        postalCode: profile?.postal_code ?? null,
+        emergencyContactName: emergency?.name ?? null,
+        emergencyContactPhone: emergency?.phone ?? null,
       },
       row.created_at,
       row.updated_at,

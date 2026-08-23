@@ -265,7 +265,29 @@ export class CatalogService {
         clinical_vital_signs_patient_id: {
           where: { is_voided: false },
           orderBy: { measured_at: 'desc' },
-          take: 20,
+          take: 50,
+        },
+        clinical_follow_ups_patient_id: {
+          where: { status: 'SCHEDULED' },
+          orderBy: { follow_up_date: 'asc' },
+          take: 50,
+          include: {
+            consultation: {
+              include: {
+                doctor: {
+                  include: {
+                    user: { include: { core_profiles_user_id: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+        patients_insurance_policies_patient_id: {
+          where: { is_active: true },
+          orderBy: { created_at: 'desc' },
+          take: 5,
+          include: { provider: true },
         },
         _count: {
           select: {
@@ -309,7 +331,6 @@ export class CatalogService {
       NO_SHOW: 'Cancelled',
     };
 
-    const latestVitals = row.clinical_vital_signs_patient_id[0];
     const emergency = row.patients_emergency_contacts_patient_id[0];
 
     const appointments = row.clinical_appointments_patient_id.map((a) => {
@@ -323,49 +344,108 @@ export class CatalogService {
       ).padStart(2, '0')}`;
       return {
         id: a.id,
+        kind: 'appointment' as const,
         appointmentNumber: `APT-${a.id.replace(/-/g, '').slice(0, 6).toUpperCase()}`,
         date: a.appointment_date.toISOString().slice(0, 10),
         time,
         provider: doctorName,
         status: statusMap[a.status] || a.status,
         rawStatus: a.status,
+        reason: a.reason || '',
       };
     });
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const scheduledFollowUps = row.clinical_follow_ups_patient_id
+      .filter((f) => {
+        const d = new Date(f.follow_up_date);
+        d.setHours(0, 0, 0, 0);
+        return d >= today;
+      })
+      .map((f) => {
+        const dp = f.consultation.doctor.user.core_profiles_user_id[0];
+        const doctorName = dp
+          ? `Dr. ${dp.first_name} ${dp.last_name}`
+          : f.consultation.doctor.user.email;
+        return {
+          id: f.id,
+          kind: 'follow-up' as const,
+          followUpType: f.follow_up_type || 'Follow-up',
+          date: f.follow_up_date.toISOString().slice(0, 10),
+          time: '',
+          provider: doctorName,
+          status: f.status,
+          reason: f.reason,
+          consultationId: f.consultation_id,
+        };
+      });
 
     const consultations = row.clinical_consultations_patient_id.map((c) => {
       const dp = c.doctor.user.core_profiles_user_id[0];
       const physician = dp
         ? `Dr. ${dp.first_name} ${dp.last_name}`
         : c.doctor.user.email;
+      const diagnoses = c.clinical_diagnoses_consultation_id.map((d) => ({
+        id: d.id,
+        type: d.diagnosis_type,
+        code: d.icd10_code || null,
+        description: d.description,
+      }));
       const primaryDx =
-        c.clinical_diagnoses_consultation_id.find(
-          (d) => d.diagnosis_type === 'PRIMARY',
-        ) || c.clinical_diagnoses_consultation_id[0];
+        diagnoses.find((d) => d.type === 'PRIMARY') || diagnoses[0];
       return {
         id: c.id,
         date: c.consultation_date.toISOString(),
         physician,
+        doctorId: c.doctor_id,
         diagnosis: primaryDx?.description || c.chief_complaint || '—',
+        chiefComplaint: c.chief_complaint || '',
+        diagnoses,
         status: c.status,
+        notes: c.notes || '',
       };
     });
 
-    const vitalsHistory = row.clinical_vital_signs_patient_id.map((v) => ({
-      id: v.id,
-      measuredAt: v.measured_at.toISOString(),
-      bloodPressure: v.blood_pressure || '',
-      heartRate: v.heart_rate,
-      respiratoryRate: v.respiratory_rate,
-      temperature: v.temperature != null ? Number(v.temperature) : null,
-      weight: v.weight != null ? Number(v.weight) : null,
-      height: v.height != null ? Number(v.height) : null,
-      oxygenSaturation: v.oxygen_saturation,
-      notes: v.notes || '',
-      urgencyLevel:
-        (v as { urgency_level?: string }).urgency_level === 'EMERGENCY'
-          ? 'EMERGENCY'
-          : 'NORMAL',
-    }));
+    type VitalsHistoryItem = {
+      id: string;
+      measuredAt: string;
+      bloodPressure: string;
+      heartRate: number | null;
+      respiratoryRate: number | null;
+      temperature: number | null;
+      weight: number | null;
+      height: number | null;
+      bmi: number | null;
+      oxygenSaturation: number | null;
+      painLevel: number | null;
+      notes: string;
+      urgencyLevel?: string;
+      source: 'VITAL_SIGNS' | 'TRIAGE';
+      recordedBy: string;
+    };
+
+    const tableVitals: VitalsHistoryItem[] =
+      row.clinical_vital_signs_patient_id.map((v) => ({
+        id: v.id,
+        measuredAt: v.measured_at.toISOString(),
+        bloodPressure: v.blood_pressure || '',
+        heartRate: v.heart_rate,
+        respiratoryRate: v.respiratory_rate,
+        temperature: v.temperature != null ? Number(v.temperature) : null,
+        weight: v.weight != null ? Number(v.weight) : null,
+        height: v.height != null ? Number(v.height) : null,
+        bmi: v.bmi != null ? Number(v.bmi) : null,
+        oxygenSaturation: v.oxygen_saturation,
+        painLevel: v.pain_level,
+        notes: v.notes || '',
+        urgencyLevel:
+          (v as { urgency_level?: string }).urgency_level === 'EMERGENCY'
+            ? 'EMERGENCY'
+            : 'NORMAL',
+        source: 'VITAL_SIGNS' as const,
+        recordedBy: v.recorded_by,
+      }));
 
     // Also pull walk-in / denormalized visits that may lack patient_id FK
     const orphanVisits = await this.prisma.outpatientVisits.findMany({
@@ -383,6 +463,84 @@ export class CatalogService {
       ...orphanVisits.filter((v) => !seenVisitIds.has(v.id)),
     ];
 
+    const payloadVitals: VitalsHistoryItem[] = [];
+    for (const visit of allOpVisits) {
+      const payload = (visit.payload ?? {}) as {
+        vitals?: {
+          temperature?: string;
+          systolic?: string;
+          diastolic?: string;
+          pulse?: string;
+          respRate?: string;
+          spo2?: string;
+          weightKg?: string;
+          heightCm?: string;
+          bmi?: string;
+          painScore?: string;
+          bloodGlucose?: string;
+          recordedAt?: string;
+          recordedBy?: string;
+        };
+        nurseName?: string;
+      };
+      const v = payload.vitals;
+      if (!v) continue;
+      const measuredAt =
+        v.recordedAt ||
+        visit.triage_completed_at?.toISOString() ||
+        visit.checked_in_at.toISOString();
+      const sys = v.systolic?.trim();
+      const dia = v.diastolic?.trim();
+      const bp =
+        sys && dia ? `${sys}/${dia}` : sys || dia || '';
+      const pulse = v.pulse ? Number(v.pulse) : NaN;
+      const rr = v.respRate ? Number(v.respRate) : NaN;
+      const spo2 = v.spo2 ? Number(v.spo2) : NaN;
+      const temp = v.temperature ? Number(v.temperature) : NaN;
+      const weight = v.weightKg ? Number(v.weightKg) : NaN;
+      const height = v.heightCm ? Number(v.heightCm) : NaN;
+      const bmi = v.bmi ? Number(v.bmi) : NaN;
+      const pain = v.painScore ? Number(v.painScore) : NaN;
+      payloadVitals.push({
+        id: `visit-vitals-${visit.id}`,
+        measuredAt,
+        bloodPressure: bp,
+        heartRate: Number.isFinite(pulse) ? pulse : null,
+        respiratoryRate: Number.isFinite(rr) ? rr : null,
+        temperature: Number.isFinite(temp) ? temp : null,
+        weight: Number.isFinite(weight) ? weight : null,
+        height: Number.isFinite(height) ? height : null,
+        bmi: Number.isFinite(bmi) ? bmi : null,
+        oxygenSaturation: Number.isFinite(spo2) ? spo2 : null,
+        painLevel: Number.isFinite(pain) ? pain : null,
+        notes: v.bloodGlucose
+          ? `Blood glucose: ${v.bloodGlucose}`
+          : '',
+        urgencyLevel: 'NORMAL',
+        source: 'TRIAGE',
+        recordedBy: v.recordedBy || payload.nurseName || '—',
+      });
+    }
+
+    // Prefer table rows when timestamps collide with triage payload (same measurement).
+    const vitalsHistory = [...tableVitals, ...payloadVitals]
+      .filter((item, index, arr) => {
+        if (item.source === 'VITAL_SIGNS') return true;
+        const minute = item.measuredAt.slice(0, 16);
+        const dup = arr.some(
+          (other, j) =>
+            j !== index &&
+            other.source === 'VITAL_SIGNS' &&
+            other.measuredAt.slice(0, 16) === minute &&
+            other.bloodPressure === item.bloodPressure &&
+            other.heartRate === item.heartRate,
+        );
+        return !dup;
+      })
+      .sort((a, b) => (a.measuredAt < b.measuredAt ? 1 : -1));
+
+    const latestVitalsRow = vitalsHistory[0] ?? null;
+
     const visitTimeline = [
       ...appointments.map((a) => ({
         id: a.id,
@@ -393,7 +551,7 @@ export class CatalogService {
         when: `${a.date}T${a.time}:00`,
         provider: a.provider,
         status: a.status,
-        summary: '',
+        summary: a.reason || '',
         href: `/appointments/${a.id}`,
       })),
       ...allOpVisits.map((v) => {
@@ -419,7 +577,7 @@ export class CatalogService {
             payload.reasonForVisit ||
             payload.diagnosis ||
             '',
-          href: apptId ? `/appointments/${apptId}` : `/patients/${row.id}`,
+          href: apptId ? `/appointments/${apptId}` : `/consultations/${v.id}`,
           appointmentId: apptId || null,
         };
       }),
@@ -433,24 +591,39 @@ export class CatalogService {
         provider: c.physician,
         status: c.status,
         summary: c.diagnosis,
-        href: `/patients/${row.id}`,
+        href: `/patients/${row.id}?consultationId=${c.id}`,
       })),
     ].sort((a, b) => (a.when < b.when ? 1 : -1));
 
-    const scheduledVisits = appointments.filter(
+    const scheduledAppointments = appointments.filter(
       (a) => a.rawStatus === 'SCHEDULED' || a.rawStatus === 'CONFIRMED',
-    ).length;
+    );
+    const scheduledVisits =
+      scheduledAppointments.length + scheduledFollowUps.length;
+
+    const insurance = row.patients_insurance_policies_patient_id.map((p) => ({
+      id: p.id,
+      providerName: p.provider?.name || 'Insurance',
+      memberId: p.policy_number || '',
+      policyNumber: p.policy_number || '',
+      status: p.is_active ? 'ACTIVE' : 'INACTIVE',
+    }));
 
     return {
       id: row.id,
       mrn: row.patient_number,
       referenceCode,
       name,
+      firstName: profile?.first_name || '',
+      lastName: profile?.last_name || '',
       age: ageFromDob(profile?.date_of_birth ?? null),
       gender: gender === 'Other' ? 'Other' : gender,
       phone: profile?.phone || '',
       email: displayEmail(row.user.email),
       address: profile?.address || '',
+      city: profile?.city || '',
+      country: profile?.country || '',
+      postalCode: profile?.postal_code || '',
       dateOfBirth: dob,
       bloodGroup: row.blood_group || '',
       occupation: row.occupation || '',
@@ -465,34 +638,36 @@ export class CatalogService {
             relationship: emergency.relationship || 'Next of kin',
           }
         : null,
+      insurance,
       physical: {
-        height: latestVitals?.height != null ? Number(latestVitals.height) : null,
-        weight: latestVitals?.weight != null ? Number(latestVitals.weight) : null,
+        height: latestVitalsRow?.height ?? null,
+        weight: latestVitalsRow?.weight ?? null,
       },
       counts: {
         scheduledVisits,
         consultations: row._count.clinical_consultations_patient_id,
-        vitals: row._count.clinical_vital_signs_patient_id,
+        vitals: vitalsHistory.length,
         prescriptions: row._count.pharmacy_prescriptions_patient_id,
         encounters: visitTimeline.length,
       },
-      latestVitals: latestVitals
+      latestVitals: latestVitalsRow
         ? {
-            measuredAt: latestVitals.measured_at.toISOString(),
-            bloodPressure: latestVitals.blood_pressure || '',
-            heartRate: latestVitals.heart_rate,
-            temperature:
-              latestVitals.temperature != null
-                ? Number(latestVitals.temperature)
-                : null,
-            weight:
-              latestVitals.weight != null ? Number(latestVitals.weight) : null,
-            height:
-              latestVitals.height != null ? Number(latestVitals.height) : null,
-            oxygenSaturation: latestVitals.oxygen_saturation,
+            measuredAt: latestVitalsRow.measuredAt,
+            bloodPressure: latestVitalsRow.bloodPressure,
+            heartRate: latestVitalsRow.heartRate,
+            temperature: latestVitalsRow.temperature,
+            weight: latestVitalsRow.weight,
+            height: latestVitalsRow.height,
+            oxygenSaturation: latestVitalsRow.oxygenSaturation,
+            respiratoryRate: latestVitalsRow.respiratoryRate,
+            bmi: latestVitalsRow.bmi,
+            painLevel: latestVitalsRow.painLevel,
+            source: latestVitalsRow.source,
           }
         : null,
       appointments,
+      scheduledAppointments,
+      scheduledFollowUps,
       consultations,
       vitalsHistory,
       visitTimeline,

@@ -437,7 +437,66 @@ export class VisitsService implements OnModuleInit {
       triagePriority: priority,
       triageCompletedAt: completedAt,
       stage: 'WAITING_DOCTOR',
+    }).then(async (updated) => {
+      await this.persistTriageVitalsRow(updated, vitals, actor);
+      return updated;
     });
+  }
+
+  /** Mirror triage payload vitals into clinical.vital_signs when patient is known. */
+  private async persistTriageVitalsRow(
+    visit: Visit,
+    vitals: Vitals,
+    actor?: AuthUserPublic,
+  ): Promise<void> {
+    if (!this.prisma.isConnected) return;
+    const patientId = await this.visits.findPatientIdByMrn(visit.mrn);
+    const recordedBy = actor?.id;
+    if (!patientId || !recordedBy) return;
+
+    const num = (s?: string) => {
+      if (s == null || String(s).trim() === '') return null;
+      const n = Number(String(s).trim());
+      return Number.isFinite(n) ? n : null;
+    };
+    const sys = vitals.systolic?.trim();
+    const dia = vitals.diastolic?.trim();
+    const bp = sys && dia ? `${sys}/${dia}` : sys || dia || null;
+    const pulse = num(vitals.pulse);
+    const rr = num(vitals.respRate);
+    const spo2 = num(vitals.spo2);
+    const temp = num(vitals.temperature);
+    const weight = num(vitals.weightKg);
+    const height = num(vitals.heightCm);
+    const bmi = num(vitals.bmi);
+    const pain = num(vitals.painScore);
+
+    try {
+      await this.prisma.vitalSigns.create({
+        data: {
+          patient_id: patientId,
+          blood_pressure: bp,
+          heart_rate: pulse != null ? Math.round(pulse) : null,
+          respiratory_rate: rr != null ? Math.round(rr) : null,
+          temperature: temp,
+          weight,
+          height,
+          bmi,
+          pain_level: pain != null ? Math.round(pain) : null,
+          oxygen_saturation: spo2 != null ? Math.round(spo2) : null,
+          notes: vitals.bloodGlucose
+            ? `Blood glucose: ${vitals.bloodGlucose}`
+            : null,
+          urgency_level: 'NORMAL',
+          measured_at: vitals.recordedAt
+            ? new Date(vitals.recordedAt)
+            : new Date(),
+          recorded_by: recordedBy,
+        },
+      });
+    } catch {
+      // Non-fatal: profile still reads visit payload vitals via catalog union.
+    }
   }
 
   private normalizeTriageVitals(

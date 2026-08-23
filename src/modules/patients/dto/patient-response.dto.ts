@@ -30,6 +30,12 @@ export class PatientResponseDto {
   phone?: string | null;
 
   @ApiPropertyOptional()
+  gender?: string | null;
+
+  @ApiPropertyOptional()
+  dateOfBirth?: string | null;
+
+  @ApiPropertyOptional()
   bloodGroup?: string | null;
 
   @ApiPropertyOptional()
@@ -43,6 +49,24 @@ export class PatientResponseDto {
 
   @ApiPropertyOptional()
   maritalStatus?: string | null;
+
+  @ApiPropertyOptional()
+  address?: string | null;
+
+  @ApiPropertyOptional()
+  city?: string | null;
+
+  @ApiPropertyOptional()
+  country?: string | null;
+
+  @ApiPropertyOptional()
+  postalCode?: string | null;
+
+  @ApiPropertyOptional()
+  emergencyContactName?: string | null;
+
+  @ApiPropertyOptional()
+  emergencyContactPhone?: string | null;
 
   @ApiProperty()
   createdAt!: Date;

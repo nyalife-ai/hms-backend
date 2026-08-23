@@ -251,6 +251,7 @@ describe('CatalogService', () => {
             appointment_date: new Date('2026-08-20'),
             start_time: start,
             status: 'SCHEDULED',
+            reason: 'ANC',
             doctor: {
               user: {
                 email: 'doc@x.com',
@@ -276,8 +277,15 @@ describe('CatalogService', () => {
               },
             },
             clinical_diagnoses_consultation_id: [
-              { diagnosis_type: 'PRIMARY', description: 'URI' },
+              {
+                id: 'dx1',
+                diagnosis_type: 'PRIMARY',
+                description: 'URI',
+                icd10_code: 'J06.9',
+              },
             ],
+            notes: 'Rest and fluids',
+            doctor_id: 'd1',
           },
         ],
         clinical_outpatient_visits_patient_id: [
@@ -285,6 +293,7 @@ describe('CatalogService', () => {
             id: 'v1',
             stage: 'TRIAGE',
             checked_in_at: new Date('2026-08-21T08:00:00Z'),
+            triage_completed_at: null,
             reason_for_visit: 'Fever',
             payload: { doctorName: 'Dr Ada', appointmentId: 'a1' },
           },
@@ -302,8 +311,13 @@ describe('CatalogService', () => {
             oxygen_saturation: 98,
             notes: '',
             urgency_level: 'NORMAL',
+            recorded_by: 'u-nurse',
+            bmi: 25.7,
+            pain_level: null,
           },
         ],
+        clinical_follow_ups_patient_id: [],
+        patients_insurance_policies_patient_id: [],
         _count: {
           pharmacy_prescriptions_patient_id: 1,
           clinical_vital_signs_patient_id: 1,
@@ -315,6 +329,7 @@ describe('CatalogService', () => {
           id: 'v-orphan',
           stage: 'COMPLETED',
           checked_in_at: new Date('2026-08-10T08:00:00Z'),
+          triage_completed_at: null,
           reason_for_visit: null,
           payload: { diagnosis: 'Old visit' },
         },
@@ -326,11 +341,120 @@ describe('CatalogService', () => {
       expect(detail.appointments[0].provider).toBe('Dr. Ada Okello');
       expect(detail.visitTimeline.length).toBeGreaterThan(1);
       expect(detail.counts.encounters).toBe(detail.visitTimeline.length);
+      expect(detail.counts.vitals).toBeGreaterThanOrEqual(1);
+      expect(detail.latestVitals?.bloodPressure).toBe('120/80');
+      expect(detail.scheduledFollowUps).toEqual([]);
+      expect(detail.consultations[0].chiefComplaint).toBe('Pain');
+      expect(
+        detail.visitTimeline.some(
+          (t: { kind: string; href: string }) =>
+            t.kind === 'visit' && t.href.startsWith('/consultations/'),
+        ),
+      ).toBe(true);
 
       prisma.patients.findFirst.mockResolvedValue(null);
       await expect(service.getPatientDetail('missing')).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+
+    it('unifies triage payload vitals when vital_signs table is empty', async () => {
+      prisma.isConnected = true;
+      prisma.patients.findFirst.mockResolvedValue({
+        id: 'p2',
+        patient_number: 'MRN-00999',
+        created_at: new Date('2026-01-02T00:00:00Z'),
+        blood_group: null,
+        occupation: null,
+        marital_status: null,
+        allergies: null,
+        chronic_diseases: null,
+        user: {
+          email: 'triage@example.com',
+          core_profiles_user_id: [
+            {
+              first_name: 'Tia',
+              last_name: 'Gee',
+              gender: 'FEMALE',
+              phone: '+254700',
+              address: null,
+              city: null,
+              country: null,
+              postal_code: null,
+              date_of_birth: null,
+            },
+          ],
+        },
+        patients_emergency_contacts_patient_id: [],
+        clinical_appointments_patient_id: [],
+        clinical_consultations_patient_id: [],
+        clinical_outpatient_visits_patient_id: [
+          {
+            id: 'v-triage',
+            stage: 'WAITING_DOCTOR',
+            checked_in_at: new Date('2026-08-22T08:00:00Z'),
+            triage_completed_at: new Date('2026-08-22T08:10:00Z'),
+            reason_for_visit: 'Cough',
+            payload: {
+              vitals: {
+                temperature: '37.2',
+                systolic: '118',
+                diastolic: '76',
+                pulse: '80',
+                respRate: '18',
+                spo2: '97',
+                weightKg: '62',
+                heightCm: '160',
+                recordedAt: '2026-08-22T08:10:00.000Z',
+                recordedBy: 'Nurse',
+              },
+            },
+          },
+        ],
+        clinical_vital_signs_patient_id: [],
+        clinical_follow_ups_patient_id: [
+          {
+            id: 'fu1',
+            follow_up_date: new Date('2099-01-15'),
+            follow_up_type: 'Review',
+            status: 'SCHEDULED',
+            reason: 'BP check',
+            consultation_id: 'c-fu',
+            consultation: {
+              doctor: {
+                user: {
+                  email: 'doc@x.com',
+                  core_profiles_user_id: [
+                    { first_name: 'Ada', last_name: 'Okello' },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+        patients_insurance_policies_patient_id: [
+          {
+            id: 'ins1',
+            policy_number: 'POL-1',
+            is_active: true,
+            provider: { name: 'SHA' },
+          },
+        ],
+        _count: {
+          pharmacy_prescriptions_patient_id: 0,
+          clinical_vital_signs_patient_id: 0,
+          clinical_consultations_patient_id: 0,
+        },
+      });
+      prisma.outpatientVisits.findMany.mockResolvedValue([]);
+
+      const detail = await service.getPatientDetail('p2');
+      expect(detail.counts.vitals).toBeGreaterThanOrEqual(1);
+      expect(detail.latestVitals?.bloodPressure).toBe('118/76');
+      expect(detail.vitalsHistory[0].source).toBe('TRIAGE');
+      expect(detail.counts.scheduledVisits).toBe(1);
+      expect(detail.scheduledFollowUps).toHaveLength(1);
+      expect(detail.insurance[0].providerName).toBe('SHA');
     });
 
     it('lists doctors, departments, medications, lab, clinical services, staff', async () => {
@@ -1056,10 +1180,10 @@ describe('CatalogService', () => {
       expect(dash.doctors).toBe(7);
       expect(dash.invoicesOpen).toBe(4);
       expect(dash.deptDistribution.length).toBeGreaterThan(0);
-      expect(dash.ageStages.some((b: { value: number }) => b.value > 0)).toBe(
+      expect(dash.ageStages?.some((b: { value: number }) => b.value > 0)).toBe(
         true,
       );
-      expect(dash.reports.length).toBeGreaterThan(0);
+      expect(dash.reports?.length).toBeGreaterThan(0);
     });
   });
 });

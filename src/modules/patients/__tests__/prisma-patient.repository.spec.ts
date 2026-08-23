@@ -33,9 +33,18 @@ function patientRow(overrides: Record<string, unknown> = {}) {
           first_name: 'Amina',
           last_name: 'Wanjiru',
           phone: '0700111222',
+          gender: 'FEMALE',
+          date_of_birth: new Date('1990-05-12'),
+          address: 'Nairobi',
+          city: 'Nairobi',
+          country: 'KE',
+          postal_code: '00100',
         },
       ],
     },
+    patients_emergency_contacts_patient_id: [
+      { name: 'Kin', phone: '0700999' },
+    ],
     ...overrides,
   };
 }
@@ -55,8 +64,12 @@ describe('PrismaPatientRepository', () => {
         count: jest.fn(),
       },
       profiles: { update: jest.fn(), create: jest.fn() },
-      user: { findFirst: jest.fn(), create: jest.fn() },
-      emergencyContacts: { create: jest.fn() },
+      user: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
+      emergencyContacts: {
+        create: jest.fn(),
+        findFirst: jest.fn(),
+        update: jest.fn(),
+      },
       $transaction: jest.fn(),
     };
     prisma.$transaction.mockImplementation(async (arg: any) => {
@@ -106,8 +119,9 @@ describe('PrismaPatientRepository', () => {
     prisma.user.findFirst.mockResolvedValue(null);
     prisma.user.create.mockResolvedValue({ id: UID });
     prisma.profiles.create.mockResolvedValue({});
-    prisma.patients.create.mockResolvedValue(patientRow());
+      prisma.patients.create.mockResolvedValue(patientRow());
     prisma.emergencyContacts.create.mockResolvedValue({});
+    prisma.patients.findFirst.mockResolvedValue(patientRow());
 
     const created = await repo.createFromDto({
       firstName: 'Amina',
@@ -207,14 +221,29 @@ describe('PrismaPatientRepository', () => {
 
     prisma.patients.findFirst
       .mockResolvedValueOnce(patientRow())
-      .mockResolvedValueOnce({ id: PID })
       .mockResolvedValueOnce(patientRow({ blood_group: 'B+' }));
     prisma.patients.update.mockResolvedValue({});
     prisma.profiles.update.mockResolvedValue({});
+    prisma.user.update.mockResolvedValue({});
+    prisma.emergencyContacts.findFirst.mockResolvedValue({
+      id: 'ec1',
+      name: 'Kin',
+      phone: '0700999',
+    });
+    prisma.emergencyContacts.update.mockResolvedValue({});
     const updated = await repo.applyUpdate(PID, {
       firstName: 'New',
       bloodGroup: 'B+',
+      email: 'new@example.com',
+      address: 'Mombasa',
+      dateOfBirth: '1991-01-01',
+      gender: 'FEMALE',
+      emergencyContactName: 'Spouse',
+      emergencyContactPhone: '0700111',
     } as any);
     expect(updated?.getBloodGroup()).toBe('B+');
+    expect(prisma.profiles.update).toHaveBeenCalled();
+    expect(prisma.user.update).toHaveBeenCalled();
+    expect(prisma.emergencyContacts.update).toHaveBeenCalled();
   });
 });

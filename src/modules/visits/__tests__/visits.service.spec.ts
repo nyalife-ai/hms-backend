@@ -62,6 +62,9 @@ describe('VisitsService', () => {
       count: jest.fn().mockResolvedValue(0),
       create: jest.fn().mockResolvedValue({ id: 'rcp1', receipt_number: 'RCP-1' }),
     },
+    vitalSigns: {
+      create: jest.fn().mockResolvedValue({ id: 'vs-new' }),
+    },
   };
   const visits = {
     findAllOrdered: jest.fn().mockResolvedValue([]),
@@ -355,6 +358,15 @@ describe('VisitsService', () => {
     expect(triaged.stage).toBe('WAITING_DOCTOR');
     expect(triaged.triagePriority).toBe('NORMAL');
     expect(triaged.vitals?.bmi).toBeTruthy();
+    expect(prisma.vitalSigns.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          patient_id: 'pat1',
+          blood_pressure: '120/80',
+          recorded_by: 'nurse-1',
+        }),
+      }),
+    );
   });
 
   it('rejects triage when payment is pending or vitals are impossible', async () => {
@@ -530,13 +542,15 @@ describe('VisitsService', () => {
     expect(notes.diagnosis).toBe('Viral illness');
 
     const orders = await service.saveClinicalOrders('v1', {
-      orderedServices: [{ id: 'svc-x', name: 'XRay' }],
+      orderedServices: [
+        { id: 'svc-x', name: 'XRay', code: 'XR', unitPrice: '1000' },
+      ],
     });
     expect(orders.orderedServices?.[0].id).toBe('svc-x');
 
     const labbed = await service.orderLabs(
       'v1',
-      [{ name: 'CBC' }],
+      [{ name: 'CBC', unit: 'count', range: '—' }],
       'Fasting',
       'u1',
     );

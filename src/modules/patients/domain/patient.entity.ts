@@ -18,6 +18,14 @@ export type PatientProps = {
   maritalStatus?: string | null;
   phone?: string | null;
   email?: string | null;
+  gender?: string | null;
+  dateOfBirth?: string | null;
+  address?: string | null;
+  city?: string | null;
+  country?: string | null;
+  postalCode?: string | null;
+  emergencyContactName?: string | null;
+  emergencyContactPhone?: string | null;
 };
 
 export class Patient extends Entity<string> {
@@ -84,6 +92,30 @@ export class Patient extends Entity<string> {
   }
   public getEmail(): string | null | undefined {
     return this.props.email;
+  }
+  public getGender(): string | null | undefined {
+    return this.props.gender;
+  }
+  public getDateOfBirth(): string | null | undefined {
+    return this.props.dateOfBirth;
+  }
+  public getAddress(): string | null | undefined {
+    return this.props.address;
+  }
+  public getCity(): string | null | undefined {
+    return this.props.city;
+  }
+  public getCountry(): string | null | undefined {
+    return this.props.country;
+  }
+  public getPostalCode(): string | null | undefined {
+    return this.props.postalCode;
+  }
+  public getEmergencyContactName(): string | null | undefined {
+    return this.props.emergencyContactName;
+  }
+  public getEmergencyContactPhone(): string | null | undefined {
+    return this.props.emergencyContactPhone;
   }
   public toProps(): PatientProps {
     return { ...this.props };
