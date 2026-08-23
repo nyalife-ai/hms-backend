@@ -9,7 +9,14 @@ import {
   Processor,
 } from '@nestjs/bull';
 import { Logger, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Job } from 'bull';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const nodemailer = require('nodemailer') as {
+  createTransport: (opts: Record<string, unknown>) => {
+    sendMail: (opts: Record<string, unknown>) => Promise<unknown>;
+  };
+};
 import { PrismaService } from '../../../database/prisma/prisma.service';
 import { RealtimeService } from '../../../platform/realtime/realtime.service';
 import { NotificationAdapter } from '../adapters/notification.adapter';
@@ -17,6 +24,7 @@ import { NOTIFICATIONS_QUEUE } from '../constants/notifications.constants';
 import {
   NOTIFICATION_JOBS,
   type AppointmentReminderJobData,
+  type EmailJobData,
   type FcmJobData,
   type SmsJobData,
   type WebsocketJobData,
@@ -41,6 +49,7 @@ export class NotificationsProcessor {
     private readonly deviceTokens: DeviceTokensService,
     private readonly fcm: FcmService,
     private readonly durable: DurableNotificationService,
+    private readonly config: ConfigService,
     @Optional() private readonly realtime?: RealtimeService,
   ) {}
 
@@ -75,6 +84,68 @@ export class NotificationsProcessor {
       `SMS sent eventId=${data.eventId} messageId=${result.messageId}`,
     );
     return { messageId: result.messageId };
+  }
+
+  @Process(NOTIFICATION_JOBS.SEND_EMAIL)
+  public async handleEmail(
+    job: Job<EmailJobData>,
+  ): Promise<{ delivered: boolean; mode: 'smtp' | 'log' }> {
+    const data = job.data;
+    const template = getNotificationTemplate(data.templateKey);
+    if (!template || template.channel !== 'email') {
+      throw new Error(`Unknown email template: ${data.templateKey}`);
+    }
+
+    const recipient = await this.recipients.resolveUser(data.userId);
+    if (!recipient) {
+      throw new Error('Email recipient could not be resolved');
+    }
+    const to = await this.recipients.requireEmail(recipient);
+    const subject = template.subject
+      ? renderNotificationBody(template.subject, data.variables ?? {})
+      : 'NyaLife';
+    const text = renderNotificationBody(template.body, data.variables ?? {});
+
+    const host = (
+      this.config.get<string>('email.host') ||
+      process.env.SMTP_HOST ||
+      ''
+    ).trim();
+    const from =
+      this.config.get<string>('email.from') ||
+      process.env.SMTP_FROM ||
+      'noreply@nyalife.health';
+
+    if (!host) {
+      this.logger.warn(
+        `SMTP not configured — email eventId=${data.eventId} to=${to}`,
+      );
+      return { delivered: false, mode: 'log' };
+    }
+
+    const port = Number(
+      this.config.get<number>('email.port') || process.env.SMTP_PORT || 587,
+    );
+    const secure =
+      this.config.get<boolean>('email.secure') === true ||
+      process.env.SMTP_SECURE === 'true';
+    const user =
+      this.config.get<string>('email.user') || process.env.SMTP_USER || '';
+    const pass =
+      this.config.get<string>('email.pass') || process.env.SMTP_PASS || '';
+
+    const transport = nodemailer.createTransport({
+      host,
+      port,
+      secure,
+      auth: user ? { user, pass } : undefined,
+    });
+    await transport.sendMail({ from, to, subject, text });
+    this.logger.log(`Email sent eventId=${data.eventId} to=${to}`);
+    if (data.notificationId) {
+      await this.durable.markChannelPartial(data.notificationId);
+    }
+    return { delivered: true, mode: 'smtp' };
   }
 
   @Process(NOTIFICATION_JOBS.SEND_FCM)

@@ -5,6 +5,7 @@
 
 export type NotificationTemplateKey =
   | 'notifications.sms.test'
+  | 'notifications.email.test'
   | 'appointment.created.doctor.push'
   | 'appointment.reminder.patient.sms'
   | 'appointment.cancelled.patient.sms'
@@ -39,6 +40,12 @@ const TEMPLATES: readonly NotificationTemplateDefinition[] = [
     key: 'notifications.sms.test',
     channel: 'sms',
     body: 'NyaLife test SMS. Ref {{ref}}.',
+  },
+  {
+    key: 'notifications.email.test',
+    channel: 'email',
+    subject: 'NyaLife notification',
+    body: 'NyaLife email notification. Ref {{ref}}.',
   },
   {
     key: 'appointment.created.doctor.push',

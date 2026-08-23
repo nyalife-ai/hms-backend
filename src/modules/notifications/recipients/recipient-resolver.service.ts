@@ -81,4 +81,15 @@ export class RecipientResolverService {
     }
     return phone;
   }
+
+  public async requireEmail(recipient: ResolvedRecipient): Promise<string> {
+    const email = recipient.email?.trim();
+    if (!email) {
+      this.logger.warn(
+        `No email on file userId=${recipient.userId ?? ''} patientId=${recipient.patientId ?? ''}`,
+      );
+      throw new Error('Recipient has no email address on file');
+    }
+    return email;
+  }
 }

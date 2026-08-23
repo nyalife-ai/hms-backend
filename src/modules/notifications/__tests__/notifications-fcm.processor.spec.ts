@@ -3,6 +3,7 @@
  */
 
 import { Test } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { NotificationsProcessor } from '../processors/notifications.processor';
 import { NotificationAdapter } from '../adapters/notification.adapter';
 import { RecipientResolverService } from '../recipients/recipient-resolver.service';
@@ -40,6 +41,7 @@ describe('NotificationsProcessor FCM', () => {
         { provide: DeviceTokensService, useValue: deviceTokens },
         { provide: FcmService, useValue: fcm },
         { provide: DurableNotificationService, useValue: durable },
+        { provide: ConfigService, useValue: { get: jest.fn() } },
       ],
     }).compile();
     processor = moduleRef.get(NotificationsProcessor);

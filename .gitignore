@@ -76,3 +76,4 @@ src/coverage/
 
 # Prisma client (regenerated via `prisma generate` / postinstall)
 /src/generated/prisma/
+.pg-test-data/
