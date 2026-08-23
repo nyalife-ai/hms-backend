@@ -477,9 +477,7 @@ export class MessagingService {
         parent_message: true,
         communications_message_attachments_message_id: true,
         communications_message_reactions_message_id: true,
-        communications_message_delivery_receipts_message_id: {
-          where: { recipient_id: actorId },
-        },
+        communications_message_delivery_receipts_message_id: true,
       },
       orderBy: { created_at: 'desc' },
       take: limit + 1,
@@ -510,9 +508,12 @@ export class MessagingService {
         list.push(r.user_id);
         reactionsMap.set(r.reaction_type, list);
       }
-      const delivery =
-        m.communications_message_delivery_receipts_message_id[0]
-          ?.delivery_status ?? null;
+      const receipts = m.communications_message_delivery_receipts_message_id;
+      const delivery = this.aggregateDeliveryStatus(
+        m.sender_id,
+        actorId,
+        receipts,
+      );
 
       return {
         id: m.id,
@@ -661,20 +662,54 @@ export class MessagingService {
       .filter((p) => p.user_id !== actorId && p.is_muted)
       .map((p) => p.user_id);
 
-    const realtimePayload = {
+    const [senderName, attachments, parentPreview] = await Promise.all([
+      this.resolveDisplayName(actorId),
+      this.prisma.messageAttachments.findMany({
+        where: { message_id: result.message.id },
+        select: {
+          id: true,
+          file_name: true,
+          mime_type: true,
+          file_size: true,
+        },
+      }),
+      this.resolveParentPreview(dto.parentMessageId ?? null),
+    ]);
+
+    const createdAt = result.message.created_at.toISOString();
+    const richMessage = {
       messageId: result.message.id,
+      id: result.message.id,
       conversationId,
       senderId: actorId,
+      senderName,
       messageType,
+      body,
+      isDeleted: false,
+      editedAt: null as string | null,
+      createdAt,
+      parentMessageId: dto.parentMessageId ?? null,
+      parentPreview,
+      attachments: attachments.map((a) => ({
+        id: a.id,
+        fileName: a.file_name,
+        mimeType: a.mime_type,
+        fileSize: a.file_size != null ? Number(a.file_size) : null,
+      })),
+      reactions: [] as Array<{
+        reactionType: string;
+        count: number;
+        userIds: string[];
+      }>,
+      deliveryStatus: DELIVERY_STATUS.SENT,
       preview: result.preview,
-      createdAt: result.message.created_at.toISOString(),
-      clientMessageId: dto.clientMessageId,
+      clientMessageId: dto.clientMessageId ?? null,
     };
 
     await this.publishRealtime(MESSAGE_EVENTS.MESSAGE_CREATED, {
       room: `conversation:${conversationId}`,
       userIds: result.participants.map((p) => p.user_id),
-      payload: realtimePayload,
+      payload: richMessage,
     });
 
     const envelope = createDomainEventEnvelope({
@@ -684,6 +719,7 @@ export class MessagingService {
         messageId: result.message.id,
         conversationId,
         senderId: actorId,
+        senderName,
         preview: result.preview,
         recipientUserIds,
         mutedUserIds,
@@ -691,15 +727,7 @@ export class MessagingService {
     });
     this.events.emit(DOMAIN_EVENT_TYPES.MESSAGE_CREATED, envelope);
 
-    return {
-      id: result.message.id,
-      conversationId,
-      senderId: actorId,
-      messageType,
-      body,
-      createdAt: result.message.created_at.toISOString(),
-      clientMessageId: dto.clientMessageId,
-    };
+    return richMessage;
   }
 
   public async editMessage(
@@ -747,9 +775,11 @@ export class MessagingService {
       userIds: await this.participantUserIds(message.conversation_id),
       payload: {
         messageId: message.id,
+        id: message.id,
         conversationId: message.conversation_id,
         body: text,
-        editedAt: updated.edited_at?.toISOString(),
+        editedAt: updated.edited_at?.toISOString() ?? null,
+        isDeleted: false,
       },
     });
 
@@ -783,7 +813,10 @@ export class MessagingService {
       userIds: await this.participantUserIds(message.conversation_id),
       payload: {
         messageId,
+        id: messageId,
         conversationId: message.conversation_id,
+        isDeleted: true,
+        body: null,
       },
     });
 
@@ -946,6 +979,38 @@ export class MessagingService {
       },
     });
 
+    if (result.count > 0) {
+      const messages = await this.prisma.messages.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, conversation_id: true, sender_id: true },
+      });
+      const byConversation = new Map<
+        string,
+        { messageIds: string[]; senderIds: Set<string> }
+      >();
+      for (const m of messages) {
+        const entry = byConversation.get(m.conversation_id) ?? {
+          messageIds: [],
+          senderIds: new Set<string>(),
+        };
+        entry.messageIds.push(m.id);
+        entry.senderIds.add(m.sender_id);
+        byConversation.set(m.conversation_id, entry);
+      }
+      for (const [conversationId, group] of byConversation) {
+        await this.publishRealtime(MESSAGE_EVENTS.MESSAGE_DELIVERED, {
+          room: `conversation:${conversationId}`,
+          userIds: [...group.senderIds],
+          payload: {
+            conversationId,
+            messageIds: group.messageIds,
+            userId: actorId,
+            deliveryStatus: DELIVERY_STATUS.DELIVERED,
+          },
+        });
+      }
+    }
+
     return { updated: result.count };
   }
 
@@ -1037,6 +1102,32 @@ export class MessagingService {
     };
   }
 
+  public async getAttachmentBuffer(actorId: string, attachmentId: string) {
+    this.requireDb();
+    const attachment = await this.prisma.messageAttachments.findFirst({
+      where: { id: attachmentId },
+      include: {
+        message: { select: { conversation_id: true } },
+      },
+    });
+    if (!attachment) throw new NotFoundException('Attachment not found');
+    await this.requireMembership(actorId, attachment.message.conversation_id);
+
+    if (!this.storage) {
+      throw new ServiceUnavailableException('Storage is not configured');
+    }
+
+    const buffer = await this.storage.get(attachment.file_path);
+    return {
+      id: attachment.id,
+      fileName: attachment.file_name,
+      mimeType: attachment.mime_type,
+      fileSize:
+        attachment.file_size != null ? Number(attachment.file_size) : null,
+      buffer,
+    };
+  }
+
   private async findExistingDirect(actorId: string, peerId: string) {
     const rows = await this.prisma.conversationParticipants.findMany({
       where: {
@@ -1113,6 +1204,57 @@ export class MessagingService {
       select: { user_id: true },
     });
     return rows.map((r) => r.user_id);
+  }
+
+  private aggregateDeliveryStatus(
+    senderId: string,
+    actorId: string,
+    receipts: Array<{ recipient_id: string; delivery_status: string }>,
+  ): string | null {
+    if (senderId === actorId) {
+      if (!receipts.length) return DELIVERY_STATUS.SENT;
+      if (receipts.every((r) => r.delivery_status === DELIVERY_STATUS.READ)) {
+        return DELIVERY_STATUS.READ;
+      }
+      if (
+        receipts.some(
+          (r) =>
+            r.delivery_status === DELIVERY_STATUS.DELIVERED ||
+            r.delivery_status === DELIVERY_STATUS.READ,
+        )
+      ) {
+        return DELIVERY_STATUS.DELIVERED;
+      }
+      return DELIVERY_STATUS.SENT;
+    }
+    return (
+      receipts.find((r) => r.recipient_id === actorId)?.delivery_status ?? null
+    );
+  }
+
+  private async resolveDisplayName(userId: string): Promise<string> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId },
+      include: { core_profiles_user_id: true },
+    });
+    if (!user) return 'Staff';
+    const profile = user.core_profiles_user_id[0];
+    const fromProfile = profile
+      ? `${profile.first_name} ${profile.last_name}`.trim()
+      : '';
+    return fromProfile || user.email || 'Staff';
+  }
+
+  private async resolveParentPreview(
+    parentMessageId: string | null,
+  ): Promise<string | null> {
+    if (!parentMessageId) return null;
+    const parent = await this.prisma.messages.findFirst({
+      where: { id: parentMessageId },
+      select: { encrypted_payload: true, is_deleted: true },
+    });
+    if (!parent || parent.is_deleted) return null;
+    return this.payload.unpack(parent.encrypted_payload).text.slice(0, 120);
   }
 
   private async publishRealtime(

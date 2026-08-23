@@ -4,7 +4,13 @@ import type { RealtimeService } from '../realtime.service';
 import type { Socket } from 'socket.io';
 
 describe('NestSocketIoGateway', () => {
-  const realtime = {} as RealtimeService;
+  const realtime = {
+    getPresence: jest.fn().mockReturnValue({
+      isOnline: () => false,
+      get: () => ({ lastSeenAt: new Date('2026-08-23T12:00:00Z') }),
+    }),
+    heartbeat: jest.fn(),
+  } as unknown as RealtimeService;
   let gatewayHandler: {
     handleConnect: jest.Mock;
     handleJoin: jest.Mock;
@@ -15,6 +21,7 @@ describe('NestSocketIoGateway', () => {
   let client: Socket;
 
   beforeEach(() => {
+    jest.clearAllMocks();
     gatewayHandler = {
       handleConnect: jest.fn().mockResolvedValue({
         accepted: true,
@@ -29,6 +36,7 @@ describe('NestSocketIoGateway', () => {
       realtime,
       gatewayHandler as unknown as RealtimeGatewayHandler,
     );
+    gateway.server = { emit: jest.fn(), to: jest.fn() } as never;
     client = {
       id: 'c1',
       data: {},
@@ -45,6 +53,13 @@ describe('NestSocketIoGateway', () => {
     expect(gatewayHandler.handleConnect).toHaveBeenCalled();
     expect(client.join).toHaveBeenCalledWith('user:u1');
     expect(gatewayHandler.handleJoin).toHaveBeenCalledWith('conn-1', 'user:u1');
+    expect(gateway.server.emit).toHaveBeenCalledWith(
+      'presence.updated',
+      expect.objectContaining({
+        type: 'presence.updated',
+        payload: { userId: 'u1', status: 'online' },
+      }),
+    );
   });
 
   it('rejects unauthorized connections', async () => {
@@ -56,10 +71,21 @@ describe('NestSocketIoGateway', () => {
     expect(client.disconnect).toHaveBeenCalledWith(true);
   });
 
-  it('handles disconnect', async () => {
-    (client.data as { connectionId?: string }).connectionId = 'conn-1';
+  it('handles disconnect and emits offline presence', async () => {
+    (client.data as { connectionId?: string; userId?: string }).connectionId =
+      'conn-1';
+    (client.data as { userId?: string }).userId = 'u1';
     await gateway.handleDisconnect(client);
     expect(gatewayHandler.handleDisconnect).toHaveBeenCalledWith('conn-1');
+    expect(gateway.server.emit).toHaveBeenCalledWith(
+      'presence.updated',
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          userId: 'u1',
+          status: 'offline',
+        }),
+      }),
+    );
   });
 
   it('allows authorized department room join', async () => {

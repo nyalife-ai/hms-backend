@@ -97,14 +97,32 @@ export class NestSocketIoGateway
 
     await client.join(`user:${userId}`);
     await this.gateway.handleJoin(result.connectionId!, `user:${userId}`);
+    this.server?.emit('presence.updated', {
+      type: 'presence.updated',
+      payload: { userId, status: 'online' },
+    });
     this.logger.debug(`socket connected ${client.id} user=${userId}`);
   }
 
   public async handleDisconnect(client: Socket): Promise<void> {
-    const connectionId = (client.data as { connectionId?: string })
-      .connectionId;
+    const data = client.data as { connectionId?: string; userId?: string };
+    const connectionId = data.connectionId;
+    const userId = data.userId;
     if (connectionId && this.gateway) {
       await this.gateway.handleDisconnect(connectionId);
+    }
+    if (userId) {
+      const presence = this.realtime.getPresence();
+      const stillOnline = presence?.isOnline(userId) ?? false;
+      if (!stillOnline) {
+        const lastSeenAt =
+          presence?.get(userId)?.lastSeenAt?.toISOString() ??
+          new Date().toISOString();
+        this.server?.emit('presence.updated', {
+          type: 'presence.updated',
+          payload: { userId, status: 'offline', lastSeenAt },
+        });
+      }
     }
     this.logger.debug(`socket disconnected ${client.id}`);
   }
@@ -202,6 +220,7 @@ export class NestSocketIoGateway
     );
     if (!allowed) return { ok: false, reason: 'forbidden' };
 
+    const displayName = await this.resolveDisplayName(userId);
     const room = `conversation:${conversationId}`;
     const eventType =
       state === 'started'
@@ -210,6 +229,7 @@ export class NestSocketIoGateway
     client.to(room).emit(eventType, {
       conversationId,
       userId,
+      displayName,
       state,
     });
     return { ok: true };
@@ -233,6 +253,24 @@ export class NestSocketIoGateway
   public publishToRoom(room: string, event: string, payload: unknown): void {
     if (!this.realtime) return;
     this.server?.to(room).emit(event, payload);
+  }
+
+  private async resolveDisplayName(userId: string): Promise<string> {
+    if (!this.prisma?.isConnected) return 'Someone';
+    try {
+      const user = await this.prisma.user.findFirst({
+        where: { id: userId },
+        include: { core_profiles_user_id: true },
+      });
+      if (!user) return 'Someone';
+      const profile = user.core_profiles_user_id[0];
+      const fromProfile = profile
+        ? `${profile.first_name} ${profile.last_name}`.trim()
+        : '';
+      return fromProfile || user.email || 'Someone';
+    } catch {
+      return 'Someone';
+    }
   }
 
   private async isConversationParticipant(

@@ -44,9 +44,18 @@ describe('MessagingService', () => {
         createMany: jest.fn().mockResolvedValue({ count: 1 }),
         updateMany: jest.fn().mockResolvedValue({ count: 2 }),
       },
-      messageAttachments: { create: jest.fn() },
       user: {
         findMany: jest.fn().mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]),
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'u1',
+          email: 'a@x.com',
+          core_profiles_user_id: [{ first_name: 'Ada', last_name: 'O' }],
+        }),
+      },
+      messageAttachments: {
+        create: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn(),
       },
     };
     payload = {
@@ -132,6 +141,60 @@ describe('MessagingService', () => {
       service.sendMessage('u1', 'c1', { body: 'Hello' }),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.messages.create).not.toHaveBeenCalled();
+  });
+
+  it('sendMessage returns a rich payload with senderName and dual ids', async () => {
+    const createdAt = new Date('2026-08-23T12:00:00Z');
+    prisma.conversationParticipants.findFirst.mockResolvedValue({
+      user_id: 'u1',
+      left_at: null,
+    });
+    prisma.conversations.findFirst.mockResolvedValue({
+      id: 'c1',
+      deleted_at: null,
+      metadata: {},
+    });
+    prisma.messages.create.mockResolvedValue({
+      id: 'm1',
+      conversation_id: 'c1',
+      sender_id: 'u1',
+      created_at: createdAt,
+      message_type: 'TEXT',
+    });
+    prisma.conversationParticipants.findMany.mockResolvedValue([
+      { user_id: 'u1', is_muted: false },
+      { user_id: 'u2', is_muted: false },
+    ]);
+
+    const result = await service.sendMessage('u1', 'c1', {
+      body: 'Hello',
+      clientMessageId: 'client-1',
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        id: 'm1',
+        messageId: 'm1',
+        conversationId: 'c1',
+        senderId: 'u1',
+        senderName: 'Ada O',
+        body: 'Hello',
+        isDeleted: false,
+        deliveryStatus: 'SENT',
+        clientMessageId: 'client-1',
+        reactions: [],
+        attachments: [],
+      }),
+    );
+    expect(events.emit).toHaveBeenCalledWith(
+      'message.created',
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          senderName: 'Ada O',
+          messageId: 'm1',
+        }),
+      }),
+    );
   });
 
   it('markRead updates last_read and receipts', async () => {

@@ -199,12 +199,13 @@ describe('NotificationPolicyService', () => {
     expect(security?.durable[0].userId).toBe('u1');
   });
 
-  it('notifies message recipients with durable + WS + FCM, skipping muted', () => {
+  it('notifies message recipients with durable + notif WS + FCM, skipping muted', () => {
     const intent = policy.evaluate(
       envelope(DOMAIN_EVENT_TYPES.MESSAGE_CREATED, {
         messageId: 'm1',
         conversationId: 'c1',
         senderId: 's1',
+        senderName: 'Ada Okello',
         preview: 'Hello colleague',
         recipientUserIds: ['r1', 'r2', 's1'],
         mutedUserIds: ['r2'],
@@ -213,11 +214,22 @@ describe('NotificationPolicyService', () => {
     expect(intent).not.toBeNull();
     expect(intent!.durable).toHaveLength(1);
     expect(intent!.durable[0].userId).toBe('r1');
+    expect(intent!.durable[0].title).toBe('New message from Ada Okello');
+    expect(intent!.durable[0].body).toBe('Hello colleague');
     expect(intent!.durable[0].actionPath).toBe('/messages?c=c1');
     expect(intent!.durable[0].entityType).toBe('MESSAGE');
     const jobNames = intent!.jobs.map((j) => j.name);
     expect(jobNames).toContain(NOTIFICATION_JOBS.SEND_WEBSOCKET);
     expect(jobNames).toContain(NOTIFICATION_JOBS.SEND_FCM);
     expect(jobNames).not.toContain(NOTIFICATION_JOBS.SEND_EMAIL);
+    const fcm = intent!.jobs.find((j) => j.name === NOTIFICATION_JOBS.SEND_FCM);
+    expect(fcm?.data).toEqual(
+      expect.objectContaining({
+        variables: expect.objectContaining({
+          senderName: 'Ada Okello',
+          preview: 'Hello colleague',
+        }),
+      }),
+    );
   });
 });

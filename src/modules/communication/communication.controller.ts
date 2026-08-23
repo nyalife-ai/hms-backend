@@ -12,6 +12,8 @@ import {
   Patch,
   Post,
   Query,
+  Res,
+  StreamableFile,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -25,6 +27,7 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { CurrentUser } from '../../common/decorators/user.decorator';
 import type { AuthUserPublic } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -176,6 +179,26 @@ export class CommunicationController {
     @CurrentUser() user: AuthUserPublic,
   ) {
     return this.messaging.getAttachmentDownload(user.id, id);
+  }
+
+  @Get('attachments/:id/content')
+  @ApiOperation({ summary: 'Stream attachment content (authenticated)' })
+  async streamAttachment(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUserPublic,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const file = await this.messaging.getAttachmentBuffer(user.id, id);
+    const mimeType = file.mimeType || 'application/octet-stream';
+    const inline =
+      mimeType.startsWith('image/') || mimeType === 'application/pdf';
+    const safeName = (file.fileName || 'attachment').replace(/"/g, '');
+    res.set({
+      'Content-Type': mimeType,
+      'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${safeName}"`,
+      'Content-Length': String(file.buffer.length),
+    });
+    return new StreamableFile(file.buffer);
   }
 
   @Patch('messages/:id')

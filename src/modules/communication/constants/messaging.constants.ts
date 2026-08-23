@@ -6,6 +6,7 @@ export const MESSAGE_EVENTS = {
   MESSAGE_CREATED: 'message.created',
   MESSAGE_UPDATED: 'message.updated',
   MESSAGE_DELETED: 'message.deleted',
+  MESSAGE_DELIVERED: 'message.delivered',
   MESSAGE_REACTION_ADDED: 'message.reaction_added',
   MESSAGE_REACTION_REMOVED: 'message.reaction_removed',
   CONVERSATION_CREATED: 'conversation.created',

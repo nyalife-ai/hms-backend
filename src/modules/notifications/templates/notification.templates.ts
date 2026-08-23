@@ -51,8 +51,8 @@ const TEMPLATES: readonly NotificationTemplateDefinition[] = [
   {
     key: 'message.created.push',
     channel: 'fcm',
-    subject: 'New message',
-    body: 'You have a new message in NyaLife.',
+    subject: 'New message from {{senderName}}',
+    body: '{{preview}}',
   },
   {
     key: 'appointment.created.doctor.push',

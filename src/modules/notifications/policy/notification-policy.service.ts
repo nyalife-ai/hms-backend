@@ -276,6 +276,7 @@ export class NotificationPolicyService {
       messageId: string;
       conversationId: string;
       senderId: string;
+      senderName?: string;
       preview?: string;
       recipientUserIds?: string[];
       mutedUserIds?: string[];
@@ -288,10 +289,12 @@ export class NotificationPolicyService {
     );
     if (!recipients.length) return null;
 
+    const senderName = (p.senderName ?? '').trim() || 'a colleague';
     const rawPreview = (p.preview ?? '').trim();
     const body = rawPreview
       ? rawPreview.slice(0, 120)
       : 'You have a new message.';
+    const title = `New message from ${senderName}`;
     const durable: DurableNotificationSpec[] = [];
     const jobs: QueuedNotificationJob[] = [];
 
@@ -300,16 +303,18 @@ export class NotificationPolicyService {
         staffDurable(event, {
           userId,
           type: DOMAIN_EVENT_TYPES.MESSAGE_CREATED,
-          title: 'New message',
+          title,
           body,
           entityType: 'MESSAGE',
           entityId: p.messageId,
           actionPath: `/messages?c=${p.conversationId}`,
         }),
       );
+      // Notification-center / sound only — chat content is already on the wire
+      // via MessagingService.publishRealtime (rich payload).
       jobs.push({
         name: NOTIFICATION_JOBS.SEND_WEBSOCKET,
-        jobId: `ws:message-created:${p.messageId}:${userId}`,
+        jobId: `ws:message-notif:${p.messageId}:${userId}`,
         data: {
           eventId: event.id,
           type: DOMAIN_EVENT_TYPES.MESSAGE_CREATED,
@@ -318,8 +323,10 @@ export class NotificationPolicyService {
             messageId: p.messageId,
             conversationId: p.conversationId,
             senderId: p.senderId,
+            senderName,
+            preview: body,
           },
-          dedupeKey: `ws:message-created:${event.id}:${userId}`,
+          dedupeKey: `ws:message-notif:${event.id}:${userId}`,
         },
       });
       jobs.push({
@@ -330,6 +337,8 @@ export class NotificationPolicyService {
           templateKey: 'message.created.push',
           userId,
           variables: {
+            senderName,
+            preview: body,
             conversationId: p.conversationId,
             messageId: p.messageId,
             actionPath: `/messages?c=${p.conversationId}`,
