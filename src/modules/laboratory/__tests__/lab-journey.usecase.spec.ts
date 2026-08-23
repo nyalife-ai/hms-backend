@@ -338,4 +338,217 @@ describe('LabJourneyUseCase', () => {
     expect(cancelled.status).toBe('CANCELLED');
     expect(prisma.laboratoryRequests.update).toHaveBeenCalled();
   });
+
+  it('validates doctor, consultation, and test types on createRequest', async () => {
+    prisma.patients.findFirst.mockResolvedValue({ id: 'p1' });
+    prisma.testTypes.findMany.mockResolvedValue([]);
+    await expect(
+      journey.createRequest({
+        patientId: 'p1',
+        requestedBy: 'u1',
+        testTypeIds: ['tt-missing'],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    prisma.testTypes.findMany.mockResolvedValue([{ id: 'tt1' }]);
+    prisma.staffProfiles.findFirst.mockResolvedValue(null);
+    await expect(
+      journey.createRequest({
+        patientId: 'p1',
+        requestedBy: 'u1',
+        requestingDoctorId: 'doc-x',
+        testTypeIds: ['tt1'],
+      }),
+    ).rejects.toThrow(/Requesting doctor/);
+
+    prisma.staffProfiles.findFirst.mockResolvedValue({ id: 'doc-1' });
+    prisma.consultations.findFirst.mockResolvedValue(null);
+    await expect(
+      journey.createRequest({
+        patientId: 'p1',
+        requestedBy: 'u1',
+        requestingDoctorId: 'doc-1',
+        consultationId: 'c-missing',
+        testTypeIds: ['tt1'],
+      }),
+    ).rejects.toThrow(/Consultation not found/);
+  });
+
+  it('rejects cancelling completed requests and is idempotent for cancelled', async () => {
+    prisma.laboratoryRequests.findFirst.mockResolvedValue({
+      id: 'r1',
+      status: 'COMPLETED',
+    });
+    await expect(journey.cancelRequest('r1', 'u1')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+
+    prisma.laboratoryRequests.findFirst.mockResolvedValue({
+      id: 'r1',
+      status: 'CANCELLED',
+    });
+    (ops.getRequest as jest.Mock).mockResolvedValue({
+      id: 'r1',
+      status: 'CANCELLED',
+    });
+    await expect(journey.cancelRequest('r1', 'u1')).resolves.toMatchObject({
+      status: 'CANCELLED',
+    });
+  });
+
+  it('advances sample status and returns early when already at target', async () => {
+    prisma.samples.findFirst.mockResolvedValue({
+      id: 's1',
+      status: 'REGISTERED',
+      patient_id: 'p1',
+      request: { patient_id: 'p1', status: 'IN_PROGRESS' },
+    });
+    prisma.samples.update.mockResolvedValue({});
+    (ops.getSample as jest.Mock).mockResolvedValue({
+      id: 's1',
+      status: 'IN_PROGRESS',
+    });
+
+    const moved = await journey.updateSampleStatus({
+      sampleId: 's1',
+      status: 'IN_PROGRESS',
+      actorUserId: 'u1',
+      notes: 'processing',
+    });
+    expect(moved.status).toBe('IN_PROGRESS');
+    expect(prisma.samples.update).toHaveBeenCalled();
+
+    prisma.samples.findFirst.mockResolvedValue({
+      id: 's1',
+      status: 'IN_PROGRESS',
+      patient_id: 'p1',
+      request: { patient_id: 'p1', status: 'IN_PROGRESS' },
+    });
+    await journey.updateSampleStatus({
+      sampleId: 's1',
+      status: 'IN_PROGRESS',
+      actorUserId: 'u1',
+    });
+    expect(ops.getSample).toHaveBeenCalled();
+  });
+
+  it('enters result batches and corrects verified results', async () => {
+    prisma.laboratoryRequests.findFirst.mockResolvedValue({
+      id: 'r1',
+      status: 'IN_PROGRESS',
+      notes: JSON.stringify({ orderedTestTypeIds: ['tt1'] }),
+    });
+    prisma.testParameters.findFirst.mockResolvedValue({
+      id: 'param1',
+      test_type_id: 'tt1',
+      is_active: true,
+    });
+    prisma.results.findFirst.mockResolvedValue(null);
+    prisma.results.create.mockResolvedValue({ id: 'res1' });
+    prisma.samples.updateMany.mockResolvedValue({ count: 1 });
+    (ops.listResults as jest.Mock).mockResolvedValue({
+      items: [{ id: 'res1', interpretation: 'NORMAL' }],
+    });
+
+    const batch = await journey.enterResultsBatch({
+      requestId: 'r1',
+      performedBy: 'u1',
+      lines: [{ parameterId: 'param1', resultValue: '10', interpretation: 'NORMAL' }],
+    });
+    expect(batch).toHaveLength(1);
+
+    prisma.results.findFirst.mockResolvedValue({
+      id: 'res1',
+      request_id: 'r1',
+    });
+    prisma.laboratoryRequests.findFirst.mockResolvedValue({
+      id: 'r1',
+      status: 'COMPLETED',
+    });
+    prisma.results.update.mockResolvedValue({});
+    (ops.listResults as jest.Mock).mockResolvedValue({
+      items: [{ id: 'res1', interpretation: 'CRITICAL' }],
+    });
+
+    const corrected = await journey.correctResult({
+      requestId: 'r1',
+      resultId: 'res1',
+      resultValue: '99',
+      interpretation: 'CRITICAL',
+      actorUserId: 'u1',
+    });
+    expect(corrected.interpretation).toBe('CRITICAL');
+    expect(prisma.laboratoryRequests.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { status: 'IN_PROGRESS' },
+      }),
+    );
+    expect(events.emit).toHaveBeenCalledWith(
+      'lab.result.critical',
+      expect.objectContaining({ resultId: 'res1' }),
+    );
+  });
+
+  it('repairs released visit stages and auto-provisions staff profiles', async () => {
+    prisma.laboratoryRequests.findMany = jest.fn().mockResolvedValue([
+      {
+        id: 'r1',
+        request_number: 'LAB-AABBCCDD',
+        notes: JSON.stringify({
+          orderedTestTypeIds: ['tt1'],
+          releasedToDoctorAt: '2026-08-01T00:00:00.000Z',
+        }),
+      },
+    ]);
+    prisma.outpatientVisits.findFirst.mockResolvedValue(null);
+    prisma.$queryRaw.mockResolvedValue([
+      { id: 'aabbccdd-0000-4000-8000-000000000001' },
+    ]);
+    prisma.laboratoryRequests.update.mockResolvedValue({});
+    prisma.outpatientVisits.updateMany.mockResolvedValue({ count: 1 });
+
+    const repaired = await journey.repairReleasedVisitStages('admin-1');
+    expect(repaired.repaired).toBe(1);
+    expect(audit.recordMutation).toHaveBeenCalled();
+
+    prisma.staffProfiles.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+    prisma.user.findFirst.mockResolvedValue({ id: 'user-lab-1' });
+    prisma.staffProfiles.create = jest.fn().mockResolvedValue({
+      id: 'staff-new',
+      user_id: 'user-lab-1',
+    });
+    prisma.laboratoryRequests.findFirst.mockResolvedValue({
+      id: 'r1',
+      patient_id: 'p1',
+      status: 'PENDING',
+    });
+    prisma.samples.create.mockResolvedValue({ id: 's1', status: 'REGISTERED' });
+
+    await journey.collectSample({
+      requestId: 'r1',
+      collectedBy: 'user-lab-1',
+    });
+    expect(prisma.staffProfiles.create).toHaveBeenCalled();
+  });
+
+  it('rejects empty result batches and long sample types', async () => {
+    await expect(
+      journey.enterResultsBatch({
+        requestId: 'r1',
+        performedBy: 'u1',
+        lines: [],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    prisma.staffProfiles.findFirst.mockResolvedValue({ id: 'staff1' });
+    await expect(
+      journey.collectSample({
+        requestId: 'r1',
+        collectedBy: 'staff1',
+        sampleType: 'X'.repeat(51),
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
 });

@@ -575,6 +575,149 @@ describe('P1 CheckoutService STK lifecycle', () => {
     );
     expect(status.status).toBe('FAILED');
   });
+
+  it('getReceipt returns payment context and patient details', async () => {
+    (repo as any).findReceiptById = jest.fn().mockResolvedValue({
+      id: 'rcp-1',
+      receipt_number: 'RCP-1',
+      channel: 'MPESA',
+      amount: 1500,
+      issued_at: new Date('2026-08-01T10:00:00.000Z'),
+      visit_id: 'visit-1',
+      invoice_id: 'inv-1',
+      payment_id: 'pay-1',
+      patient_id: 'pat-1',
+      line_items: [{ description: 'CBC', amount: 1500 }],
+      meta: {
+        invoiceNumber: 'INV-1',
+        previousPaid: 0,
+        currentPayment: 1500,
+        balance: 0,
+        mrn: 'MRN-1001',
+        patientName: 'Jane Doe',
+        phone: '254712345678',
+      },
+    });
+    (repo as any).findPatientForReceipt = jest.fn().mockResolvedValue({
+      patient_number: 'MRN-1001',
+      profile: {
+        first_name: 'Jane',
+        last_name: 'Doe',
+        phone: '254712345678',
+      },
+    });
+
+    const receipt = await checkout.getReceipt('rcp-1');
+    expect(receipt.receiptNumber).toBe('RCP-1');
+    expect(receipt.paymentContext.invoiceTotal).toBe(1500);
+    expect(receipt.patient.name).toBe('Jane Doe');
+
+    (repo as any).findReceiptById.mockResolvedValue(null);
+    await expect(checkout.getReceipt('missing')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+
+  it('handleCallback enforces configured secret and ignores missing stk body', async () => {
+    const secretConfig = {
+      get: (key: string) => {
+        if (key === 'MPESA_CALLBACK_SECRET') return 's3cret';
+        if (key === 'app.environment') return 'test';
+        return undefined;
+      },
+    } as unknown as ConfigService;
+    const secured = new CheckoutService(
+      secretConfig,
+      repo as unknown as IBillingRepository,
+      billing as never,
+      {} as never,
+      queue as unknown as Queue,
+      events as unknown as EventEmitter2,
+    );
+    (secured as unknown as { client: MpesaClient }).client =
+      mockClient as unknown as MpesaClient;
+
+    await expect(secured.handleCallback({ Body: {} })).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(
+      secured.handleCallback(
+        { Body: {} },
+        { secretQuery: 'wrong' },
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    await expect(
+      secured.handleCallback({ Body: {} }, { secretHeader: 's3cret' }),
+    ).resolves.toEqual({ ResultCode: 0, ResultDesc: 'Accepted' });
+  });
+
+  it('finalizes consult-fee checkout via collectOnInvoice', async () => {
+    const tx = pendingTx({
+      amount: 500,
+      payload: {
+        purpose: 'CONSULT_FEE',
+        invoiceId: 'inv-1',
+        lines: [{ description: 'Consultation', amount: 500 }],
+      },
+    });
+    repo.findVisitForCheckout.mockResolvedValue(
+      baseVisitRow({
+        stage: 'AWAITING_PAYMENT',
+        payload: {
+          payment: { method: 'CASH' },
+          billing: { invoiceId: 'inv-1', consultFeeStatus: 'PENDING' },
+        },
+      }),
+    );
+    repo.claimMpesaPending.mockResolvedValue(tx);
+    repo.findMpesaById.mockResolvedValue(
+      pendingTx({ status: 'SUCCESS', mpesa_receipt_number: 'CONSULT1' }),
+    );
+    repo.updateMpesaTransaction.mockResolvedValue(
+      pendingTx({ status: 'SUCCESS' }),
+    );
+
+    const status = await (
+      checkout as unknown as {
+        finalizeSuccess: (
+          id: string,
+          info: { mpesaReceipt?: string; resultDesc?: string },
+        ) => Promise<{ status: string }>;
+      }
+    ).finalizeSuccess('tx-1', {
+      mpesaReceipt: 'CONSULT1',
+      resultDesc: 'Paid',
+    });
+
+    expect(billing.collectOnInvoice).toHaveBeenCalledWith(
+      expect.objectContaining({ invoiceId: 'inv-1', mode: 'MPESA' }),
+    );
+    expect(repo.createReceipt).toHaveBeenCalled();
+    expect(repo.updateVisitCheckout).toHaveBeenCalledWith(
+      'visit-1',
+      expect.objectContaining({ stage: 'CHECKED_IN' }),
+    );
+    expect(status.status).toBe('SUCCESS');
+  });
+
+  it('finalizeSuccess returns existing status when claim loses the race', async () => {
+    repo.claimMpesaPending.mockResolvedValue(null);
+    repo.findMpesaById.mockResolvedValue(pendingTx({ status: 'SUCCESS' }));
+    repo.findReceiptByMpesaTxId.mockResolvedValue({ id: 'rcp-existing' });
+
+    const status = await (
+      checkout as unknown as {
+        finalizeSuccess: (
+          id: string,
+          info: { mpesaReceipt?: string },
+        ) => Promise<{ status: string; receiptId?: string }>;
+      }
+    ).finalizeSuccess('tx-1', { mpesaReceipt: 'R1' });
+
+    expect(status.status).toBe('SUCCESS');
+    expect(status.receiptId).toBe('rcp-existing');
+  });
 });
 
 describe('P1 BillingStkProcessor → CheckoutService', () => {

@@ -1065,6 +1065,30 @@ describe('realtime platform', () => {
         }),
       ).resolves.toBeUndefined();
 
+      // Singular `role` (no `roles` array) and empty-string short-circuit.
+      await expect(
+        new JwtRealtimeAuthProvider().authenticate({
+          credentials: signJwt({ sub: 'role-user', role: 'doctor' }),
+        }),
+      ).resolves.toMatchObject({ userId: 'role-user', roles: ['doctor'] });
+      await expect(
+        new JwtRealtimeAuthProvider().authenticate({
+          credentials: signJwt({ sub: 'empty-role', role: '', roles: [] }),
+        }),
+      ).resolves.toMatchObject({ userId: 'empty-role', roles: undefined });
+      await expect(
+        new JwtRealtimeAuthProvider().authenticate({
+          credentials: signJwt({
+            sub: 'roles-empty-fallback',
+            roles: [],
+            role: 'nurse',
+          }),
+        }),
+      ).resolves.toMatchObject({
+        userId: 'roles-empty-fallback',
+        roles: ['nurse'],
+      });
+
       await expect(
         new ApiKeyRealtimeAuthProvider(['k']).authenticate({
           credentials: 'k',

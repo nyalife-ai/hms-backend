@@ -11,7 +11,8 @@ import { diffAuditFields, maskAuditRecord } from './audit-masking';
 import type { AuditAction } from './hms-audit.writer';
 
 const SKIP_MODELS = new Set(['AuditLogs', 'AccessLogs']);
-const WRITE_ACTIONS = new Set([
+/** Exported for unit tests to exercise the defensive fallback path. */
+export const PRISMA_AUDIT_WRITE_ACTIONS = new Set([
   'create',
   'createMany',
   'update',
@@ -20,6 +21,7 @@ const WRITE_ACTIONS = new Set([
   'delete',
   'deleteMany',
 ]);
+const WRITE_ACTIONS = PRISMA_AUDIT_WRITE_ACTIONS;
 
 const NIL_UUID = '00000000-0000-4000-8000-000000000000';
 const logger = new Logger('PrismaAuditMiddleware');
