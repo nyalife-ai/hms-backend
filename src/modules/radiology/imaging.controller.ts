@@ -17,6 +17,11 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { RadiologyClinicalUseCase } from './use-cases/radiology-clinical.usecase';
+import {
+  ImagingRequestsQueryDto,
+  ImagingScanTypesQueryDto,
+} from './dto/imaging-query.dto';
+import { resolveListPagination } from '../../platform/api/pagination/pagination-query.dto';
 
 const RAD: HmsRole[] = ['ADMIN', 'SUPER_ADMIN', 'RADIOLOGIST', 'DOCTOR'];
 const RAD_CONFIG: HmsRole[] = ['ADMIN', 'SUPER_ADMIN', 'RADIOLOGIST'];
@@ -30,14 +35,15 @@ export class ImagingController {
 
   @Get('scan-types')
   @Roles(...RAD)
-  listScanTypes(
-    @Query('active') active?: string,
-    @Query('search') search?: string,
-  ) {
+  listScanTypes(@Query() query: ImagingScanTypesQueryDto) {
     return this.clinical.listScanTypes({
       active:
-        active === 'true' ? true : active === 'false' ? false : undefined,
-      search,
+        query.active === 'true'
+          ? true
+          : query.active === 'false'
+            ? false
+            : undefined,
+      search: query.search,
     });
   }
 
@@ -78,19 +84,14 @@ export class ImagingController {
 
   @Get('requests')
   @Roles(...RAD)
-  listRequests(
-    @Query('status') status?: string,
-    @Query('patientId') patientId?: string,
-    @Query('search') search?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
+  listRequests(@Query() query: ImagingRequestsQueryDto) {
+    const page = resolveListPagination(query);
     return this.clinical.listRequests({
-      status,
-      patientId,
-      search,
-      take: take ? Number(take) : undefined,
-      skip: skip ? Number(skip) : undefined,
+      status: query.status,
+      patientId: query.patientId,
+      search: query.search,
+      take: page.take,
+      skip: page.skip,
     });
   }
 

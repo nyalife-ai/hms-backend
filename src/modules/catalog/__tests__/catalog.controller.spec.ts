@@ -1,5 +1,5 @@
 /**
- * CatalogController — delegates query params to CatalogService.
+ * CatalogController — delegates query DTOs to CatalogService.
  */
 
 import { CatalogController } from '../catalog.controller';
@@ -41,7 +41,7 @@ describe('CatalogController', () => {
   });
 
   it('lists patients/doctors/departments/medications with pagination defaults', async () => {
-    await controller.patients();
+    await controller.patients({});
     expect(catalog.listPatients).toHaveBeenCalledWith({
       page: 1,
       limit: 50,
@@ -50,7 +50,13 @@ describe('CatalogController', () => {
       status: undefined,
     });
 
-    await controller.patients('2', '10', 'ann', 'F', 'ACTIVE');
+    await controller.patients({
+      page: 2,
+      limit: 10,
+      search: 'ann',
+      gender: 'F',
+      status: 'ACTIVE',
+    });
     expect(catalog.listPatients).toHaveBeenCalledWith({
       page: 2,
       limit: 10,
@@ -59,7 +65,12 @@ describe('CatalogController', () => {
       status: 'ACTIVE',
     });
 
-    await controller.doctors('1', '20', 'doc', 'dept-1');
+    await controller.doctors({
+      page: 1,
+      limit: 20,
+      search: 'doc',
+      departmentId: 'dept-1',
+    });
     expect(catalog.listDoctors).toHaveBeenCalledWith({
       page: 1,
       limit: 20,
@@ -67,14 +78,14 @@ describe('CatalogController', () => {
       departmentId: 'dept-1',
     });
 
-    await controller.departments('3', '5', 'cardio');
+    await controller.departments({ page: 3, limit: 5, search: 'cardio' });
     expect(catalog.listDepartments).toHaveBeenCalledWith({
       page: 3,
       limit: 5,
       search: 'cardio',
     });
 
-    await controller.medications(undefined, undefined, 'para');
+    await controller.medications({ search: 'para' });
     expect(catalog.listMedications).toHaveBeenCalledWith({
       page: 1,
       limit: 50,
@@ -86,13 +97,19 @@ describe('CatalogController', () => {
     await controller.labTests();
     expect(catalog.listLabTests).toHaveBeenCalled();
 
-    await controller.clinicalServices('surgery', 'append');
+    await controller.clinicalServices({ kind: 'surgery', search: 'append' });
     expect(catalog.listClinicalServices).toHaveBeenCalledWith({
       kind: 'surgery',
       search: 'append',
     });
 
-    await controller.staff('1', '25', 'ada', 'DOCTOR', 'ACTIVE');
+    await controller.staff({
+      page: 1,
+      limit: 25,
+      search: 'ada',
+      role: 'DOCTOR',
+      status: 'ACTIVE',
+    });
     expect(catalog.listStaff).toHaveBeenCalledWith({
       page: 1,
       limit: 25,
@@ -112,16 +129,15 @@ describe('CatalogController', () => {
     await controller.appointmentDetail('a1');
     expect(catalog.getAppointmentDetail).toHaveBeenCalledWith('a1');
 
-    await controller.appointments(
-      user,
-      '2',
-      '15',
-      'fever',
-      'SCHEDULED',
-      'doc-1',
-      '2026-01-01',
-      '2026-01-31',
-    );
+    await controller.appointments(user, {
+      page: 2,
+      limit: 15,
+      search: 'fever',
+      status: 'SCHEDULED',
+      doctorId: 'doc-1',
+      from: '2026-01-01',
+      to: '2026-01-31',
+    });
     expect(catalog.listAppointments).toHaveBeenCalledWith(
       {
         page: 2,
@@ -139,7 +155,12 @@ describe('CatalogController', () => {
   it('exposes inventory, wards, radiology, invoices, conversations, dashboard', async () => {
     await controller.inventory();
     await controller.wards();
-    await controller.radiologyQueue('1', '40', 'ct', 'PENDING');
+    await controller.radiologyQueue({
+      page: 1,
+      limit: 40,
+      search: 'ct',
+      status: 'PENDING',
+    });
     await controller.invoices();
     await controller.conversations();
     await controller.dashboardSummary();

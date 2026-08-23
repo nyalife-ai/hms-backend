@@ -19,6 +19,15 @@ import type { AuthUserPublic, HmsRole } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { resolveListPagination } from '../../platform/api/pagination/pagination-query.dto';
+import {
+  LaboratoryClinicalServicesQueryDto,
+  LaboratoryParametersQueryDto,
+  LaboratoryRequestsQueryDto,
+  LaboratoryResultsQueryDto,
+  LaboratorySamplesQueryDto,
+  LaboratoryTestTypesQueryDto,
+} from './dto/laboratory-list-query.dto';
 import { LabJourneyUseCase } from './use-cases/lab-journey.usecase';
 import { LabOperationsUseCase } from './use-cases/lab-operations.usecase';
 
@@ -82,22 +91,20 @@ export class LaboratoryController {
   @ApiOperation({
     summary: 'List clinical services & procedures managed for doctor orders',
   })
-  listClinicalServices(
-    @Query('search') search?: string,
-    @Query('category') category?: string,
-    @Query('kind') kind?: 'service' | 'surgery',
-    @Query('active') active?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
+  listClinicalServices(@Query() query: LaboratoryClinicalServicesQueryDto) {
+    const page = resolveListPagination(query);
     return this.ops.listClinicalServices({
-      search,
-      category,
-      kind,
+      search: query.search,
+      category: query.category,
+      kind: query.kind,
       active:
-        active === 'true' ? true : active === 'false' ? false : undefined,
-      take: take ? Number(take) : undefined,
-      skip: skip ? Number(skip) : undefined,
+        query.active === 'true'
+          ? true
+          : query.active === 'false'
+            ? false
+            : undefined,
+      take: page.take,
+      skip: page.skip,
     });
   }
 
@@ -146,20 +153,19 @@ export class LaboratoryController {
   // ── Test types ────────────────────────────────────────────
   @Get('test-types')
   @Roles(...LAB_READ)
-  listTestTypes(
-    @Query('search') search?: string,
-    @Query('category') category?: string,
-    @Query('active') active?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
+  listTestTypes(@Query() query: LaboratoryTestTypesQueryDto) {
+    const page = resolveListPagination(query);
     return this.ops.listTestTypes({
-      search,
-      category,
+      search: query.search,
+      category: query.category,
       active:
-        active === 'true' ? true : active === 'false' ? false : undefined,
-      take: take ? Number(take) : undefined,
-      skip: skip ? Number(skip) : undefined,
+        query.active === 'true'
+          ? true
+          : query.active === 'false'
+            ? false
+            : undefined,
+      take: page.take,
+      skip: page.skip,
     });
   }
 
@@ -222,16 +228,16 @@ export class LaboratoryController {
   // ── Parameters ────────────────────────────────────────────
   @Get('parameters')
   @Roles(...LAB_READ)
-  listParameters(
-    @Query('testTypeId') testTypeId?: string,
-    @Query('active') active?: string,
-    @Query('search') search?: string,
-  ) {
+  listParameters(@Query() query: LaboratoryParametersQueryDto) {
     return this.ops.listParameters({
-      testTypeId,
+      testTypeId: query.testTypeId,
       active:
-        active === 'true' ? true : active === 'false' ? false : undefined,
-      search,
+        query.active === 'true'
+          ? true
+          : query.active === 'false'
+            ? false
+            : undefined,
+      search: query.search,
     });
   }
 
@@ -277,33 +283,21 @@ export class LaboratoryController {
   // ── Requests ──────────────────────────────────────────────
   @Get('requests')
   @Roles(...LAB_READ)
-  listRequests(
-    @Query('patientId') patientId?: string,
-    @Query('status') status?: string,
-    @Query('priority') priority?: string,
-    @Query('requestingDoctorId') requestingDoctorId?: string,
-    @Query('consultationId') consultationId?: string,
-    @Query('appointmentId') appointmentId?: string,
-    @Query('visitId') visitId?: string,
-    @Query('search') search?: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
+  listRequests(@Query() query: LaboratoryRequestsQueryDto) {
+    const page = resolveListPagination(query);
     return this.ops.listRequests({
-      patientId,
-      status,
-      priority,
-      requestingDoctorId,
-      consultationId,
-      appointmentId,
-      visitId,
-      search,
-      from: from ? new Date(from) : undefined,
-      to: to ? new Date(to) : undefined,
-      take: take ? Number(take) : undefined,
-      skip: skip ? Number(skip) : undefined,
+      patientId: query.patientId,
+      status: query.status,
+      priority: query.priority,
+      requestingDoctorId: query.requestingDoctorId,
+      consultationId: query.consultationId,
+      appointmentId: query.appointmentId,
+      visitId: query.visitId,
+      search: query.search,
+      from: query.from ? new Date(query.from) : undefined,
+      to: query.to ? new Date(query.to) : undefined,
+      take: page.take,
+      skip: page.skip,
     });
   }
 
@@ -482,21 +476,15 @@ export class LaboratoryController {
   // ── Samples ───────────────────────────────────────────────
   @Get('samples')
   @Roles(...LAB_READ)
-  listSamples(
-    @Query('requestId') requestId?: string,
-    @Query('patientId') patientId?: string,
-    @Query('status') status?: string,
-    @Query('search') search?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
+  listSamples(@Query() query: LaboratorySamplesQueryDto) {
+    const page = resolveListPagination(query);
     return this.ops.listSamples({
-      requestId,
-      patientId,
-      status,
-      search,
-      take: take ? Number(take) : undefined,
-      skip: skip ? Number(skip) : undefined,
+      requestId: query.requestId,
+      patientId: query.patientId,
+      status: query.status,
+      search: query.search,
+      take: page.take,
+      skip: page.skip,
     });
   }
 
@@ -533,39 +521,28 @@ export class LaboratoryController {
   @ApiOperation({
     summary: 'Lab results grouped by request (one row per request)',
   })
-  listResultBundles(
-    @Query('search') search?: string,
-    @Query('status') status?: string,
-    @Query('criticalOnly') criticalOnly?: string,
-    @Query('unverifiedOnly') unverifiedOnly?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
+  listResultBundles(@Query() query: LaboratoryResultsQueryDto) {
+    const page = resolveListPagination(query);
     return this.ops.listResultBundles({
-      search,
-      status,
-      criticalOnly: criticalOnly === 'true',
-      unverifiedOnly: unverifiedOnly === 'true',
-      take: take ? Number(take) : undefined,
-      skip: skip ? Number(skip) : undefined,
+      search: query.search,
+      status: query.status,
+      criticalOnly: query.criticalOnly === 'true',
+      unverifiedOnly: query.unverifiedOnly === 'true',
+      take: page.take,
+      skip: page.skip,
     });
   }
 
   @Get('results')
   @Roles(...LAB_READ)
-  listResults(
-    @Query('requestId') requestId?: string,
-    @Query('criticalOnly') criticalOnly?: string,
-    @Query('unverifiedOnly') unverifiedOnly?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
+  listResults(@Query() query: LaboratoryResultsQueryDto) {
+    const page = resolveListPagination(query);
     return this.ops.listResults({
-      requestId,
-      criticalOnly: criticalOnly === 'true',
-      unverifiedOnly: unverifiedOnly === 'true',
-      take: take ? Number(take) : undefined,
-      skip: skip ? Number(skip) : undefined,
+      requestId: query.requestId,
+      criticalOnly: query.criticalOnly === 'true',
+      unverifiedOnly: query.unverifiedOnly === 'true',
+      take: page.take,
+      skip: page.skip,
     });
   }
 

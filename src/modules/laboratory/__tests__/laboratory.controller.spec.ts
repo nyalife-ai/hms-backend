@@ -6,14 +6,15 @@ import { LaboratoryController } from '../laboratory.controller';
 
 function proxyMock(): any {
   return new Proxy(
-    {},
+    {} as Record<string, unknown>,
     {
       get: (target, prop) => {
         if (prop === 'then') return undefined;
-        if (!target[prop as string]) {
-          target[prop as string] = jest.fn().mockResolvedValue({ ok: String(prop) });
+        const key = String(prop);
+        if (!target[key]) {
+          target[key] = jest.fn().mockResolvedValue({ ok: key });
         }
-        return target[prop as string];
+        return target[key];
       },
     },
   );
@@ -45,11 +46,11 @@ describe('LaboratoryController', () => {
       if (i === n - 1 && n >= 2) args.push(user);
       else if (i === 0 && /^(get|update|delete|deactivate|activate|cancel|void|send|receive|verify|correct|collect|enter|release|convert|expire|finalize|mark|transfer|discharge|findOne|remove|order|record|createNursing|upsert)/.test(method))
         args.push(id);
-      else if (i === 0 && method.startsWith('list')) args.push('true');
+      else if (i === 0 && method.startsWith('list')) args.push({});
       else if (i === 0 && (method.startsWith('create') || method === 'admit' || method === 'reserve' || method === 'dispenseVisit' || method === 'adjust' || method === 'damage' || method === 'expiry' || method === 'returnStock'))
         args.push(body);
       else if (method.startsWith('list') || method === 'visitReport' || method === 'findAll')
-        args.push(i % 2 === 0 ? 'true' : '1');
+        args.push({});
       else args.push(body);
     }
     // admit/reserve need user as last when length fits

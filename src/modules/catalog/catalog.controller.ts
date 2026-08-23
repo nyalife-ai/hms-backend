@@ -6,6 +6,16 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { CatalogService } from './catalog.service';
+import {
+  CatalogAppointmentsQueryDto,
+  CatalogClinicalServicesQueryDto,
+  CatalogDepartmentsQueryDto,
+  CatalogDoctorsQueryDto,
+  CatalogMedicationsQueryDto,
+  CatalogPatientsQueryDto,
+  CatalogRadiologyQueueQueryDto,
+  CatalogStaffQueryDto,
+} from './dto/catalog-query.dto';
 
 @ApiTags('catalog')
 @ApiBearerAuth()
@@ -39,63 +49,44 @@ export class CatalogController {
 
   @Get('patients')
   @ApiOperation({ summary: 'List registered patients (paginated, searchable)' })
-  patients(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('search') search?: string,
-    @Query('gender') gender?: string,
-    @Query('status') status?: string,
-  ) {
+  patients(@Query() query: CatalogPatientsQueryDto) {
     return this.catalog.listPatients({
-      page: page ? Number(page) : 1,
-      limit: limit ? Number(limit) : 50,
-      search,
-      gender,
-      status,
+      page: query.page ?? 1,
+      limit: query.limit ?? 50,
+      search: query.search,
+      gender: query.gender,
+      status: query.status,
     });
   }
 
   @Get('doctors')
   @ApiOperation({ summary: 'List doctors / radiologists (paginated, searchable)' })
-  doctors(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('search') search?: string,
-    @Query('departmentId') departmentId?: string,
-  ) {
+  doctors(@Query() query: CatalogDoctorsQueryDto) {
     return this.catalog.listDoctors({
-      page: page ? Number(page) : 1,
-      limit: limit ? Number(limit) : 50,
-      search,
-      departmentId,
+      page: query.page ?? 1,
+      limit: query.limit ?? 50,
+      search: query.search,
+      departmentId: query.departmentId,
     });
   }
 
   @Get('departments')
   @ApiOperation({ summary: 'List departments with staff counts (paginated)' })
-  departments(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('search') search?: string,
-  ) {
+  departments(@Query() query: CatalogDepartmentsQueryDto) {
     return this.catalog.listDepartments({
-      page: page ? Number(page) : 1,
-      limit: limit ? Number(limit) : 50,
-      search,
+      page: query.page ?? 1,
+      limit: query.limit ?? 50,
+      search: query.search,
     });
   }
 
   @Get('medications')
   @ApiOperation({ summary: 'List medications with stock from batches (paginated)' })
-  medications(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('search') search?: string,
-  ) {
+  medications(@Query() query: CatalogMedicationsQueryDto) {
     return this.catalog.listMedications({
-      page: page ? Number(page) : 1,
-      limit: limit ? Number(limit) : 50,
-      search,
+      page: query.page ?? 1,
+      limit: query.limit ?? 50,
+      search: query.search,
     });
   }
 
@@ -110,28 +101,22 @@ export class CatalogController {
     summary:
       'List clinical services / procedures / surgeries for doctor order pickers',
   })
-  clinicalServices(
-    @Query('kind') kind?: 'service' | 'surgery',
-    @Query('search') search?: string,
-  ) {
-    return this.catalog.listClinicalServices({ kind, search });
+  clinicalServices(@Query() query: CatalogClinicalServicesQueryDto) {
+    return this.catalog.listClinicalServices({
+      kind: query.kind,
+      search: query.search,
+    });
   }
 
   @Get('staff')
   @ApiOperation({ summary: 'List staff profiles (paginated, searchable)' })
-  staff(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('search') search?: string,
-    @Query('role') role?: string,
-    @Query('status') status?: string,
-  ) {
+  staff(@Query() query: CatalogStaffQueryDto) {
     return this.catalog.listStaff({
-      page: page ? Number(page) : 1,
-      limit: limit ? Number(limit) : 50,
-      search,
-      role,
-      status,
+      page: query.page ?? 1,
+      limit: query.limit ?? 50,
+      search: query.search,
+      role: query.role,
+      status: query.status,
     });
   }
 
@@ -156,23 +141,17 @@ export class CatalogController {
   @Get('appointments')
   appointments(
     @CurrentUser() user: AuthUserPublic,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('search') search?: string,
-    @Query('status') status?: string,
-    @Query('doctorId') doctorId?: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
+    @Query() query: CatalogAppointmentsQueryDto,
   ) {
     return this.catalog.listAppointments(
       {
-        page: page ? Number(page) : 1,
-        limit: limit ? Number(limit) : 50,
-        search,
-        status,
-        doctorId,
-        from,
-        to,
+        page: query.page ?? 1,
+        limit: query.limit ?? 50,
+        search: query.search,
+        status: query.status,
+        doctorId: query.doctorId,
+        from: query.from,
+        to: query.to,
       },
       user,
     );
@@ -189,17 +168,12 @@ export class CatalogController {
   }
 
   @Get('radiology-queue')
-  radiologyQueue(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('search') search?: string,
-    @Query('status') status?: string,
-  ) {
+  radiologyQueue(@Query() query: CatalogRadiologyQueueQueryDto) {
     return this.catalog.listRadiologyQueue({
-      page: page ? Number(page) : 1,
-      limit: limit ? Number(limit) : 50,
-      search,
-      status,
+      page: query.page ?? 1,
+      limit: query.limit ?? 50,
+      search: query.search,
+      status: query.status,
     });
   }
 

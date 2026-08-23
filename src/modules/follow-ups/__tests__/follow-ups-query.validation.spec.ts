@@ -60,10 +60,10 @@ describe('FollowUpsQueryDto validation contract', () => {
       'utf8',
     );
     expect(src).toMatch(
-      /import \{[^}]*FollowUpsQueryDto[^}]*\} from '\.\/dto'/,
+      /import \{[^}]*FollowUpsQueryDto[^}]*\} from '\.\/dto\/follow-ups-query\.dto'/,
     );
     expect(src).not.toMatch(
-      /import type \{[^}]*FollowUpsQueryDto[^}]*\} from '\.\/dto'/,
+      /import type \{[^}]*FollowUpsQueryDto[^}]*\}/,
     );
     // sanity: controller class still references the DTO
     expect(FollowUpsController.name).toBe('FollowUpsController');

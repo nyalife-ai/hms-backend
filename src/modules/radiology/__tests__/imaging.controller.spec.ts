@@ -33,19 +33,19 @@ describe('ImagingController', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('lists and mutates scan types with active filter parsing', async () => {
-    await controller.listScanTypes('true', 'CT');
+    await controller.listScanTypes({ active: 'true', search: 'CT' });
     expect(clinical.listScanTypes).toHaveBeenCalledWith({
       active: true,
       search: 'CT',
     });
 
-    await controller.listScanTypes('false');
+    await controller.listScanTypes({ active: 'false' });
     expect(clinical.listScanTypes).toHaveBeenLastCalledWith({
       active: false,
       search: undefined,
     });
 
-    await controller.listScanTypes();
+    await controller.listScanTypes({});
     expect(clinical.listScanTypes).toHaveBeenLastCalledWith({
       active: undefined,
       search: undefined,
@@ -59,8 +59,14 @@ describe('ImagingController', () => {
     });
   });
 
-  it('lists and gets requests with numeric take/skip', async () => {
-    await controller.listRequests('PENDING', 'pat1', 'q', '10', '5');
+  it('lists and gets requests with page/limit mapped to take/skip', async () => {
+    await controller.listRequests({
+      status: 'PENDING',
+      patientId: 'pat1',
+      search: 'q',
+      take: 10,
+      skip: 5,
+    });
     expect(clinical.listRequests).toHaveBeenCalledWith({
       status: 'PENDING',
       patientId: 'pat1',
@@ -69,13 +75,13 @@ describe('ImagingController', () => {
       skip: 5,
     });
 
-    await controller.listRequests();
+    await controller.listRequests({ page: 2, limit: 25 });
     expect(clinical.listRequests).toHaveBeenLastCalledWith({
       status: undefined,
       patientId: undefined,
       search: undefined,
-      take: undefined,
-      skip: undefined,
+      take: 25,
+      skip: 25,
     });
 
     await expect(controller.getRequest(id)).resolves.toEqual({ id: 'r1' });
