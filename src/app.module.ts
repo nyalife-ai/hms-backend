@@ -48,6 +48,7 @@ import { VitalSignsModule } from './modules/vital-signs/vital-signs.module';
 import { InsurancePoliciesModule } from './modules/insurance-policies/insurance-policies.module';
 import { PatientPortalModule } from './modules/patient-portal/patient-portal.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { CommunicationModule } from './modules/communication/communication.module';
 
 /**
  * Composition root — dual-run:
@@ -99,6 +100,7 @@ import { AnalyticsModule } from './modules/analytics/analytics.module';
     VitalSignsModule,
     InsurancePoliciesModule,
     AnalyticsModule,
+    CommunicationModule,
 
     EventEmitterModule.forRoot({
       wildcard: true,

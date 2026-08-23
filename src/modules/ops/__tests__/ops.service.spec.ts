@@ -139,6 +139,29 @@ describe('OpsService', () => {
       update: jest.fn().mockResolvedValue({ id: 'a1', status: 'ARRIVED' }),
     };
     radiology = { create: jest.fn().mockResolvedValue({ id: 'rad1' }) };
+    const messaging = {
+      createConversation: jest.fn().mockResolvedValue({ id: 'c1' }),
+      listMessages: jest.fn().mockResolvedValue({
+        items: [
+          {
+            id: 'm1',
+            conversationId: 'c1',
+            senderId: 'u1',
+            senderName: 'Ada O',
+            body: 'Hi',
+            createdAt: '2026-08-23T10:00:00.000Z',
+          },
+        ],
+        nextCursor: null,
+      }),
+      sendMessage: jest.fn().mockResolvedValue({
+        id: 'msg1',
+        conversationId: 'c1',
+        senderId: 'u1',
+        body: 'New note',
+        createdAt: '2026-08-23T10:00:00.000Z',
+      }),
+    };
 
     service = new OpsService(
       prisma as never,
@@ -146,7 +169,9 @@ describe('OpsService', () => {
       ipd as never,
       appointments as never,
       radiology as never,
+      messaging as never,
     );
+    (service as any).__messaging = messaging;
   });
 
   it('rejects when database is disconnected', async () => {
@@ -438,61 +463,57 @@ describe('OpsService', () => {
   });
 
   it('manages conversations and messages', async () => {
+    const messaging = (service as any).__messaging as {
+      sendMessage: jest.Mock;
+      listMessages: jest.Mock;
+      createConversation: jest.Mock;
+    };
+
     await service.createConversation({
       name: 'Ward',
       preview: 'Hello team',
       createdBy: 'u1',
     });
     expect(prisma.conversations.create).toHaveBeenCalled();
-    expect(prisma.messages.create).toHaveBeenCalled();
+    expect(messaging.sendMessage).toHaveBeenCalled();
 
-    prisma.messages.findMany.mockResolvedValue([
-      {
-        id: 'm1',
-        conversation_id: 'c1',
-        sender_id: 'u1',
-        encrypted_payload: JSON.stringify({ text: 'Hi' }),
-        created_at: new Date('2026-08-23T10:00:00Z'),
-        sender: {
-          email: 'a@x.com',
-          core_profiles_user_id: [{ first_name: 'Ada', last_name: 'O' }],
-        },
-      },
-      {
-        id: 'm2',
-        conversation_id: 'c1',
-        sender_id: 'u2',
-        encrypted_payload: 'plain',
-        created_at: new Date('2026-08-23T10:01:00Z'),
-        sender: { email: 'b@x.com', core_profiles_user_id: [] },
-      },
-    ]);
-    const msgs = await service.listMessages('c1');
+    const msgs = await service.listMessages('c1', 'u1');
+    expect(messaging.listMessages).toHaveBeenCalledWith('u1', 'c1', {
+      limit: 200,
+    });
     expect(msgs[0].body).toBe('Hi');
     expect(msgs[0].senderName).toBe('Ada O');
-    expect(msgs[1].senderName).toBe('b@x.com');
 
     prisma.conversations.findFirst.mockResolvedValue(null);
+    // Without actorId, legacy path still checks conversation existence.
     await expect(service.listMessages('missing')).rejects.toBeInstanceOf(
       NotFoundException,
     );
 
-    prisma.conversations.findFirst.mockResolvedValue({
-      id: 'c1',
-      deleted_at: null,
-      metadata: { unread: 2 },
-    });
+    messaging.sendMessage.mockRejectedValueOnce(
+      new BadRequestException('Message body is required'),
+    );
     await expect(
       service.postMessage({ conversationId: 'c1', body: '  ', senderId: 'u1' }),
     ).rejects.toBeInstanceOf(BadRequestException);
 
+    messaging.sendMessage.mockResolvedValueOnce({
+      id: 'msg1',
+      conversationId: 'c1',
+      senderId: 'u1',
+      body: 'New note',
+      createdAt: '2026-08-23T10:00:00.000Z',
+    });
     const posted = await service.postMessage({
       conversationId: 'c1',
       body: 'New note',
       senderId: 'u1',
     });
     expect(posted.body).toBe('New note');
-    expect(prisma.conversations.update).toHaveBeenCalled();
+    expect(messaging.sendMessage).toHaveBeenCalledWith('u1', 'c1', {
+      body: 'New note',
+      messageType: 'TEXT',
+    });
   });
 
   it('gets and updates hospital settings', async () => {

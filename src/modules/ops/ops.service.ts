@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma/prisma.service';
 import { AppointmentsService } from '../appointments/appointments.service';
+import { CONVERSATION_TYPES } from '../communication/constants/messaging.constants';
+import { MessagingService } from '../communication/services/messaging.service';
 import { IpdJourneyUseCase } from '../inpatient/use-cases/ipd-journey.usecase';
 import { PatientsService } from '../patients/patients.service';
 import { RadiologyService } from '../radiology/radiology.service';
@@ -18,6 +20,7 @@ export class OpsService {
     private readonly ipd: IpdJourneyUseCase,
     private readonly appointments: AppointmentsService,
     private readonly radiology: RadiologyService,
+    private readonly messaging: MessagingService,
   ) {}
 
   private requireDb(): void {
@@ -419,11 +422,30 @@ export class OpsService {
     name: string;
     preview?: string;
     createdBy: string;
+    participantIds?: string[];
+    type?: string;
   }) {
     this.requireDb();
+    const participantIds = [
+      ...new Set(
+        (input.participantIds ?? []).filter((id) => id && id !== input.createdBy),
+      ),
+    ];
+
+    if (participantIds.length) {
+      const type = (input.type || 'DIRECT').toUpperCase();
+      return this.messaging.createConversation(input.createdBy, {
+        type: type as 'DIRECT' | 'GROUP' | 'DEPARTMENT' | 'TEAM' | 'SYSTEM',
+        participantIds,
+        name: input.name,
+        initialMessage: input.preview?.trim() || undefined,
+      });
+    }
+
+    // Legacy ops path: named conversation with creator only.
     const conversation = await this.prisma.conversations.create({
       data: {
-        conversation_type: 'DIRECT',
+        conversation_type: CONVERSATION_TYPES.DIRECT,
         name: input.name,
         created_by: input.createdBy,
         metadata: {
@@ -449,8 +471,22 @@ export class OpsService {
     return conversation;
   }
 
-  async listMessages(conversationId: string) {
+  async listMessages(conversationId: string, actorId?: string) {
     this.requireDb();
+    if (actorId) {
+      const result = await this.messaging.listMessages(actorId, conversationId, {
+        limit: 200,
+      });
+      return result.items.map((m) => ({
+        id: m.id,
+        conversationId: m.conversationId,
+        senderId: m.senderId,
+        senderName: m.senderName,
+        body: m.body,
+        createdAt: m.createdAt,
+      }));
+    }
+
     const conversation = await this.prisma.conversations.findFirst({
       where: { id: conversationId, deleted_at: null },
     });
@@ -493,44 +529,10 @@ export class OpsService {
     senderId: string;
   }) {
     this.requireDb();
-    const conversation = await this.prisma.conversations.findFirst({
-      where: { id: input.conversationId, deleted_at: null },
+    return this.messaging.sendMessage(input.senderId, input.conversationId, {
+      body: input.body,
+      messageType: 'TEXT',
     });
-    if (!conversation) throw new NotFoundException('Conversation not found');
-
-    const body = input.body.trim();
-    if (!body) throw new BadRequestException('Message body is required');
-
-    const message = await this.prisma.messages.create({
-      data: {
-        conversation_id: input.conversationId,
-        sender_id: input.senderId,
-        message_type: 'TEXT',
-        // HMS internal chat: store JSON text payload (schema column name is legacy).
-        encrypted_payload: JSON.stringify({ text: body }),
-      },
-    });
-
-    const meta = (conversation.metadata ?? {}) as Record<string, unknown>;
-    await this.prisma.conversations.update({
-      where: { id: conversation.id },
-      data: {
-        metadata: {
-          ...meta,
-          preview: body.slice(0, 160),
-          unread: Number(meta.unread ?? 0) + 1,
-        },
-        updated_at: new Date(),
-      },
-    });
-
-    return {
-      id: message.id,
-      conversationId: message.conversation_id,
-      senderId: message.sender_id,
-      body,
-      createdAt: message.created_at.toISOString(),
-    };
   }
 
   async getHospitalSettings() {

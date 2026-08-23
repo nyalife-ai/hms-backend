@@ -43,6 +43,7 @@ export const DOMAIN_EVENT_TYPES = {
   AUTH_LOGOUT: 'auth.logout',
   AUTH_PASSWORD_CHANGED: 'auth.password.changed',
   AUTH_ACCOUNT_SECURITY_CHANGED: 'auth.account.security.changed',
+  MESSAGE_CREATED: 'message.created',
 } as const;
 
 const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
@@ -248,6 +249,17 @@ export class NotificationPolicyService {
         return this.onAuthSecurity(
           event as DomainEventEnvelope<{ userId: string }>,
         );
+      case DOMAIN_EVENT_TYPES.MESSAGE_CREATED:
+        return this.onMessageCreated(
+          event as DomainEventEnvelope<{
+            messageId: string;
+            conversationId: string;
+            senderId: string;
+            preview?: string;
+            recipientUserIds?: string[];
+            mutedUserIds?: string[];
+          }>,
+        );
       case DOMAIN_EVENT_TYPES.AUTH_LOGIN_SUCCESS:
       case DOMAIN_EVENT_TYPES.AUTH_LOGIN_FAILED:
       case DOMAIN_EVENT_TYPES.AUTH_LOGOUT:
@@ -257,6 +269,78 @@ export class NotificationPolicyService {
         this.logger.debug(`No notification policy for type=${event.type}`);
         return null;
     }
+  }
+
+  private onMessageCreated(
+    event: DomainEventEnvelope<{
+      messageId: string;
+      conversationId: string;
+      senderId: string;
+      preview?: string;
+      recipientUserIds?: string[];
+      mutedUserIds?: string[];
+    }>,
+  ): NotificationIntent | null {
+    const p = event.payload;
+    const muted = new Set(p.mutedUserIds ?? []);
+    const recipients = (p.recipientUserIds ?? []).filter(
+      (id) => id && id !== p.senderId && !muted.has(id),
+    );
+    if (!recipients.length) return null;
+
+    const rawPreview = (p.preview ?? '').trim();
+    const body = rawPreview
+      ? rawPreview.slice(0, 120)
+      : 'You have a new message.';
+    const durable: DurableNotificationSpec[] = [];
+    const jobs: QueuedNotificationJob[] = [];
+
+    for (const userId of recipients) {
+      durable.push(
+        staffDurable(event, {
+          userId,
+          type: DOMAIN_EVENT_TYPES.MESSAGE_CREATED,
+          title: 'New message',
+          body,
+          entityType: 'MESSAGE',
+          entityId: p.messageId,
+          actionPath: `/messages?c=${p.conversationId}`,
+        }),
+      );
+      jobs.push({
+        name: NOTIFICATION_JOBS.SEND_WEBSOCKET,
+        jobId: `ws:message-created:${p.messageId}:${userId}`,
+        data: {
+          eventId: event.id,
+          type: DOMAIN_EVENT_TYPES.MESSAGE_CREATED,
+          userId,
+          payload: {
+            messageId: p.messageId,
+            conversationId: p.conversationId,
+            senderId: p.senderId,
+          },
+          dedupeKey: `ws:message-created:${event.id}:${userId}`,
+        },
+      });
+      jobs.push({
+        name: NOTIFICATION_JOBS.SEND_FCM,
+        jobId: `fcm:message-created:${p.messageId}:${userId}`,
+        data: {
+          eventId: event.id,
+          templateKey: 'message.created.push',
+          userId,
+          variables: {
+            conversationId: p.conversationId,
+            messageId: p.messageId,
+            actionPath: `/messages?c=${p.conversationId}`,
+            url: `/messages?c=${p.conversationId}`,
+          },
+          dedupeKey: `fcm:message-created:${event.id}:${userId}`,
+        },
+      });
+    }
+
+    return intent(event, durable, jobs);
   }
 
   private onAppointmentCreated(

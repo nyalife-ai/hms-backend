@@ -18,6 +18,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -113,6 +114,17 @@ class ReorderMedicationDto {
 class CreateConversationDto {
   @ApiProperty() @IsString() name!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() preview?: string;
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  participantIds?: string[];
+  @ApiPropertyOptional({
+    enum: ['DIRECT', 'GROUP', 'DEPARTMENT', 'TEAM', 'SYSTEM'],
+  })
+  @IsOptional()
+  @IsString()
+  type?: string;
 }
 
 class PostMessageDto {
@@ -257,8 +269,11 @@ export class OpsController {
   @Get('conversations/:id/messages')
   @Roles(...STAFF_MESSAGE_ROLES)
   @ApiOperation({ summary: 'List messages in a conversation' })
-  listMessages(@Param('id') id: string) {
-    return this.ops.listMessages(id);
+  listMessages(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.ops.listMessages(id, user.id);
   }
 
   @Post('conversations/:id/messages')

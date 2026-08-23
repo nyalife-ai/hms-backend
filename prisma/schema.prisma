@@ -1459,7 +1459,7 @@ model TaxRates {
 
 model Conversations {
   id String @db.Uuid @id @default(uuid())
-  conversation_type String @db.VarChar(20)
+  conversation_type String @db.VarChar(20) /// DIRECT | GROUP | DEPARTMENT | TEAM | SYSTEM
   name String? @db.VarChar(150)
   avatar String? @db.VarChar(500)
   created_by String @db.Uuid
@@ -1495,6 +1495,7 @@ model Messages {
   conversation_id String @db.Uuid
   sender_id String @db.Uuid
   parent_message_id String? @db.Uuid
+  /// TEXT | IMAGE | VIDEO | AUDIO | DOCUMENT | FILE | SYSTEM | VIEW_ONCE
   message_type String @db.VarChar(20)
   encrypted_payload String
   created_at DateTime @db.Timestamptz(6) @default(now())

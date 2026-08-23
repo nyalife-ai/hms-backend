@@ -186,6 +186,9 @@ export class NotificationDispatcherService {
             variables: {
               ...(job.data.variables ?? {}),
               notificationId: row.id,
+              ...(row.actionPath
+                ? { actionPath: row.actionPath, url: row.actionPath }
+                : {}),
             },
           },
         };

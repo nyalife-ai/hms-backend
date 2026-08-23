@@ -143,8 +143,8 @@ describe('OpsController', () => {
       expect.objectContaining({ name: 'Ward A', createdBy: 'u1' }),
     );
 
-    await controller.listMessages('c1');
-    expect(ops.listMessages).toHaveBeenCalledWith('c1');
+    await controller.listMessages('c1', user);
+    expect(ops.listMessages).toHaveBeenCalledWith('c1', 'u1');
 
     await controller.postMessage('c1', { body: 'Hi' } as never, user);
     expect(ops.postMessage).toHaveBeenCalledWith({

@@ -6,6 +6,7 @@
 export type NotificationTemplateKey =
   | 'notifications.sms.test'
   | 'notifications.email.test'
+  | 'message.created.push'
   | 'appointment.created.doctor.push'
   | 'appointment.reminder.patient.sms'
   | 'appointment.cancelled.patient.sms'
@@ -46,6 +47,12 @@ const TEMPLATES: readonly NotificationTemplateDefinition[] = [
     channel: 'email',
     subject: 'NyaLife notification',
     body: 'NyaLife email notification. Ref {{ref}}.',
+  },
+  {
+    key: 'message.created.push',
+    channel: 'fcm',
+    subject: 'New message',
+    body: 'You have a new message in NyaLife.',
   },
   {
     key: 'appointment.created.doctor.push',

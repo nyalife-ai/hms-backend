@@ -198,4 +198,26 @@ describe('NotificationPolicyService', () => {
     );
     expect(security?.durable[0].userId).toBe('u1');
   });
+
+  it('notifies message recipients with durable + WS + FCM, skipping muted', () => {
+    const intent = policy.evaluate(
+      envelope(DOMAIN_EVENT_TYPES.MESSAGE_CREATED, {
+        messageId: 'm1',
+        conversationId: 'c1',
+        senderId: 's1',
+        preview: 'Hello colleague',
+        recipientUserIds: ['r1', 'r2', 's1'],
+        mutedUserIds: ['r2'],
+      }),
+    );
+    expect(intent).not.toBeNull();
+    expect(intent!.durable).toHaveLength(1);
+    expect(intent!.durable[0].userId).toBe('r1');
+    expect(intent!.durable[0].actionPath).toBe('/messages?c=c1');
+    expect(intent!.durable[0].entityType).toBe('MESSAGE');
+    const jobNames = intent!.jobs.map((j) => j.name);
+    expect(jobNames).toContain(NOTIFICATION_JOBS.SEND_WEBSOCKET);
+    expect(jobNames).toContain(NOTIFICATION_JOBS.SEND_FCM);
+    expect(jobNames).not.toContain(NOTIFICATION_JOBS.SEND_EMAIL);
+  });
 });

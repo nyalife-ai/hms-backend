@@ -14,6 +14,7 @@ export const VISIT_FLOW_ROLES: HmsRole[] = [
 
 /** All clinic staff who may use internal messaging. */
 export const STAFF_MESSAGE_ROLES: HmsRole[] = [
+  'SUPER_ADMIN',
   'ADMIN',
   'DOCTOR',
   'NURSE',

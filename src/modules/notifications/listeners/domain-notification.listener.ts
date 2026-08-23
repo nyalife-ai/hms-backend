@@ -51,6 +51,7 @@ export class DomainNotificationListener {
   @OnEvent(DOMAIN_EVENT_TYPES.RADIOLOGY_REQUEST_CREATED)
   @OnEvent(DOMAIN_EVENT_TYPES.AUTH_PASSWORD_CHANGED)
   @OnEvent(DOMAIN_EVENT_TYPES.AUTH_ACCOUNT_SECURITY_CHANGED)
+  @OnEvent(DOMAIN_EVENT_TYPES.MESSAGE_CREATED)
   public async onDomainEvent(
     event: DomainEventEnvelope | Record<string, unknown>,
   ): Promise<void> {

@@ -1,6 +1,7 @@
 /**
  * Nest Socket.IO gateway — JWT-authenticated realtime channel.
  * Joins user:{userId} automatically; department rooms require role membership.
+ * Conversation rooms require active ConversationParticipants membership.
  */
 
 import {
@@ -14,6 +15,7 @@ import {
 } from '@nestjs/websockets';
 import { Logger, Optional } from '@nestjs/common';
 import type { Server, Socket } from 'socket.io';
+import { PrismaService } from '../../../database/prisma/prisma.service';
 import { RealtimeGatewayHandler } from './realtime.gateway';
 import { RealtimeService } from '../realtime.service';
 
@@ -24,6 +26,9 @@ const DEPARTMENT_ROOMS: Record<string, string[]> = {
   billing: ['ACCOUNTANT', 'RECEPTIONIST', 'ADMIN'],
   ipd: ['NURSE', 'DOCTOR', 'ADMIN'],
 };
+
+const CONVERSATION_ROOM_RE =
+  /^conversation:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 @WebSocketGateway({
   cors: { origin: true, credentials: true },
@@ -40,6 +45,7 @@ export class NestSocketIoGateway
   public constructor(
     private readonly realtime: RealtimeService,
     @Optional() private readonly gateway?: RealtimeGatewayHandler,
+    @Optional() private readonly prisma?: PrismaService,
   ) {}
 
   public async handleConnection(client: Socket): Promise<void> {
@@ -127,6 +133,23 @@ export class NestSocketIoGateway
       return { ok: true };
     }
 
+    if (CONVERSATION_ROOM_RE.test(room)) {
+      const conversationId = room.slice('conversation:'.length);
+      const allowed = await this.isConversationParticipant(
+        userId,
+        conversationId,
+      );
+      if (!allowed) {
+        this.logger.warn(
+          `Denied conversation room join user=${userId} room=${room}`,
+        );
+        return { ok: false, reason: 'forbidden' };
+      }
+      await client.join(room);
+      await this.gateway?.handleJoin(connectionId, room);
+      return { ok: true };
+    }
+
     const allowedRoles = DEPARTMENT_ROOMS[room];
     if (!allowedRoles) {
       return { ok: false, reason: 'unknown_room' };
@@ -159,10 +182,82 @@ export class NestSocketIoGateway
     return { ok: true };
   }
 
+  @SubscribeMessage('typing')
+  public async onTyping(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    body: { conversationId?: string; state?: 'started' | 'stopped' },
+  ): Promise<{ ok: boolean; reason?: string }> {
+    const userId = (client.data as { userId?: string }).userId;
+    const conversationId = body?.conversationId?.trim();
+    const state = body?.state;
+    if (!userId) return { ok: false, reason: 'unauthorized' };
+    if (!conversationId || (state !== 'started' && state !== 'stopped')) {
+      return { ok: false, reason: 'invalid_payload' };
+    }
+
+    const allowed = await this.isConversationParticipant(
+      userId,
+      conversationId,
+    );
+    if (!allowed) return { ok: false, reason: 'forbidden' };
+
+    const room = `conversation:${conversationId}`;
+    const eventType =
+      state === 'started'
+        ? 'message.typing.started'
+        : 'message.typing.stopped';
+    client.to(room).emit(eventType, {
+      conversationId,
+      userId,
+      state,
+    });
+    return { ok: true };
+  }
+
+  @SubscribeMessage('presence.heartbeat')
+  public onPresenceHeartbeat(
+    @ConnectedSocket() client: Socket,
+  ): { ok: boolean; reason?: string } {
+    const userId = (client.data as { userId?: string }).userId;
+    const connectionId = (client.data as { connectionId?: string })
+      .connectionId;
+    if (!userId || !connectionId) {
+      return { ok: false, reason: 'unauthorized' };
+    }
+    this.realtime.heartbeat(connectionId);
+    return { ok: true };
+  }
+
   /** Bridge platform realtime publish into Socket.IO rooms when state changes. */
   public publishToRoom(room: string, event: string, payload: unknown): void {
     if (!this.realtime) return;
     this.server?.to(room).emit(event, payload);
+  }
+
+  private async isConversationParticipant(
+    userId: string,
+    conversationId: string,
+  ): Promise<boolean> {
+    if (!this.prisma?.isConnected) return false;
+    try {
+      const row = await this.prisma.conversationParticipants.findFirst({
+        where: {
+          conversation_id: conversationId,
+          user_id: userId,
+          left_at: null,
+        },
+        select: { id: true },
+      });
+      return Boolean(row);
+    } catch (err) {
+      this.logger.warn(
+        `Conversation membership check failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return false;
+    }
   }
 
   private bearer(header?: string): string | undefined {
