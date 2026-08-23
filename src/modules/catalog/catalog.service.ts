@@ -399,13 +399,37 @@ export class CatalogService {
         date: c.consultation_date.toISOString(),
         physician,
         doctorId: c.doctor_id,
+        appointmentId: c.appointment_id ?? null,
         diagnosis: primaryDx?.description || c.chief_complaint || '—',
         chiefComplaint: c.chief_complaint || '',
         diagnoses,
         status: c.status,
         notes: c.notes || '',
+        treatmentPlan: c.treatment_plan || '',
+        followUpInstructions: c.follow_up_instructions || '',
+        historyPresentIllness: c.history_present_illness || '',
+        physicalExamination: c.physical_examination || '',
       };
     });
+
+    // Resolve visit journey ids for consultations (Appointment soft-link or same-day visit)
+    const visitByAppointmentId = new Map<string, string>();
+    for (const v of row.clinical_outpatient_visits_patient_id ?? []) {
+      const payload = (v.payload ?? {}) as { appointmentId?: string };
+      if (payload.appointmentId) {
+        visitByAppointmentId.set(payload.appointmentId, v.id);
+      }
+    }
+    for (const c of consultations) {
+      const visitId = c.appointmentId
+        ? visitByAppointmentId.get(c.appointmentId)
+        : undefined;
+      (c as { visitId?: string | null; href?: string }).visitId =
+        visitId ?? null;
+      (c as { href?: string }).href = visitId
+        ? `/consultations/${visitId}`
+        : `/patients/${row.id}?consultationId=${c.id}`;
+    }
 
     type VitalsHistoryItem = {
       id: string;
@@ -591,7 +615,9 @@ export class CatalogService {
         provider: c.physician,
         status: c.status,
         summary: c.diagnosis,
-        href: `/patients/${row.id}?consultationId=${c.id}`,
+        href:
+          (c as { href?: string }).href ||
+          `/patients/${row.id}?consultationId=${c.id}`,
       })),
     ].sort((a, b) => (a.when < b.when ? 1 : -1));
 
@@ -1595,7 +1621,12 @@ export class CatalogService {
       ),
     );
 
-    const clinicalNotes = consultations
+    const clinicalNotes: Array<{
+      id: string;
+      date: string;
+      status: string;
+      text: string;
+    }> = consultations
       .map((c) => {
         const parts = [
           c.chief_complaint,
@@ -1619,17 +1650,21 @@ export class CatalogService {
           !!n,
       );
 
-    // Enrich from outpatient pipeline (front-desk → triage → consult flow)
+    // Prefer hard soft-link via payload.appointmentId before same-day heuristics.
+    const opVisitByAppt = await this.prisma.outpatientVisits.findFirst({
+      where: { payload: { path: ['appointmentId'], equals: id } },
+      orderBy: { checked_in_at: 'desc' },
+    });
     const dayStart = new Date(r.appointment_date);
     dayStart.setHours(0, 0, 0, 0);
     const dayEnd = new Date(r.appointment_date);
     dayEnd.setHours(23, 59, 59, 999);
 
     const opVisit =
+      opVisitByAppt ||
       (await this.prisma.outpatientVisits.findFirst({
         where: {
           OR: [
-            { payload: { path: ['appointmentId'], equals: id } },
             {
               patient_id: r.patient_id,
               checked_in_at: { gte: dayStart, lte: dayEnd },
@@ -1641,7 +1676,8 @@ export class CatalogService {
           ],
         },
         orderBy: { checked_in_at: 'desc' },
-      })) || null;
+      })) ||
+      null;
 
     const opPayload = (opVisit?.payload ?? {}) as {
       reasonForVisit?: string;
@@ -1649,6 +1685,16 @@ export class CatalogService {
       diagnosis?: string;
       doctorName?: string;
       nurseName?: string;
+      clinicalRecord?: {
+        chiefComplaint?: string;
+        historyPresentIllness?: string;
+        impression?: string;
+        treatmentPlan?: string;
+        internalNotes?: string;
+        generalExamination?: string;
+        systemsExamination?: string;
+        followUpInstructions?: string;
+      };
       prescriptions?: Array<{
         medication?: string;
         medicationId?: string;
@@ -1657,7 +1703,11 @@ export class CatalogService {
         duration?: string;
       }>;
       pharmacy?: { prescriptionId?: string; prescriptionNumber?: string };
-      labOrder?: { notes?: string; tests?: Array<{ name?: string }> };
+      labOrder?: {
+        notes?: string;
+        tests?: Array<{ name?: string }>;
+        comments?: string;
+      };
     };
 
     let reason =
@@ -1675,19 +1725,38 @@ export class CatalogService {
       notes = `${notes}\n\n${additionalNotes}`;
     }
 
-    if (opPayload.diagnosis?.trim()) {
-      clinicalNotes.push({
-        id: `visit-dx-${opVisit!.id}`,
-        date: opVisit!.checked_in_at.toISOString(),
-        status: opVisit!.stage,
-        text: [
-          `Diagnosis: ${opPayload.diagnosis.trim()}`,
-          opPayload.doctorName ? `Physician: ${opPayload.doctorName}` : '',
-          opPayload.nurseName ? `Nurse: ${opPayload.nurseName}` : '',
-        ]
-          .filter(Boolean)
-          .join('\n'),
-      });
+    if (opPayload.diagnosis?.trim() || opPayload.clinicalRecord) {
+      const cr = opPayload.clinicalRecord;
+      const parts = [
+        cr?.chiefComplaint ? `Chief complaint: ${cr.chiefComplaint}` : '',
+        cr?.historyPresentIllness
+          ? `HPI: ${cr.historyPresentIllness}`
+          : '',
+        cr?.generalExamination
+          ? `General exam: ${cr.generalExamination}`
+          : '',
+        cr?.systemsExamination
+          ? `Systems exam: ${cr.systemsExamination}`
+          : '',
+        (opPayload.diagnosis || cr?.impression)
+          ? `Diagnosis: ${(opPayload.diagnosis || cr?.impression || '').trim()}`
+          : '',
+        cr?.treatmentPlan ? `Treatment: ${cr.treatmentPlan}` : '',
+        cr?.followUpInstructions
+          ? `Follow-up: ${cr.followUpInstructions}`
+          : '',
+        cr?.internalNotes ? `Notes: ${cr.internalNotes}` : '',
+        opPayload.doctorName ? `Physician: ${opPayload.doctorName}` : '',
+        opPayload.nurseName ? `Nurse: ${opPayload.nurseName}` : '',
+      ].filter(Boolean);
+      if (parts.length) {
+        clinicalNotes.push({
+          id: `visit-clinical-${opVisit!.id}`,
+          date: opVisit!.checked_in_at.toISOString(),
+          status: opVisit!.stage,
+          text: parts.join('\n\n'),
+        });
+      }
     }
 
     // Same-day consultations not linked via appointment_id
@@ -1733,6 +1802,31 @@ export class CatalogService {
           text: parts.join('\n\n'),
         });
       }
+      for (const lab of c.laboratory_requests_consultation_id) {
+        if (labRequests.some((l) => l.id === lab.id)) continue;
+        let testLabel = lab.notes?.trim() || 'Laboratory request';
+        try {
+          const parsed = JSON.parse(lab.notes || '') as {
+            tests?: Array<{ name?: string }>;
+          };
+          if (parsed.tests?.length) {
+            testLabel = parsed.tests
+              .map((t) => t.name)
+              .filter(Boolean)
+              .join(', ');
+          }
+        } catch {
+          /* plain notes */
+        }
+        labRequests.push({
+          id: lab.id,
+          requestNumber: lab.request_number || lab.id.slice(0, 8).toUpperCase(),
+          test: testLabel || 'Laboratory request',
+          priority: lab.priority,
+          status: lab.status,
+          requestedAt: lab.request_date.toISOString(),
+        });
+      }
       for (const rx of c.pharmacy_prescriptions_consultation_id) {
         for (const line of rx.pharmacy_prescription_lines_prescription_id) {
           if (prescriptions.some((p) => p.id === line.id)) continue;
@@ -1749,6 +1843,79 @@ export class CatalogService {
           });
         }
       }
+    }
+
+    // Visit-payload lab order (HMS consult desk) — surface even before LabRequest row
+    if (opPayload.labOrder?.tests?.length) {
+      const syntheticId = `visit-lab-${opVisit?.id ?? id}`;
+      if (!labRequests.some((l) => l.id === syntheticId)) {
+        labRequests.push({
+          id: syntheticId,
+          requestNumber: `VIS-LAB-${(opVisit?.id || id)
+            .replace(/-/g, '')
+            .slice(0, 6)
+            .toUpperCase()}`,
+          test: opPayload.labOrder.tests
+            .map((t) => t.name)
+            .filter(Boolean)
+            .join(', '),
+          priority: 'ROUTINE',
+          status: opPayload.labOrder.comments ? 'COMPLETED' : 'PENDING',
+          requestedAt: (
+            opVisit?.checked_in_at ?? r.appointment_date
+          ).toISOString(),
+        });
+      }
+    }
+
+    // Patient-day lab requests (may lack consultation_id but belong to this encounter)
+    const dayLabs = await this.prisma.laboratoryRequests.findMany({
+      where: {
+        patient_id: r.patient_id,
+        request_date: { gte: dayStart, lte: dayEnd },
+      },
+      take: 30,
+    });
+    for (const lab of dayLabs) {
+      if (labRequests.some((l) => l.id === lab.id)) continue;
+      // Prefer labs that mention this visit in notes JSON when present
+      const notesRaw = lab.notes || '';
+      if (
+        opVisit?.id &&
+        notesRaw.includes(opVisit.id) === false &&
+        lab.consultation_id &&
+        ![...consultations, ...unlinkedConsults].some(
+          (c) => c.id === lab.consultation_id,
+        )
+      ) {
+        // Keep same-day labs for this patient — they are part of the encounter window
+      }
+      let testLabel = notesRaw.trim() || 'Laboratory request';
+      try {
+        const parsed = JSON.parse(notesRaw) as {
+          tests?: Array<{ name?: string }>;
+          visitId?: string;
+        };
+        if (parsed.visitId && opVisit?.id && parsed.visitId !== opVisit.id) {
+          continue;
+        }
+        if (parsed.tests?.length) {
+          testLabel = parsed.tests
+            .map((t) => t.name)
+            .filter(Boolean)
+            .join(', ');
+        }
+      } catch {
+        /* plain */
+      }
+      labRequests.push({
+        id: lab.id,
+        requestNumber: lab.request_number || lab.id.slice(0, 8).toUpperCase(),
+        test: testLabel || 'Laboratory request',
+        priority: lab.priority,
+        status: lab.status,
+        requestedAt: lab.request_date.toISOString(),
+      });
     }
 
     // Visit-payload prescriptions (HMS consult desk)
@@ -1818,8 +1985,16 @@ export class CatalogService {
         return {
           id: c.id,
           date: c.consultation_date.toISOString(),
-          diagnosis: primaryDx?.description || c.chief_complaint || '—',
+          diagnosis:
+            primaryDx?.description ||
+            c.chief_complaint ||
+            opPayload.diagnosis ||
+            '—',
           status: c.status,
+          visitId: opVisit?.id ?? null,
+          href: opVisit?.id
+            ? `/consultations/${opVisit.id}`
+            : `/catalog/consultations/${c.id}`,
         };
       }),
       ...unlinkedConsults
@@ -1834,13 +2009,41 @@ export class CatalogService {
             date: c.consultation_date.toISOString(),
             diagnosis: primaryDx?.description || c.chief_complaint || '—',
             status: c.status,
+            visitId: opVisit?.id ?? null,
+            href: opVisit?.id
+              ? `/consultations/${opVisit.id}`
+              : `/appointments/${id}`,
           };
         }),
     ];
 
+    // If visit pipeline has clinical content but no Consultations row yet, surface it
+    if (
+      consultationRows.length === 0 &&
+      opVisit &&
+      (opPayload.diagnosis ||
+        opPayload.clinicalRecord?.impression ||
+        opPayload.clinicalRecord?.chiefComplaint ||
+        clinicalNotes.length > 0)
+    ) {
+      consultationRows.push({
+        id: opVisit.id,
+        date: opVisit.checked_in_at.toISOString(),
+        diagnosis:
+          opPayload.diagnosis ||
+          opPayload.clinicalRecord?.impression ||
+          opPayload.clinicalRecord?.chiefComplaint ||
+          'Visit consultation',
+        status: opVisit.stage,
+        visitId: opVisit.id,
+        href: `/consultations/${opVisit.id}`,
+      });
+    }
+
     return {
       id: r.id,
       visitId: opVisit?.id ?? null,
+      visitStage: opVisit?.stage ?? null,
       appointmentNumber: `APT-${r.id.replace(/-/g, '').slice(0, 6).toUpperCase()}`,
       date: r.appointment_date.toISOString().slice(0, 10),
       time,
@@ -1873,6 +2076,7 @@ export class CatalogService {
         consultations: consultationRows.length,
         labRequests: labRequests.length,
         prescriptions: prescriptions.length,
+        clinicalNotes: clinicalNotes.length,
       },
       consultations: consultationRows,
       labRequests,

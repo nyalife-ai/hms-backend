@@ -71,9 +71,13 @@ describe('VisitsController', () => {
 
   it('runs clinical and billing endpoints', async () => {
     await controller.startConsultation('v1');
-    await controller.saveClinicalNotes('v1', {
-      clinicalRecord: { notes: 'ok' },
-    } as never);
+    await controller.saveClinicalNotes(
+      'v1',
+      {
+        clinicalRecord: { notes: 'ok' },
+      } as never,
+      user,
+    );
     await controller.saveClinicalOrders('v1', { orderedServices: [] } as never);
     await controller.orderLabs(
       'v1',

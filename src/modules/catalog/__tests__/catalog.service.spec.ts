@@ -46,6 +46,8 @@ describe('CatalogService', () => {
       },
       consultations: { findMany: jest.fn() },
       prescriptions: { findMany: jest.fn() },
+      laboratoryRequests: { findMany: jest.fn().mockResolvedValue([]) },
+      diagnoses: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
       stockMovements: { findMany: jest.fn() },
       wards: { findMany: jest.fn() },
       radiologyRequests: {
@@ -919,6 +921,14 @@ describe('CatalogService', () => {
       expect(detail.patient.email).toBe('');
       expect(detail.patient.gender).toBe('Female');
       expect(detail.labRequests.length).toBeGreaterThan(0);
+      expect(detail.counts.consultations).toBeGreaterThan(0);
+      expect(detail.visitId).toBe('v1');
+      expect(
+        detail.consultations.some(
+          (c: { href?: string }) =>
+            typeof c.href === 'string' && c.href.includes('/consultations/'),
+        ),
+      ).toBe(true);
       expect(
         detail.prescriptions.some(
           (p: { medication: string }) => p.medication === 'Ibuprofen',
@@ -926,6 +936,13 @@ describe('CatalogService', () => {
       ).toBe(true);
       expect(detail.notes).toContain('Extra note');
       expect(detail.clinicalNotes.length).toBeGreaterThan(0);
+      // Visit-payload lab order must not be omitted when consult labs already exist
+      expect(
+        detail.labRequests.some(
+          (l: { test: string }) =>
+            l.test.includes('UEC') || l.test.includes('CBC'),
+        ),
+      ).toBe(true);
 
       prisma.appointments.findFirst.mockResolvedValue(null);
       await expect(service.getAppointmentDetail('missing')).rejects.toBeInstanceOf(

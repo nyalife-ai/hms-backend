@@ -167,8 +167,13 @@ export class VisitsController {
   saveClinicalNotes(
     @Param('id') id: string,
     @Body() body: SaveClinicalRecordDto,
+    @CurrentUser() user: AuthUserPublic,
   ) {
-    return this.visits.saveClinicalRecord(id, body.clinicalRecord as never);
+    return this.visits.saveClinicalRecord(
+      id,
+      body.clinicalRecord as never,
+      user.id,
+    );
   }
 
   @Post(':id/clinical-orders')

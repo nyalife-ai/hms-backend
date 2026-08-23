@@ -736,6 +736,7 @@ export class VisitsService implements OnModuleInit {
   async saveClinicalRecord(
     id: string,
     clinicalRecord: ClinicalRecord,
+    actorUserId?: string,
   ): Promise<Visit> {
     const visit = await this.findOne(id);
     if (
@@ -746,10 +747,22 @@ export class VisitsService implements OnModuleInit {
       );
     }
     const impression = clinicalRecord.impression?.trim();
-    return this.patch(id, {
+    const updated = await this.patch(id, {
       clinicalRecord,
       ...(impression ? { diagnosis: impression } : {}),
     });
+    const createdBy =
+      actorUserId ||
+      (await this.resolveDoctorUserId(updated.doctorStaffId)) ||
+      null;
+    if (createdBy) {
+      await this.upsertClinicalConsultationRow(
+        updated,
+        createdBy,
+        clinicalRecord,
+      );
+    }
+    return updated;
   }
 
   async saveClinicalOrders(
@@ -844,10 +857,18 @@ export class VisitsService implements OnModuleInit {
       );
     }
 
+    const clinicalForMirror: ClinicalRecord =
+      clinicalRecord ??
+      ({
+        impression: diagnosis,
+        chiefComplaint: visit.reasonForVisit || undefined,
+      } as ClinicalRecord);
+
     const consultationId = await this.upsertClinicalConsultationRow(
-      { ...visit, diagnosis, clinicalRecord },
+      { ...visit, diagnosis, clinicalRecord: clinicalForMirror },
       actorUserId,
-      clinicalRecord,
+      clinicalForMirror,
+      'COMPLETED',
     );
 
     let pharmacyMeta = visit.pharmacy;
@@ -938,6 +959,7 @@ export class VisitsService implements OnModuleInit {
     visit: Visit,
     actorUserId: string,
     clinical?: ClinicalRecord,
+    status: string = 'IN_PROGRESS',
   ): Promise<string | null> {
     if (!clinical) return null;
     try {
@@ -977,8 +999,10 @@ export class VisitsService implements OnModuleInit {
         follow_up_instructions: clinical.followUpInstructions?.trim() || null,
         notes: clinical.internalNotes?.trim() || null,
         priority: clinical.priority?.trim() || 'NORMAL',
-        status: 'COMPLETED',
+        status,
       };
+
+      let consultationId: string | null = null;
 
       if (visit.appointmentId) {
         const existing = await this.prisma.consultations.findFirst({
@@ -989,21 +1013,51 @@ export class VisitsService implements OnModuleInit {
             where: { id: existing.id },
             data,
           });
-          return existing.id;
+          consultationId = existing.id;
         }
       }
 
-      const created = await this.prisma.consultations.create({
-        data: {
-          ...data,
-          patient_id: patientId,
-          doctor_id: doctorId,
-          created_by: actorUserId,
-          appointment_id: visit.appointmentId || null,
-          consultation_date: new Date(),
-        },
-      });
-      return created.id;
+      if (!consultationId) {
+        const created = await this.prisma.consultations.create({
+          data: {
+            ...data,
+            patient_id: patientId,
+            doctor_id: doctorId,
+            created_by: actorUserId,
+            appointment_id: visit.appointmentId || null,
+            consultation_date: new Date(),
+          },
+        });
+        consultationId = created.id;
+      }
+
+      // Persist primary diagnosis from impression when present
+      const impression = clinical.impression?.trim() || visit.diagnosis?.trim();
+      if (consultationId && impression) {
+        const existingDx = await this.prisma.diagnoses.findFirst({
+          where: {
+            consultation_id: consultationId,
+            diagnosis_type: 'PRIMARY',
+          },
+        });
+        if (existingDx) {
+          await this.prisma.diagnoses.update({
+            where: { id: existingDx.id },
+            data: { description: impression },
+          });
+        } else {
+          await this.prisma.diagnoses.create({
+            data: {
+              consultation_id: consultationId,
+              patient_id: patientId,
+              diagnosis_type: 'PRIMARY',
+              description: impression,
+            },
+          });
+        }
+      }
+
+      return consultationId;
     } catch {
       // Non-blocking — visit payload remains source of truth for the pipeline
       return null;
