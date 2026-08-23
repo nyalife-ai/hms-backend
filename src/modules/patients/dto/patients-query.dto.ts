@@ -27,6 +27,20 @@ export class PatientsQueryDto {
   @IsString()
   search?: string;
 
+  @ApiPropertyOptional({
+    description: 'Profile gender filter (MALE | FEMALE | OTHER, or Male/Female/Other)',
+  })
+  @IsOptional()
+  @IsString()
+  gender?: string;
+
+  @ApiPropertyOptional({
+    description: 'Admission status filter: ACTIVE | ADMITTED (catalog-compatible)',
+  })
+  @IsOptional()
+  @IsString()
+  status?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

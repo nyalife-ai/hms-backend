@@ -21,7 +21,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import type { AuthUserPublic } from '../auth/auth.types';
-import type { CreateFollowUpDto, FollowUpsQueryDto, UpdateFollowUpDto } from './dto';
+import { CreateFollowUpDto, FollowUpsQueryDto, UpdateFollowUpDto } from './dto';
 import { FollowUpsService } from './follow-ups.service';
 
 @ApiTags('FollowUps')

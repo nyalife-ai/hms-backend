@@ -19,7 +19,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
-import type { CreateDocumentDto, DocumentsQueryDto, UpdateDocumentDto } from './dto';
+import { CreateDocumentDto, DocumentsQueryDto, UpdateDocumentDto } from './dto';
 import { DocumentsService } from './documents.service';
 
 @ApiTags('Documents')

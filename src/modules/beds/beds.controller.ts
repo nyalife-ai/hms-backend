@@ -18,7 +18,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { CreateBedDto, BedsQueryDto, UpdateBedDto } from './dto';
+import { CreateBedDto, BedsQueryDto, UpdateBedDto } from './dto';
 import { BedsService } from './beds.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';

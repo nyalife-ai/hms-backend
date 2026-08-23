@@ -18,7 +18,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { CreatePatientDto, PatientsQueryDto, UpdatePatientDto } from './dto';
+import { CreatePatientDto, PatientsQueryDto, UpdatePatientDto } from './dto';
 import { PatientsService } from './patients.service';
 import type { AuthUserPublic } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';

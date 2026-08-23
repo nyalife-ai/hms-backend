@@ -84,10 +84,22 @@ export class PrismaAppointmentRepository implements IAppointmentRepository {
 
   public async findMany(query: AppointmentsQueryDto): Promise<AppointmentPage> {
     const page = query.page ?? 1;
-    const limit = Math.min(query.limit ?? 20, 100);
+    const limit = Math.min(query.limit ?? 20, 500);
     const skip = (page - 1) * limit;
+    const from = query.from ? new Date(`${query.from.slice(0, 10)}T00:00:00.000Z`) : undefined;
+    const to = query.to ? new Date(`${query.to.slice(0, 10)}T23:59:59.999Z`) : undefined;
     const where = {
       deleted_at: null,
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.doctorId ? { doctor_id: query.doctorId } : {}),
+      ...(from || to
+        ? {
+            appointment_date: {
+              ...(from ? { gte: from } : {}),
+              ...(to ? { lte: to } : {}),
+            },
+          }
+        : {}),
       ...(query.search
         ? {
             OR: [

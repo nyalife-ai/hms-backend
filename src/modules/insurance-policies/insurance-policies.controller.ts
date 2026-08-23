@@ -19,7 +19,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
-import type { CreateInsurancePolicyDto, InsurancePoliciesQueryDto, UpdateInsurancePolicyDto } from './dto';
+import { CreateInsurancePolicyDto, InsurancePoliciesQueryDto, UpdateInsurancePolicyDto } from './dto';
 import { InsurancePoliciesService } from './insurance-policies.service';
 
 @ApiTags('InsurancePolicies')

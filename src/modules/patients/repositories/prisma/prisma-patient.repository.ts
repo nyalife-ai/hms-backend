@@ -198,10 +198,33 @@ export class PrismaPatientRepository implements IPatientRepository {
     const sortBy = query.sortBy ?? 'created_at';
     const sortOrder = query.sortOrder ?? 'desc';
 
+    let genderDb: string | undefined;
+    if (query.gender) {
+      const g = query.gender.toUpperCase();
+      if (g === 'MALE' || g === 'FEMALE' || g === 'OTHER') genderDb = g;
+      else if (query.gender === 'Male') genderDb = 'MALE';
+      else if (query.gender === 'Female') genderDb = 'FEMALE';
+      else if (query.gender === 'Other') genderDb = 'OTHER';
+    }
+
+    const status = query.status?.trim().toUpperCase();
+
     const where: Prisma.PatientsWhereInput = {
       deleted_at: null,
       ...(query.bloodGroup ? { blood_group: query.bloodGroup } : {}),
       ...(query.maritalStatus ? { marital_status: query.maritalStatus } : {}),
+      ...(genderDb
+        ? { user: { core_profiles_user_id: { some: { gender: genderDb } } } }
+        : {}),
+      ...(status === 'ADMITTED'
+        ? { inpatient_admissions_patient_id: { some: { status: 'ADMITTED' } } }
+        : status === 'ACTIVE'
+          ? {
+              inpatient_admissions_patient_id: {
+                none: { status: 'ADMITTED' },
+              },
+            }
+          : {}),
       ...(query.search
         ? {
             OR: [

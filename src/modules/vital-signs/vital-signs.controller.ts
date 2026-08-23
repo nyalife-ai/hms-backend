@@ -19,7 +19,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
-import type { CreateVitalSignDto, VitalSignsQueryDto, UpdateVitalSignDto } from './dto';
+import { CreateVitalSignDto, VitalSignsQueryDto, UpdateVitalSignDto } from './dto';
 import { VitalSignsService } from './vital-signs.service';
 
 @ApiTags('VitalSigns')

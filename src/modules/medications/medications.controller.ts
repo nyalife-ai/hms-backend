@@ -18,7 +18,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { CreateMedicationDto, MedicationsQueryDto, UpdateMedicationDto } from './dto';
+import { CreateMedicationDto, MedicationsQueryDto, UpdateMedicationDto } from './dto';
 import { MedicationsService } from './medications.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';

@@ -5,7 +5,7 @@
  */
 
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
   IsInt,
@@ -16,6 +16,14 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+
+function toOptionalBoolean({ value }: { value: unknown }): boolean | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value === 'boolean') return value;
+  if (value === 'true' || value === '1') return true;
+  if (value === 'false' || value === '0') return false;
+  return value as boolean;
+}
 
 export class NotificationsQueryDto {
   @ApiPropertyOptional({ default: 1, minimum: 1 })
@@ -46,7 +54,7 @@ export class NotificationsQueryDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @Type(() => Boolean)
+  @Transform(toOptionalBoolean)
   @IsBoolean()
   isRead?: boolean;
 }

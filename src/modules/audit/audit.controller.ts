@@ -19,7 +19,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
-import type { CreateAuditDto, AuditQueryDto, UpdateAuditDto } from './dto';
+import { CreateAuditDto, AuditQueryDto, UpdateAuditDto } from './dto';
 import { AuditService } from './audit.service';
 
 @ApiTags('Audit')

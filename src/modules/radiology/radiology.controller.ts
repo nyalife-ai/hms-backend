@@ -19,7 +19,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
-import type { CreateRadiologyDto, RadiologyQueryDto, UpdateRadiologyDto } from './dto';
+import { CreateRadiologyDto, RadiologyQueryDto, UpdateRadiologyDto } from './dto';
 import { RadiologyService } from './radiology.service';
 
 const RAD_READ = ['ADMIN', 'RADIOLOGIST', 'DOCTOR'] as const;

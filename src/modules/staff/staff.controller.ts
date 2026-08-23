@@ -19,7 +19,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
-import type { CreateStaffDto, StaffQueryDto, UpdateStaffDto } from './dto';
+import { CreateStaffDto, StaffQueryDto, UpdateStaffDto } from './dto';
 import { StaffService } from './staff.service';
 
 @ApiTags('Staff')
