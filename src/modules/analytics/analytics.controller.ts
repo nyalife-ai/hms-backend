@@ -54,7 +54,6 @@ const DOMAIN_ROLES: Record<AnalyticsDomain, HmsRole[]> = {
   appointments: [
     'SUPER_ADMIN',
     'ADMIN',
-    'ACCOUNTANT',
     'DOCTOR',
     'NURSE',
     'RECEPTIONIST',
@@ -62,20 +61,18 @@ const DOMAIN_ROLES: Record<AnalyticsDomain, HmsRole[]> = {
   patients: [
     'SUPER_ADMIN',
     'ADMIN',
-    'ACCOUNTANT',
     'DOCTOR',
     'NURSE',
     'RECEPTIONIST',
   ],
-  laboratory: ['SUPER_ADMIN', 'ADMIN', 'ACCOUNTANT', 'LAB_TECHNICIAN', 'DOCTOR'],
-  pharmacy: ['SUPER_ADMIN', 'ADMIN', 'ACCOUNTANT', 'PHARMACIST'],
-  ipd: ['SUPER_ADMIN', 'ADMIN', 'ACCOUNTANT', 'DOCTOR', 'NURSE'],
-  radiology: ['SUPER_ADMIN', 'ADMIN', 'ACCOUNTANT', 'RADIOLOGIST', 'DOCTOR'],
-  staff: ['SUPER_ADMIN', 'ADMIN', 'ACCOUNTANT'],
+  laboratory: ['SUPER_ADMIN', 'ADMIN', 'LAB_TECHNICIAN', 'DOCTOR'],
+  pharmacy: ['SUPER_ADMIN', 'ADMIN', 'PHARMACIST'],
+  ipd: ['SUPER_ADMIN', 'ADMIN', 'DOCTOR', 'NURSE'],
+  radiology: ['SUPER_ADMIN', 'ADMIN', 'RADIOLOGIST', 'DOCTOR'],
+  staff: ['SUPER_ADMIN', 'ADMIN'],
   'follow-ups': [
     'SUPER_ADMIN',
     'ADMIN',
-    'ACCOUNTANT',
     'DOCTOR',
     'RECEPTIONIST',
   ],
@@ -93,22 +90,22 @@ export class AnalyticsController {
   ) {}
 
   @Get('overview')
-  @ApiOperation({ summary: 'Hospital-wide operational analytics' })
+  @ApiOperation({ summary: 'Role-scoped operational analytics overview' })
   overview(@Query() query: AnalyticsQueryDto, @CurrentUser() user: AuthUserPublic) {
     this.assertDomain('overview', user.role);
-    return this.analytics.getDomain('overview', query);
+    return this.analytics.getDomain('overview', query, user.role);
   }
 
   @Get('financial')
   financial(@Query() query: AnalyticsQueryDto, @CurrentUser() user: AuthUserPublic) {
     this.assertDomain('financial', user.role);
-    return this.analytics.getDomain('financial', query);
+    return this.analytics.getDomain('financial', query, user.role);
   }
 
   @Get('billing')
   billing(@Query() query: AnalyticsQueryDto, @CurrentUser() user: AuthUserPublic) {
     this.assertDomain('billing', user.role);
-    return this.analytics.getDomain('billing', query);
+    return this.analytics.getDomain('billing', query, user.role);
   }
 
   @Get('appointments')
@@ -190,7 +187,7 @@ export class AnalyticsController {
     }
     const d = domain as AnalyticsDomain;
     this.assertDomain(d, user.role);
-    const payload = await this.analytics.getDomain(d, body);
+    const payload = await this.analytics.getDomain(d, body, user.role);
     const format = body.format ?? 'csv';
     if (format === 'xlsx') {
       const buf = this.exports.toXlsxJson(payload);

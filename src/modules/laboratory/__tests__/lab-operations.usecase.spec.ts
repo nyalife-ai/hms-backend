@@ -850,6 +850,48 @@ describe('LabOperationsUseCase', () => {
     expect(parsed.text).toBe('legacy');
   });
 
+  it('never exposes raw JSON blobs as clinical notes text', () => {
+    const junk = JSON.stringify({ foo: 'bar', data: { nested: true } });
+    const parsed = ops.parseNotes(junk);
+    expect(parsed.text).toBeUndefined();
+    expect(JSON.stringify(parsed)).not.toContain('"foo"');
+
+    const brokenJsonLooking = '{not-valid-json';
+    expect(ops.parseNotes(brokenJsonLooking).text).toBeUndefined();
+
+    const withText = JSON.stringify({
+      orderedTestTypeIds: [],
+      text: 'Patient fasting',
+    });
+    expect(ops.parseNotes(withText).text).toBe('Patient fasting');
+  });
+
+  it('mapRequest surfaces human-readable notes only', () => {
+    const mapped = (ops as any).mapRequest({
+      id: 'req1',
+      request_number: 'LR-1',
+      patient_id: 'p1',
+      requesting_doctor_id: null,
+      consultation_id: null,
+      priority: 'ROUTINE',
+      request_date: new Date('2026-08-20T10:00:00Z'),
+      status: 'PENDING',
+      notes: JSON.stringify({ orderedTestTypeIds: ['tt1'], visitId: 'v1' }),
+      requested_by: 'u1',
+      patient: {
+        patient_number: 'MRN-1',
+        user: {
+          core_profiles_user_id: [{ first_name: 'A', last_name: 'B' }],
+        },
+      },
+      requesting_doctor: null,
+      consultation: null,
+    });
+    expect(mapped.notes).toBeNull();
+    expect(mapped.visitId).toBe('v1');
+    expect(String(mapped.notes ?? '')).not.toMatch(/^\s*[{\[]/);
+  });
+
   it('resolveOrderedPanels resolves names when ids missing', async () => {
     const notes = JSON.stringify({ tests: [{ name: 'CBC' }] });
     prisma.testTypes.findMany

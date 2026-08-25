@@ -934,21 +934,29 @@ export class NotificationPolicyService {
       initiatedBy?: string;
       notifyUserIds?: string[];
       status?: string;
+      purpose?: string;
+      invoiceId?: string;
+      paymentMethod?: string;
     }>,
   ): NotificationIntent {
     const p = event.payload;
     const paymentId = p.paymentId || p.checkoutId || 'unknown';
-    const reason = p.reason || 'M-Pesa payment failed.';
+    const reason = p.reason || 'Payment could not be completed.';
     const amountLabel =
       p.amount != null ? `KES ${Number(p.amount).toLocaleString()}` : 'n/a';
+    const when = new Date(event.occurredAt).toLocaleString();
     const body = [
       p.patientName ? `Patient: ${p.patientName}` : null,
       p.mrn ? `MRN: ${p.mrn}` : null,
+      p.invoiceId ? `Invoice: ${p.invoiceId}` : null,
       `Amount: ${amountLabel}`,
+      `Method: ${p.paymentMethod || 'M-Pesa'}`,
       p.phoneMasked ? `Phone: ${p.phoneMasked}` : null,
-      `Payment ID: ${paymentId}`,
+      p.purpose ? `Purpose: ${p.purpose.replace(/_/g, ' ')}` : null,
       `Status: ${p.status || 'FAILED'}`,
       `Reason: ${reason}`,
+      `Time: ${when}`,
+      `Reference: ${paymentId.slice(0, 8)}…`,
     ]
       .filter(Boolean)
       .join('\n');
@@ -964,7 +972,7 @@ export class NotificationPolicyService {
         staffDurable(event, {
           userId,
           type: 'payment.failed',
-          title: 'M-Pesa Payment Failed',
+          title: 'M-Pesa payment failed',
           body,
           priority: 'HIGH',
           entityType: 'mpesa_transaction',
@@ -986,6 +994,10 @@ export class NotificationPolicyService {
             checkoutId: p.checkoutId,
             reason,
             amount: p.amount,
+            patientName: p.patientName,
+            mrn: p.mrn,
+            status: p.status || 'FAILED',
+            paymentMethod: p.paymentMethod || 'M-Pesa',
           },
           dedupeKey: `ws:payment-failed:${event.id}:${userId}`,
         },
@@ -1036,6 +1048,13 @@ export class NotificationPolicyService {
       billingUserIds?: string[];
       pharmacistUserIds?: string[];
       source?: string;
+      patientName?: string;
+      mrn?: string;
+      paymentMethod?: string;
+      mpesaReceipt?: string;
+      initiatedBy?: string;
+      notifyUserIds?: string[];
+      status?: string;
     }>,
   ): NotificationIntent {
     const p = event.payload;
@@ -1044,6 +1063,21 @@ export class NotificationPolicyService {
     const amountLabel =
       p.amount != null ? `KES ${Number(p.amount).toLocaleString()}` : 'n/a';
     const paymentId = p.paymentId || 'unknown';
+    const when = new Date(event.occurredAt).toLocaleString();
+    const successBody = [
+      p.patientName ? `Patient: ${p.patientName}` : null,
+      p.mrn ? `MRN: ${p.mrn}` : null,
+      p.invoiceId ? `Invoice: ${p.invoiceId}` : null,
+      `Amount: ${amountLabel}`,
+      `Method: ${p.paymentMethod || 'M-Pesa'}`,
+      p.mpesaReceipt ? `M-Pesa receipt: ${p.mpesaReceipt}` : null,
+      p.purpose ? `Purpose: ${String(p.purpose).replace(/_/g, ' ')}` : null,
+      `Status: ${p.status || 'SUCCESS'}`,
+      `Time: ${when}`,
+      `Reference: ${paymentId.slice(0, 8)}…`,
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     const patientIntent = this.patientSms(
       event,
@@ -1055,15 +1089,80 @@ export class NotificationPolicyService {
       jobs.push(...(patientIntent.jobs ?? []));
     }
 
+    // Initiator + explicit notify list — persisted + realtime confirmation
+    const staffNotify = new Set<string>([
+      ...(p.notifyUserIds ?? []),
+      ...(p.initiatedBy ? [p.initiatedBy] : []),
+    ]);
+    for (const userId of staffNotify) {
+      durable.push(
+        staffDurable(event, {
+          userId,
+          type: 'payment.received',
+          title: 'M-Pesa payment successful',
+          body: successBody,
+          priority: 'NORMAL',
+          entityType: 'payment',
+          entityId: paymentId,
+          actionPath: '/billing',
+        }),
+      );
+      jobs.push({
+        name: NOTIFICATION_JOBS.SEND_WEBSOCKET,
+        jobId: `ws:payment-ok:${paymentId}:${userId}`,
+        data: {
+          eventId: event.id,
+          type: 'payment.received',
+          userId,
+          room: `user:${userId}`,
+          payload: {
+            paymentId,
+            visitId: p.visitId,
+            amount: p.amount,
+            status: 'SUCCESS',
+            patientName: p.patientName,
+            mrn: p.mrn,
+            mpesaReceipt: p.mpesaReceipt,
+            purpose: p.purpose,
+          },
+          dedupeKey: `ws:payment-ok:${event.id}:${userId}`,
+        },
+      });
+      jobs.push({
+        name: NOTIFICATION_JOBS.SEND_FCM,
+        jobId: `fcm:payment-ok:${paymentId}:${userId}`,
+        data: {
+          eventId: event.id,
+          templateKey: 'payment.received.staff.push',
+          userId,
+          variables: {
+            amount: amountLabel,
+            patientName: p.patientName ?? '',
+            mrn: p.mrn ?? '',
+          },
+          dedupeKey: `fcm:payment-ok:${event.id}:${userId}`,
+        },
+      });
+    }
+
     // Consult fee cleared → triage nurses
     if (p.purpose === 'CONSULT_FEE' && p.nurseUserIds?.length) {
       for (const userId of p.nurseUserIds) {
+        if (staffNotify.has(userId)) continue;
         durable.push(
           staffDurable(event, {
             userId,
             type: 'payment.received',
             title: 'Consult fee paid — ready for triage',
-            body: `Payment ${amountLabel} received. Patient is ready for triage.`,
+            body: [
+              p.patientName ? `Patient: ${p.patientName}` : null,
+              p.mrn ? `MRN: ${p.mrn}` : null,
+              `Amount: ${amountLabel}`,
+              'Patient is ready for triage.',
+              `Time: ${when}`,
+            ]
+              .filter(Boolean)
+              .join('\n'),
             priority: 'HIGH',
             entityType: 'visit',
             entityId: p.visitId,
@@ -1082,6 +1181,8 @@ export class NotificationPolicyService {
               visitId: p.visitId,
               paymentId,
               purpose: p.purpose,
+              patientName: p.patientName,
+              mrn: p.mrn,
             },
             dedupeKey: `ws:payment-triage:${event.id}:${userId}`,
           },
@@ -1106,12 +1207,13 @@ export class NotificationPolicyService {
       p.billingUserIds?.length
     ) {
       for (const userId of p.billingUserIds) {
+        if (staffNotify.has(userId)) continue;
         durable.push(
           staffDurable(event, {
             userId,
             type: 'payment.received',
             title: 'Payment received',
-            body: `Payment ${amountLabel} recorded.`,
+            body: successBody,
             entityType: 'payment',
             entityId: paymentId,
             actionPath: '/billing',
@@ -1125,7 +1227,13 @@ export class NotificationPolicyService {
             type: 'payment.received',
             userId,
             room: `user:${userId}`,
-            payload: { paymentId, visitId: p.visitId, amount: p.amount },
+            payload: {
+              paymentId,
+              visitId: p.visitId,
+              amount: p.amount,
+              patientName: p.patientName,
+              status: 'SUCCESS',
+            },
             dedupeKey: `ws:payment-finance:${event.id}:${userId}`,
           },
         });

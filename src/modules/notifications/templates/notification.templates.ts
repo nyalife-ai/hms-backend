@@ -112,6 +112,12 @@ const TEMPLATES: readonly NotificationTemplateDefinition[] = [
     body: 'Payment received for your NyaLife visit. Thank you.',
   },
   {
+    key: 'payment.received.staff.push',
+    channel: 'fcm',
+    subject: 'Payment successful',
+    body: 'M-Pesa payment {{amount}} received ({{patientName}} · {{mrn}}).',
+  },
+  {
     key: 'payment.failed.patient.sms',
     channel: 'sms',
     body: 'Payment for your NyaLife visit did not complete. Please try again at reception.',

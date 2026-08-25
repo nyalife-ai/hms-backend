@@ -38,11 +38,12 @@ export class AnalyticsService {
   public async getDomain(
     domain: AnalyticsDomain,
     query: AnalyticsQueryDto,
+    viewerRole?: string,
   ): Promise<AnalyticsPayload> {
     const period = resolvePeriod(query);
     switch (domain) {
       case 'overview':
-        return this.overview(period, query);
+        return this.overview(period, query, viewerRole);
       case 'financial':
       case 'billing':
         return this.financial(period, query, domain);
@@ -204,6 +205,7 @@ export class AnalyticsService {
   private async overview(
     period: ResolvedPeriod,
     query: AnalyticsQueryDto,
+    viewerRole?: string,
   ): Promise<AnalyticsPayload> {
     const cur = this.range(period.from, period.to);
     const prev =
@@ -393,7 +395,7 @@ export class AnalyticsService {
     });
 
     // Keep overview KPIs lean — storytelling lives in charts below.
-    return {
+    const payload: AnalyticsPayload = {
       meta: this.meta('overview', period),
       kpis: [
         this.kpiPair(
@@ -439,6 +441,27 @@ export class AnalyticsService {
           'percent',
         ),
         this.kpiPair('lab.requests', 'Lab requests', labCur, null, 'count'),
+        this.kpiPair(
+          'lab.completed',
+          'Lab completed',
+          labDoneCur,
+          null,
+          'count',
+        ),
+        this.kpiPair(
+          'radiology.requests',
+          'Radiology requests',
+          radCur,
+          null,
+          'count',
+        ),
+        this.kpiPair(
+          'pharmacy.dispensed_lines',
+          'Dispensed lines',
+          rxLinesCur,
+          null,
+          'count',
+        ),
         this.kpiPair(
           'followups.overdue',
           'Overdue follow-ups',
@@ -542,6 +565,7 @@ export class AnalyticsService {
             { Metric: 'Discharges', Value: dischargesCur },
             { Metric: 'Current inpatients', Value: currentInpatients },
             { Metric: 'Bed occupancy %', Value: occupancy },
+            { Metric: 'Lab requests', Value: labCur },
             { Metric: 'Lab completed', Value: labDoneCur },
             { Metric: 'Radiology requests', Value: radCur },
             { Metric: 'Dispensed lines', Value: rxLinesCur },
@@ -549,6 +573,138 @@ export class AnalyticsService {
             { Metric: 'Billed (KES)', Value: billedCur },
             { Metric: 'Collected (KES)', Value: collectedCur },
           ],
+        }),
+      ],
+    };
+
+    return this.scopeOverviewForRole(payload, viewerRole);
+  }
+
+  /**
+   * Overview is role-scoped at the API so lab/pharmacy/etc. never receive
+   * finance KPIs (and finance never gets unrelated clinical noise).
+   */
+  private scopeOverviewForRole(
+    payload: AnalyticsPayload,
+    role?: string,
+  ): AnalyticsPayload {
+    const r = (role || '').toUpperCase();
+    if (!r || r === 'SUPER_ADMIN' || r === 'ADMIN') return payload;
+
+    const allow = (key: string, prefixes: string[]) =>
+      prefixes.some(
+        (p) => key === p || key.startsWith(`${p}.`) || key.startsWith(`${p}_`),
+      );
+
+    let prefixes: string[];
+    switch (r) {
+      case 'ACCOUNTANT':
+        prefixes = ['revenue', 'payments', 'invoices', 'claims'];
+        break;
+      case 'LAB_TECHNICIAN':
+        prefixes = ['lab'];
+        break;
+      case 'PHARMACIST':
+        prefixes = ['pharmacy'];
+        break;
+      case 'RADIOLOGIST':
+        prefixes = ['radiology'];
+        break;
+      case 'DOCTOR':
+        prefixes = [
+          'patients',
+          'appointments',
+          'consultations',
+          'lab',
+          'diagnoses',
+          'followups',
+        ];
+        break;
+      case 'NURSE':
+        prefixes = [
+          'patients',
+          'appointments',
+          'ipd',
+          'beds',
+          'followups',
+          'lab',
+        ];
+        break;
+      case 'RECEPTIONIST':
+        prefixes = ['patients', 'appointments', 'followups'];
+        break;
+      default:
+        return payload;
+    }
+
+    const filterKey = (key: string) => allow(key, prefixes);
+
+    const snapshotRows = (payload.tables?.[0]?.rows ?? []).filter((row) => {
+      const metric = String(row.Metric ?? '').toLowerCase();
+      if (r === 'ACCOUNTANT') {
+        return (
+          metric.includes('billed') ||
+          metric.includes('collected') ||
+          metric.includes('claim')
+        );
+      }
+      if (r === 'LAB_TECHNICIAN') {
+        return metric.includes('lab');
+      }
+      if (r === 'PHARMACIST') {
+        return metric.includes('dispens');
+      }
+      if (r === 'RADIOLOGIST') {
+        return metric.includes('radiology') || metric.includes('imaging');
+      }
+      if (r === 'RECEPTIONIST') {
+        return (
+          metric.includes('patient') ||
+          metric.includes('appointment') ||
+          metric.includes('follow')
+        );
+      }
+      if (r === 'DOCTOR') {
+        return (
+          !metric.includes('billed') &&
+          !metric.includes('collected') &&
+          !metric.includes('claim')
+        );
+      }
+      if (r === 'NURSE') {
+        return (
+          !metric.includes('billed') &&
+          !metric.includes('collected') &&
+          !metric.includes('claim')
+        );
+      }
+      return true;
+    });
+
+    return {
+      ...payload,
+      meta: {
+        ...payload.meta,
+        overviewScope: r,
+      },
+      kpis: (payload.kpis ?? []).filter((k) => filterKey(k.key)),
+      series: (payload.series ?? []).filter((s) => filterKey(s.key)),
+      breakdowns: (payload.breakdowns ?? []).filter((b) => filterKey(b.key)),
+      tables: [
+        table({
+          key: 'overview.snapshot',
+          label:
+            r === 'ACCOUNTANT'
+              ? 'Finance snapshot'
+              : r === 'LAB_TECHNICIAN'
+                ? 'Laboratory snapshot'
+                : r === 'PHARMACIST'
+                  ? 'Pharmacy snapshot'
+                  : r === 'RADIOLOGIST'
+                    ? 'Radiology snapshot'
+                    : 'Operational snapshot',
+          columns: ['Metric', 'Value'],
+          rows: snapshotRows,
         }),
       ],
     };

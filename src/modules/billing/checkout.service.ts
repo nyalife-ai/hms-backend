@@ -36,6 +36,7 @@ import {
   resolvePublicMpesaStatus,
   statusUserMessage,
   toDbMpesaStatus,
+  toPublicTimeline,
   type MpesaStage,
 } from './mpesa-lifecycle';
 import {
@@ -278,7 +279,7 @@ export class CheckoutService {
       'INITIATED',
       'Payment initiated from billing UI',
     );
-    payload = appendTimeline(payload, 'QUEUED', 'Persisting QUEUED payment row');
+    payload = appendTimeline(payload, 'QUEUED', 'Preparing your M-Pesa payment…');
 
     const tx = await this.billingRepo.createMpesaTransaction({
       checkoutRequestId: placeholderCheckoutRequestId(paymentId),
@@ -313,7 +314,7 @@ export class CheckoutService {
         pendingPaymentId: undefined,
       },
       'JOB_CREATED',
-      'Enqueueing payment.stk_push job',
+      'Payment request accepted — connecting to M-Pesa…',
     );
 
     await this.billingRepo.updateMpesaTransaction(tx.id, {
@@ -434,9 +435,9 @@ export class CheckoutService {
     let payload = appendTimeline(
       (existing.payload as Record<string, unknown>) || {},
       'JOB_PICKED_UP',
-      'Worker picked up payment.stk_push',
+      'Connecting to M-Pesa…',
     );
-    payload = appendTimeline(payload, 'PROCESSING', 'Preparing Daraja STK');
+    payload = appendTimeline(payload, 'PROCESSING', 'Preparing the phone prompt…');
 
     await this.billingRepo.updateMpesaTransaction(existing.id, {
       status: toDbMpesaStatus('PROCESSING'),
@@ -533,7 +534,7 @@ export class CheckoutService {
       payload = appendTimeline(
         payload,
         'DARAJA_REQUEST_STARTED',
-        'Calling Daraja STK Push API',
+        'Sending the payment prompt to the patient’s phone…',
       );
       await this.billingRepo.updateMpesaTransaction(existing.id, { payload });
 
@@ -614,14 +615,14 @@ export class CheckoutService {
       },
       'STK_SENT',
       simulated
-        ? 'Sandbox simulation — no real STK prompt'
-        : 'Daraja accepted STK request',
+        ? 'Test mode — confirming payment shortly…'
+        : 'Prompt sent to the patient’s phone',
       darajaSafe,
     );
     payload = appendTimeline(
       payload,
       'WAITING_CALLBACK',
-      'Waiting for customer PIN / Safaricom callback',
+      'Waiting for the patient to enter their M-Pesa PIN…',
     );
 
     const updated = await this.billingRepo.updateMpesaTransaction(existing.id, {
@@ -630,8 +631,8 @@ export class CheckoutService {
       merchantRequestId,
       payload,
       resultDesc: simulated
-        ? 'Sandbox simulation — awaiting auto-confirm'
-        : 'STK Push sent — waiting for customer confirmation',
+        ? 'Test mode — confirming payment shortly'
+        : 'Prompt sent — waiting for PIN',
     });
 
     this.logger.log(
@@ -658,8 +659,8 @@ export class CheckoutService {
       status: 'PENDING' as const,
       stage: 'WAITING_CALLBACK' as const,
       message: simulated
-        ? 'Sandbox simulation — payment auto-completes in ~8s (add complete MPESA_* keys for real STK).'
-        : 'STK Push sent — ask the patient to enter their M-Pesa PIN.',
+        ? 'Test mode — payment will confirm shortly.'
+        : 'Prompt sent. Ask the patient to enter their M-Pesa PIN.',
     };
   }
 
@@ -882,7 +883,7 @@ export class CheckoutService {
       const withTimeline = appendTimeline(
         (tx.payload as Record<string, unknown>) || {},
         'CALLBACK_RECEIVED',
-        resultDesc || 'Safaricom callback success',
+        'M-Pesa confirmed the payment. Finalizing…',
       );
       await this.billingRepo.updateMpesaTransaction(tx.id, {
         payload: withTimeline,
@@ -1004,8 +1005,7 @@ export class CheckoutService {
       source: tx.source,
       receiptId: receiptId ?? undefined,
       paid: status === 'SUCCESS',
-      timeline: payload.timeline ?? [],
-      daraja: payload.daraja,
+      timeline: toPublicTimeline(payload.timeline),
       mode: payload.simulated
         ? 'sandbox-sim'
         : payload.mode || (this.client.configured ? 'live' : 'sandbox-sim'),
@@ -1115,7 +1115,10 @@ export class CheckoutService {
       mrn: payload.mrn,
       initiatedBy: tx.initiated_by,
       notifyUserIds: alertUserIds,
-      status: tx.status,
+      status: resolvePublicMpesaStatus(tx),
+      purpose: (payload as { purpose?: string }).purpose,
+      paymentMethod: 'M-Pesa',
+      invoiceId: (payload as { invoiceId?: string }).invoiceId,
     });
   }
 
@@ -1259,7 +1262,6 @@ export class CheckoutService {
 
       const updatedTx = await this.billingRepo.findMpesaById(tx.id);
       if (!updatedTx) throw new NotFoundException('Checkout not found');
-      // payment.received emitted by createPayment inside collectOnInvoice
       this.emitPaymentDomain('payment.received', {
         patientId: patient.id,
         visitId: visit.id,
@@ -1268,6 +1270,13 @@ export class CheckoutService {
         amount: total,
         purpose: 'CONSULT_FEE',
         invoiceId: paid.invoiceId,
+        paymentMethod: 'M-Pesa',
+        patientName: visit.patientName,
+        mrn: visit.mrn,
+        mpesaReceipt: info.mpesaReceipt,
+        initiatedBy: tx.initiated_by,
+        notifyUserIds: [tx.initiated_by],
+        status: 'SUCCESS',
       });
       return this.toStatusPayload(updatedTx, receipt.id);
     }
@@ -1404,6 +1413,13 @@ export class CheckoutService {
       purpose: 'VISIT_SETTLEMENT',
       invoiceId: settled.invoiceId,
       source: tx.source,
+      paymentMethod: 'M-Pesa',
+      patientName: visit.patientName,
+      mrn: visit.mrn,
+      mpesaReceipt: info.mpesaReceipt,
+      initiatedBy: tx.initiated_by,
+      notifyUserIds: [tx.initiated_by],
+      status: 'SUCCESS',
     });
     return this.toStatusPayload(updatedTx, receipt.id);
   }
@@ -1426,6 +1442,8 @@ export class CheckoutService {
       purpose?: string;
       invoiceId?: string;
       source?: string;
+      paymentMethod?: string;
+      mpesaReceipt?: string;
     },
   ): void {
     this.events.emit(type, {

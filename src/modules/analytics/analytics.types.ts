@@ -59,6 +59,8 @@ export type AnalyticsMeta = {
   generatedAt: string;
   currency: 'KES';
   domain: string;
+  /** Present on overview when response is role-scoped */
+  overviewScope?: string;
 };
 
 export type AnalyticsPayload = {

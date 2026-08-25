@@ -70,6 +70,7 @@ describe('FollowUpsService', () => {
       staffProfiles: { findFirst: jest.fn() },
       patients: { findFirst: jest.fn() },
       consultations: { findFirst: jest.fn() },
+      outpatientVisits: { findFirst: jest.fn().mockResolvedValue(null) },
       $queryRaw: jest.fn(),
     };
     repository = {
@@ -321,5 +322,55 @@ describe('FollowUpsService', () => {
 
     findByIdUseCase.execute.mockResolvedValue(Result.failure('conflict'));
     await expect(service.findById('x')).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('enriches visitId from outpatient visit soft-linked by appointment', async () => {
+    const APPT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const VISIT = 'vvvvvvvv-vvvv-4vvv-8vvv-vvvvvvvvvvvv';
+    const withDisplay = FollowUp.create({
+      patientId: PAT,
+      consultationId: CONS,
+      followUpDate: '2026-08-20',
+      reason: 'ANC review',
+      createdBy: USER,
+    });
+    jest.spyOn(withDisplay, 'getDisplay').mockReturnValue({
+      patientName: 'Jane Doe',
+      patientMrn: 'MRN-1',
+      doctorId: STAFF,
+      doctorName: 'Dr X',
+      appointmentId: APPT,
+      visitId: null,
+    } as any);
+
+    findByIdUseCase.execute.mockResolvedValue(Result.success(withDisplay));
+    prisma.outpatientVisits.findFirst.mockResolvedValue({ id: VISIT });
+
+    const one = await service.findById(withDisplay.getId());
+    expect(one.visitId).toBe(VISIT);
+    expect(prisma.outpatientVisits.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          payload: { path: ['appointmentId'], equals: APPT },
+        },
+      }),
+    );
+  });
+
+  it('returns null visitId when no appointment or visit exists', async () => {
+    const entity = makeEntity();
+    jest.spyOn(entity, 'getDisplay').mockReturnValue({
+      patientName: 'Jane Doe',
+      patientMrn: 'MRN-1',
+      doctorId: STAFF,
+      doctorName: 'Dr X',
+      appointmentId: null,
+      visitId: null,
+    } as any);
+    findByIdUseCase.execute.mockResolvedValue(Result.success(entity));
+
+    const one = await service.findById(entity.getId());
+    expect(one.visitId).toBeNull();
+    expect(prisma.outpatientVisits.findFirst).not.toHaveBeenCalled();
   });
 });

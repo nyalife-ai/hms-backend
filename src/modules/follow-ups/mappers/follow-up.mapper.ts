@@ -21,6 +21,7 @@ export class FollowUpMapper {
       patientMrn: display.patientMrn ?? '',
       consultationId: entity.getConsultationId(),
       appointmentId: display.appointmentId ?? null,
+      visitId: display.visitId ?? null,
       doctorId: display.doctorId ?? '',
       doctorName: display.doctorName ?? '',
       followUpDate: toDateOnly(entity.getFollowUpDate()),

@@ -378,6 +378,9 @@ export class CatalogService {
           status: f.status,
           reason: f.reason,
           consultationId: f.consultation_id,
+          appointmentId: f.consultation.appointment_id ?? null,
+          visitId: null as string | null,
+          href: `/follow-ups?highlight=${f.id}`,
         };
       });
 
@@ -429,6 +432,16 @@ export class CatalogService {
       (c as { href?: string }).href = visitId
         ? `/consultations/${visitId}`
         : `/patients/${row.id}?consultationId=${c.id}`;
+    }
+
+    for (const f of scheduledFollowUps) {
+      const visitId = f.appointmentId
+        ? visitByAppointmentId.get(f.appointmentId)
+        : undefined;
+      f.visitId = visitId ?? null;
+      f.href = visitId
+        ? `/consultations/${visitId}`
+        : `/follow-ups?highlight=${f.id}`;
     }
 
     type VitalsHistoryItem = {
@@ -601,8 +614,9 @@ export class CatalogService {
             payload.reasonForVisit ||
             payload.diagnosis ||
             '',
-          href: apptId ? `/appointments/${apptId}` : `/consultations/${v.id}`,
+          href: `/consultations/${v.id}`,
           appointmentId: apptId || null,
+          visitId: v.id,
         };
       }),
       ...consultations.map((c) => ({
@@ -618,6 +632,8 @@ export class CatalogService {
         href:
           (c as { href?: string }).href ||
           `/patients/${row.id}?consultationId=${c.id}`,
+        appointmentId: c.appointmentId ?? null,
+        visitId: (c as { visitId?: string | null }).visitId ?? null,
       })),
     ].sort((a, b) => (a.when < b.when ? 1 : -1));
 

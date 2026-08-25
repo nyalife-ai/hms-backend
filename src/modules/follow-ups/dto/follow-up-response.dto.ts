@@ -14,6 +14,8 @@ export class FollowUpResponseDto {
   @ApiProperty() patientMrn!: string;
   @ApiProperty() consultationId!: string;
   @ApiPropertyOptional({ nullable: true }) appointmentId?: string | null;
+  /** Soft-linked outpatient visit for the consultation journey UI */
+  @ApiPropertyOptional({ nullable: true }) visitId?: string | null;
   @ApiProperty() doctorId!: string;
   @ApiProperty() doctorName!: string;
   @ApiProperty({ type: String, format: 'date' }) followUpDate!: string;

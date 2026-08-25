@@ -1231,8 +1231,23 @@ export class LabOperationsUseCase {
           ...extras,
         };
       }
+      // Valid JSON but not a known notes payload — never return raw JSON as text
+      return {
+        orderedTestTypeIds: [],
+        text:
+          typeof parsed.text === 'string'
+            ? parsed.text
+            : typeof parsed.doctorNotes === 'string'
+              ? parsed.doctorNotes
+              : undefined,
+        ...extras,
+      };
     } catch {
       /* free-text notes */
+    }
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      return { orderedTestTypeIds: [] };
     }
     return { orderedTestTypeIds: [], text: raw };
   }
@@ -1511,7 +1526,7 @@ export class LabOperationsUseCase {
       priority: r.priority,
       requestDate: r.request_date.toISOString(),
       status: r.status,
-      notes: parsed.text ?? (parsed.orderedTestTypeIds.length ? null : r.notes),
+      notes: parsed.text ?? null,
       orderedTestTypeIds: parsed.orderedTestTypeIds,
       requestedBy: r.requested_by,
       visitId: parsed.visitId ?? null,

@@ -62,13 +62,13 @@ export class FollowUpsService {
     const result = await this.createUseCase.execute(dto);
     const entity = this.unwrap(result);
     this.events.emit(FOLLOW_UPS_EVENTS.CREATED, new FollowUpCreatedEvent(entity.getId()));
-    return FollowUpMapper.toResponse(entity);
+    return this.enrichOne(FollowUpMapper.toResponse(entity));
   }
 
   public async findById(id: string, user?: AuthUserPublic) {
     const scope = await this.resolveScope(user);
     const result = await this.findByIdUseCase.execute(id, scope);
-    return FollowUpMapper.toResponse(this.unwrap(result));
+    return this.enrichOne(FollowUpMapper.toResponse(this.unwrap(result)));
   }
 
   public async findAll(query: FollowUpsQueryDto, user?: AuthUserPublic) {
@@ -82,7 +82,8 @@ export class FollowUpsService {
       scope,
     );
     const page = this.unwrap(result);
-    return this.pagination.buildResult(FollowUpMapper.toResponseList(page.items), {
+    const items = await this.enrichMany(FollowUpMapper.toResponseList(page.items));
+    return this.pagination.buildResult(items, {
       total: page.total,
       page: normalized.page,
       limit: normalized.limit,
@@ -99,7 +100,7 @@ export class FollowUpsService {
     const result = await this.updateUseCase.execute(id, dto);
     const entity = this.unwrap(result);
     this.events.emit(FOLLOW_UPS_EVENTS.UPDATED, new FollowUpUpdatedEvent(entity.getId()));
-    return FollowUpMapper.toResponse(entity);
+    return this.enrichOne(FollowUpMapper.toResponse(entity));
   }
 
   public async softDelete(id: string, user?: AuthUserPublic): Promise<void> {
@@ -244,6 +245,53 @@ export class FollowUpsService {
     }
 
     return { scanned: rows.length, created, skipped };
+  }
+
+  private async enrichOne(
+    dto: ReturnType<typeof FollowUpMapper.toResponse>,
+  ): Promise<ReturnType<typeof FollowUpMapper.toResponse>> {
+    const [enriched] = await this.enrichMany([dto]);
+    return enriched!;
+  }
+
+  /**
+   * Resolve outpatient visit ids via appointment soft-link so UI can open
+   * `/consultations/:visitId` (doctor journey), not only formal consultation UUID.
+   */
+  private async enrichMany(
+    items: Array<ReturnType<typeof FollowUpMapper.toResponse>>,
+  ): Promise<Array<ReturnType<typeof FollowUpMapper.toResponse>>> {
+    const apptIds = [
+      ...new Set(
+        items
+          .map((i) => i.appointmentId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    if (!apptIds.length) {
+      return items.map((i) => ({ ...i, visitId: i.visitId ?? null }));
+    }
+
+    const visitByAppt = new Map<string, string>();
+    await Promise.all(
+      apptIds.map(async (appointmentId) => {
+        const visit = await this.prisma.outpatientVisits.findFirst({
+          where: {
+            payload: { path: ['appointmentId'], equals: appointmentId },
+          },
+          select: { id: true },
+          orderBy: { checked_in_at: 'desc' },
+        });
+        if (visit) visitByAppt.set(appointmentId, visit.id);
+      }),
+    );
+
+    return items.map((i) => ({
+      ...i,
+      visitId: i.appointmentId
+        ? (visitByAppt.get(i.appointmentId) ?? null)
+        : (i.visitId ?? null),
+    }));
   }
 
   private async resolveScope(

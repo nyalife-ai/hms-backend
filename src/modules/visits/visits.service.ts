@@ -1623,6 +1623,7 @@ export class VisitsService implements OnModuleInit {
     const payload = (row.payload ?? {}) as unknown as VisitPayload;
     return {
       id: row.id,
+      patientId: row.patient_id ?? undefined,
       patientName: row.patient_name,
       mrn: row.mrn,
       age: row.age,

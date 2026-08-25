@@ -9,9 +9,11 @@ import {
   mapMpesaFailureReason,
   maskMpesaPhone,
   placeholderCheckoutRequestId,
+  publicStageLabel,
   resolvePublicMpesaStatus,
   statusUserMessage,
   toDbMpesaStatus,
+  toPublicTimeline,
 } from '../mpesa-lifecycle';
 
 describe('mpesa-lifecycle', () => {
@@ -20,9 +22,9 @@ describe('mpesa-lifecycle', () => {
   });
 
   it('builds placeholder checkout ids', () => {
-    expect(placeholderCheckoutRequestId('a1b2c3d4-e5f6-7890-abcd-ef1234567890')).toMatch(
-      /^QUEUED-/,
-    );
+    expect(
+      placeholderCheckoutRequestId('a1b2c3d4-e5f6-7890-abcd-ef1234567890'),
+    ).toMatch(/^QUEUED-/);
   });
 
   it('appends timeline stages without dropping history', () => {
@@ -34,10 +36,10 @@ describe('mpesa-lifecycle', () => {
 
   it('maps failure reasons to human text', () => {
     expect(mapMpesaFailureReason({ rawMessage: 'valid Kenyan mobile' })).toMatch(
-      /Invalid phone/i,
+      /valid M-Pesa number/i,
     );
     expect(mapMpesaFailureReason({ rawMessage: 'ECONNREFUSED redis' })).toMatch(
-      /queue \(Redis\)/i,
+      /try again/i,
     );
     expect(mapMpesaFailureReason({ resultCode: '1032' })).toMatch(/cancelled/i);
     expect(
@@ -56,11 +58,30 @@ describe('mpesa-lifecycle', () => {
     );
   });
 
-  it('knows terminal statuses and user messages', () => {
+  it('exposes user-facing status messages (no worker/daraja jargon)', () => {
+    expect(statusUserMessage('QUEUED')).toMatch(/Preparing/i);
+    expect(statusUserMessage('QUEUED')).not.toMatch(/worker|job|STK Push/i);
+    expect(statusUserMessage('PENDING')).toMatch(/PIN/i);
+    expect(statusUserMessage('PENDING')).not.toMatch(/Daraja|callback/i);
+  });
+
+  it('maps stages to public labels', () => {
+    expect(publicStageLabel('JOB_CREATED')).toBe('Preparing payment');
+    expect(publicStageLabel('WAITING_CALLBACK')).toBe('Waiting for PIN');
+    const tl = toPublicTimeline([
+      {
+        stage: 'JOB_PICKED_UP',
+        at: '2026-01-01T00:00:00.000Z',
+        message: 'Worker picked up',
+      },
+    ]);
+    expect(tl[0].label).toBe('Connecting to M-Pesa');
+    expect(tl[0].message).toBeUndefined();
+  });
+
+  it('knows terminal statuses', () => {
     expect(isTerminalMpesaStatus('SUCCESS')).toBe(true);
     expect(isTerminalMpesaStatus('PENDING')).toBe(false);
-    expect(statusUserMessage('QUEUED')).toMatch(/queued/i);
-    expect(statusUserMessage('PENDING')).toMatch(/PIN/i);
   });
 
   it('maps logical statuses onto legacy-safe DB values', () => {

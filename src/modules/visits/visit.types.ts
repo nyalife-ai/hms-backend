@@ -82,6 +82,8 @@ export interface OrderedClinicalItem {
 
 export interface Visit {
   id: string;
+  /** Linked patients.id when known */
+  patientId?: string;
   patientName: string;
   mrn: string;
   age: number;

@@ -423,6 +423,7 @@ describe('CatalogService', () => {
             reason: 'BP check',
             consultation_id: 'c-fu',
             consultation: {
+              appointment_id: 'appt-fu',
               doctor: {
                 user: {
                   email: 'doc@x.com',
@@ -456,6 +457,8 @@ describe('CatalogService', () => {
       expect(detail.vitalsHistory[0].source).toBe('TRIAGE');
       expect(detail.counts.scheduledVisits).toBe(1);
       expect(detail.scheduledFollowUps).toHaveLength(1);
+      expect(detail.scheduledFollowUps[0].appointmentId).toBe('appt-fu');
+      expect(detail.scheduledFollowUps[0].href).toContain('/follow-ups');
       expect(detail.insurance[0].providerName).toBe('SHA');
     });
 

@@ -11,6 +11,8 @@ export type FollowUpDisplay = {
   patientName?: string;
   patientMrn?: string;
   appointmentId?: string | null;
+  /** Outpatient visit id for doctor journey `/consultations/:visitId` */
+  visitId?: string | null;
   doctorId?: string;
   doctorName?: string;
 };
