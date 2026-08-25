@@ -40,9 +40,12 @@ describe('MpesaClient', () => {
 
   it('normalizes Kenyan phone numbers and rejects invalid ones', () => {
     expect(MpesaClient.normalizePhone('0712345678')).toBe('254712345678');
+    expect(MpesaClient.normalizePhone('+254712345678')).toBe('254712345678');
     expect(MpesaClient.normalizePhone('254712345678')).toBe('254712345678');
     expect(MpesaClient.normalizePhone('712345678')).toBe('254712345678');
-    expect(() => MpesaClient.normalizePhone('123')).toThrow(/valid Kenyan/);
+    expect(MpesaClient.normalizePhone('0112345678')).toBe('254112345678');
+    expect(MpesaClient.normalizePhone('254112345678')).toBe('254112345678');
+    expect(() => MpesaClient.normalizePhone('123')).toThrow(/Invalid M-Pesa phone/i);
   });
 
   it('loads sandbox and production config from env', () => {

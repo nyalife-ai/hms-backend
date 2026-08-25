@@ -134,15 +134,28 @@ export class MpesaClient {
     );
   }
 
-  /** Normalize KE numbers to 2547XXXXXXXX */
+  /** Normalize KE MSISDNs to 2547XXXXXXXX / 2541XXXXXXXX for Daraja. */
   static normalizePhone(phone: string): string {
     const digits = phone.replace(/\D/g, '');
-    if (digits.startsWith('254') && digits.length === 12) return digits;
-    if (digits.startsWith('0') && digits.length === 10) {
-      return `254${digits.slice(1)}`;
+    if (digits.startsWith('254') && digits.length === 12) {
+      const national = digits.slice(3);
+      if (national.startsWith('7') || national.startsWith('1')) return digits;
     }
-    if (digits.length === 9 && digits.startsWith('7')) return `254${digits}`;
-    throw new Error('Enter a valid Kenyan mobile number (e.g. 07XXXXXXXX).');
+    if (digits.startsWith('0') && digits.length === 10) {
+      const rest = digits.slice(1);
+      if (rest.startsWith('7') || rest.startsWith('1')) {
+        return `254${rest}`;
+      }
+    }
+    if (
+      digits.length === 9 &&
+      (digits.startsWith('7') || digits.startsWith('1'))
+    ) {
+      return `254${digits}`;
+    }
+    throw new Error(
+      'Invalid M-Pesa phone number. Use 07XXXXXXXX, 01XXXXXXXX, or 2547XXXXXXXX.',
+    );
   }
 
   async stkPush(input: {
@@ -182,18 +195,35 @@ export class MpesaClient {
       },
     );
     const text = await res.text();
-    let json: StkPushResult & { errorMessage?: string; errorCode?: string };
+    let json: StkPushResult & {
+      errorMessage?: string;
+      errorCode?: string;
+      requestId?: string;
+    };
     try {
       json = JSON.parse(text);
     } catch {
       throw new Error(`M-Pesa STK non-JSON response: ${text.slice(0, 200)}`);
     }
-    if (!res.ok || json.ResponseCode !== '0') {
-      throw new Error(
+    if (!res.ok || String(json.ResponseCode) !== '0') {
+      const reason =
         json.errorMessage ||
-          json.ResponseDescription ||
-          `M-Pesa STK failed (${res.status})`,
-      );
+        json.ResponseDescription ||
+        json.CustomerMessage ||
+        `M-Pesa STK failed (${res.status})`;
+      const code = json.errorCode || json.ResponseCode || String(res.status);
+      const err = new Error(reason);
+      (err as Error & { daraja?: Record<string, unknown> }).daraja = {
+        httpStatus: res.status,
+        responseCode: json.ResponseCode ?? null,
+        responseDescription: json.ResponseDescription ?? null,
+        customerMessage: json.CustomerMessage ?? null,
+        errorCode: json.errorCode ?? null,
+        merchantRequestId: json.MerchantRequestID ?? null,
+        checkoutRequestId: json.CheckoutRequestID ?? null,
+        code,
+      };
+      throw err;
     }
     return json;
   }

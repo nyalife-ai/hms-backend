@@ -3,6 +3,7 @@
  */
 
 import {
+  BadRequestException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -16,6 +17,44 @@ describe('MessagingService', () => {
   let payload: { pack: jest.Mock; unpack: jest.Mock };
   let events: { emit: jest.Mock };
   let service: MessagingService;
+
+  const groupConversationRow = {
+    id: 'c-group',
+    conversation_type: CONVERSATION_TYPES.GROUP,
+    name: 'Ward A',
+    avatar: null,
+    created_by: 'u1',
+    created_at: new Date('2026-08-20T00:00:00Z'),
+    updated_at: new Date('2026-08-20T00:00:00Z'),
+    metadata: {},
+    deleted_at: null,
+    communications_conversation_participants_conversation_id: [
+      {
+        user_id: 'u1',
+        role: 'ADMIN',
+        is_muted: false,
+        last_read_message_id: null,
+        left_at: null,
+        user: {
+          email: 'a@x.com',
+          core_profiles_user_id: [{ first_name: 'Ada', last_name: 'O' }],
+          core_user_roles_user_id: [{ role: { name: 'DOCTOR' } }],
+        },
+      },
+      {
+        user_id: 'u2',
+        role: 'MEMBER',
+        is_muted: false,
+        last_read_message_id: null,
+        left_at: null,
+        user: {
+          email: 'b@x.com',
+          core_profiles_user_id: [{ first_name: 'Bea', last_name: 'N' }],
+          core_user_roles_user_id: [{ role: { name: 'NURSE' } }],
+        },
+      },
+    ],
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -32,6 +71,7 @@ describe('MessagingService', () => {
       conversationParticipants: {
         findFirst: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
+        create: jest.fn().mockResolvedValue({}),
         createMany: jest.fn().mockResolvedValue({ count: 2 }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
@@ -249,5 +289,157 @@ describe('MessagingService', () => {
     await expect(service.markRead('u1', 'c1', 'missing')).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  it('addParticipants creates membership for new users', async () => {
+    prisma.conversationParticipants.findFirst
+      .mockResolvedValueOnce({
+        user_id: 'u1',
+        role: 'ADMIN',
+        left_at: null,
+      })
+      .mockResolvedValueOnce(null) // no existing row for u3
+      .mockResolvedValueOnce({
+        user_id: 'u1',
+        role: 'ADMIN',
+        left_at: null,
+        last_read_message_id: null,
+        is_muted: false,
+      });
+    prisma.conversations.findFirst
+      .mockResolvedValueOnce({
+        id: 'c-group',
+        conversation_type: CONVERSATION_TYPES.GROUP,
+        deleted_at: null,
+      })
+      .mockResolvedValueOnce(groupConversationRow);
+    prisma.user.findMany.mockResolvedValue([{ id: 'u3' }]);
+    prisma.messages.count.mockResolvedValue(0);
+
+    const result = await service.addParticipants('u1', 'c-group', ['u3']);
+
+    expect(prisma.conversationParticipants.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          conversation_id: 'c-group',
+          user_id: 'u3',
+          role: 'MEMBER',
+        }),
+      }),
+    );
+    expect(result.id).toBe('c-group');
+    expect(events.emit).toHaveBeenCalledWith(
+      'conversation.updated',
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          action: 'participants.added',
+          addedUserIds: ['u3'],
+        }),
+      }),
+    );
+  });
+
+  it('addParticipants rejects non-admin members', async () => {
+    prisma.conversationParticipants.findFirst.mockResolvedValue({
+      user_id: 'u2',
+      role: 'MEMBER',
+      left_at: null,
+    });
+    prisma.conversations.findFirst.mockResolvedValue({
+      id: 'c-group',
+      conversation_type: CONVERSATION_TYPES.GROUP,
+      deleted_at: null,
+    });
+
+    await expect(
+      service.addParticipants('u2', 'c-group', ['u3']),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('removeParticipant sets left_at for members', async () => {
+    prisma.conversationParticipants.findFirst
+      .mockResolvedValueOnce({
+        user_id: 'u1',
+        role: 'ADMIN',
+        left_at: null,
+      })
+      .mockResolvedValueOnce({
+        user_id: 'u2',
+        role: 'MEMBER',
+        left_at: null,
+      })
+      .mockResolvedValueOnce({
+        user_id: 'u1',
+        role: 'ADMIN',
+        left_at: null,
+        last_read_message_id: null,
+        is_muted: false,
+      });
+    prisma.conversations.findFirst
+      .mockResolvedValueOnce({
+        id: 'c-group',
+        conversation_type: CONVERSATION_TYPES.GROUP,
+        deleted_at: null,
+      })
+      .mockResolvedValueOnce({
+        ...groupConversationRow,
+        communications_conversation_participants_conversation_id:
+          groupConversationRow.communications_conversation_participants_conversation_id.filter(
+            (p) => p.user_id !== 'u2',
+          ),
+      });
+    prisma.conversationParticipants.findMany
+      .mockResolvedValueOnce([{ user_id: 'u1' }]) // admins check
+      .mockResolvedValueOnce([{ user_id: 'u1' }]); // remaining ids
+
+    const result = await service.removeParticipant('u1', 'c-group', 'u2');
+
+    expect(prisma.conversationParticipants.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          conversation_id: 'c-group',
+          user_id: 'u2',
+        }),
+        data: expect.objectContaining({ left_at: expect.any(Date) }),
+      }),
+    );
+    expect(
+      result.participants.every((p: { userId: string }) => p.userId !== 'u2'),
+    ).toBe(true);
+    expect(events.emit).toHaveBeenCalledWith(
+      'conversation.updated',
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          action: 'participants.removed',
+          removedUserId: 'u2',
+        }),
+      }),
+    );
+  });
+
+  it('removeParticipant forbids removing the last admin', async () => {
+    prisma.conversationParticipants.findFirst
+      .mockResolvedValueOnce({
+        user_id: 'u1',
+        role: 'ADMIN',
+        left_at: null,
+      })
+      .mockResolvedValueOnce({
+        user_id: 'u1',
+        role: 'ADMIN',
+        left_at: null,
+      });
+    prisma.conversations.findFirst.mockResolvedValue({
+      id: 'c-group',
+      conversation_type: CONVERSATION_TYPES.GROUP,
+      deleted_at: null,
+    });
+    prisma.conversationParticipants.findMany.mockResolvedValue([
+      { user_id: 'u1' },
+    ]);
+
+    await expect(
+      service.removeParticipant('u1', 'c-group', 'u1'),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

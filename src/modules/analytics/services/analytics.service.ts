@@ -19,6 +19,7 @@ import {
   table,
 } from '../analytics.types';
 import {
+  alignSeriesByIndex,
   bucketKey,
   changePercent,
   enumerateBuckets,
@@ -97,6 +98,74 @@ export class AnalyticsService {
 
   private range(from: Date, to: Date): Range {
     return { gte: from, lte: to };
+  }
+
+  /** Align previous-period bucket values onto current points by equal-length index. */
+  private withPreviousByIndex(
+    current: Array<{ period: string; value: number }>,
+    previous: Array<{ period: string; value: number }> | null,
+  ): Array<{ period: string; value: number; previousValue: number | null }> {
+    return alignSeriesByIndex(current, previous);
+  }
+
+  private bucketValues(
+    from: Date,
+    to: Date,
+    granularity: ResolvedPeriod['granularity'],
+    events: Array<{ at: Date; amount?: number }>,
+  ): Array<{ period: string; value: number }> {
+    const buckets = enumerateBuckets(from, to, granularity);
+    const map = new Map(buckets.map((b) => [b, 0]));
+    for (const e of events) {
+      const k = bucketKey(new Date(e.at), granularity);
+      if (map.has(k)) {
+        map.set(k, (map.get(k) ?? 0) + (e.amount ?? 1));
+      }
+    }
+    return buckets.map((periodKey) => ({
+      period: periodKey,
+      value: map.get(periodKey) ?? 0,
+    }));
+  }
+
+  private async seriesPointsWithCompare(
+    period: ResolvedPeriod,
+    loadEvents: (
+      from: Date,
+      to: Date,
+    ) => Promise<Array<{ at: Date; amount?: number }>>,
+    round?: (n: number) => number,
+  ): Promise<
+    Array<{ period: string; value: number; previousValue: number | null }>
+  > {
+    const applyRound = (pts: Array<{ period: string; value: number }>) =>
+      round
+        ? pts.map((p) => ({ ...p, value: round(p.value) }))
+        : pts;
+
+    const current = applyRound(
+      this.bucketValues(
+        period.from,
+        period.to,
+        period.granularity,
+        await loadEvents(period.from, period.to),
+      ),
+    );
+
+    if (!period.compareFrom || !period.compareTo) {
+      return this.withPreviousByIndex(current, null);
+    }
+
+    const previous = applyRound(
+      this.bucketValues(
+        period.compareFrom,
+        period.compareTo,
+        period.granularity,
+        await loadEvents(period.compareFrom, period.compareTo),
+      ),
+    );
+
+    return this.withPreviousByIndex(current, previous);
   }
 
   private async countInRange(
@@ -491,29 +560,25 @@ export class AnalyticsService {
   }
 
   private async invoiceSeries(period: ResolvedPeriod) {
-    const rows = await this.prisma.invoices.findMany({
-      where: {
-        deleted_at: null,
-        is_voided: false,
-        invoice_date: this.range(period.from, period.to),
-        status: { not: 'DRAFT' },
+    return this.seriesPointsWithCompare(
+      period,
+      async (from, to) => {
+        const rows = await this.prisma.invoices.findMany({
+          where: {
+            deleted_at: null,
+            is_voided: false,
+            invoice_date: this.range(from, to),
+            status: { not: 'DRAFT' },
+          },
+          select: { invoice_date: true, total_amount: true },
+        });
+        return rows.map((r) => ({
+          at: new Date(r.invoice_date),
+          amount: dec(r.total_amount),
+        }));
       },
-      select: { invoice_date: true, total_amount: true },
-    });
-    const buckets = enumerateBuckets(
-      period.from,
-      period.to,
-      period.granularity,
+      (n) => Math.round(n * 100) / 100,
     );
-    const map = new Map(buckets.map((b) => [b, 0]));
-    for (const r of rows) {
-      const k = bucketKey(new Date(r.invoice_date), period.granularity);
-      if (map.has(k)) map.set(k, (map.get(k) ?? 0) + dec(r.total_amount));
-    }
-    return buckets.map((periodKey) => ({
-      period: periodKey,
-      value: Math.round((map.get(periodKey) ?? 0) * 100) / 100,
-    }));
   }
 
   private async timeSeriesCounts(
@@ -522,31 +587,25 @@ export class AnalyticsService {
     dateOf: (row: { created_at: Date }) => Date,
     mode: 'patients' | 'generic',
   ) {
-    const buckets = enumerateBuckets(
-      period.from,
-      period.to,
-      period.granularity,
-    );
-    const map = new Map(buckets.map((b) => [b, 0]));
-
     if (mode === 'patients') {
-      const rows = await this.prisma.patients.findMany({
-        where: {
-          deleted_at: null,
-          created_at: this.range(period.from, period.to),
-        },
-        select: { created_at: true },
+      return this.seriesPointsWithCompare(period, async (from, to) => {
+        const rows = await this.prisma.patients.findMany({
+          where: {
+            deleted_at: null,
+            created_at: this.range(from, to),
+          },
+          select: { created_at: true },
+        });
+        return rows.map((r) => ({ at: dateOf(r) }));
       });
-      for (const r of rows) {
-        const k = bucketKey(dateOf(r), period.granularity);
-        if (map.has(k)) map.set(k, (map.get(k) ?? 0) + 1);
-      }
     }
 
-    return buckets.map((periodKey) => ({
-      period: periodKey,
-      value: map.get(periodKey) ?? 0,
-    }));
+    return this.withPreviousByIndex(
+      enumerateBuckets(period.from, period.to, period.granularity).map(
+        (periodKey) => ({ period: periodKey, value: 0 }),
+      ),
+      null,
+    );
   }
 
   // ── Financial / Billing ───────────────────────────────────
@@ -747,27 +806,23 @@ export class AnalyticsService {
   }
 
   private async paymentSeries(period: ResolvedPeriod) {
-    const rows = await this.prisma.payments.findMany({
-      where: {
-        status: 'COMPLETED',
-        payment_date: this.range(period.from, period.to),
+    return this.seriesPointsWithCompare(
+      period,
+      async (from, to) => {
+        const rows = await this.prisma.payments.findMany({
+          where: {
+            status: 'COMPLETED',
+            payment_date: this.range(from, to),
+          },
+          select: { payment_date: true, amount: true },
+        });
+        return rows.map((r) => ({
+          at: new Date(r.payment_date),
+          amount: dec(r.amount),
+        }));
       },
-      select: { payment_date: true, amount: true },
-    });
-    const buckets = enumerateBuckets(
-      period.from,
-      period.to,
-      period.granularity,
+      (n) => Math.round(n * 100) / 100,
     );
-    const map = new Map(buckets.map((b) => [b, 0]));
-    for (const r of rows) {
-      const k = bucketKey(new Date(r.payment_date), period.granularity);
-      if (map.has(k)) map.set(k, (map.get(k) ?? 0) + dec(r.amount));
-    }
-    return buckets.map((periodKey) => ({
-      period: periodKey,
-      value: Math.round((map.get(periodKey) ?? 0) * 100) / 100,
-    }));
   }
 
   // ── Appointments ──────────────────────────────────────────
@@ -824,22 +879,28 @@ export class AnalyticsService {
       },
     });
 
-    const buckets = enumerateBuckets(
-      period.from,
-      period.to,
-      period.granularity,
-    );
-    const map = new Map(buckets.map((b) => [b, 0]));
     const doctorMap = new Map<string, number>();
     for (const r of rows) {
-      const k = bucketKey(new Date(r.appointment_date), period.granularity);
-      if (map.has(k)) map.set(k, (map.get(k) ?? 0) + 1);
       const p = r.doctor?.user?.core_profiles_user_id?.[0];
       const name = p
         ? `${p.first_name} ${p.last_name}`.trim()
         : r.doctor_id.slice(0, 8);
       doctorMap.set(name, (doctorMap.get(name) ?? 0) + 1);
     }
+
+    const trendPoints = await this.seriesPointsWithCompare(
+      period,
+      async (from, to) => {
+        const list = await this.prisma.appointments.findMany({
+          where: {
+            ...baseWhere,
+            appointment_date: this.range(from, to),
+          },
+          select: { appointment_date: true },
+        });
+        return list.map((r) => ({ at: new Date(r.appointment_date) }));
+      },
+    );
 
     const byDoctor = [...doctorMap.entries()]
       .map(([name, value]) => ({ name, value }))
@@ -890,10 +951,7 @@ export class AnalyticsService {
         series({
           key: 'appointments.trend',
           label: 'Appointments over time',
-          points: buckets.map((periodKey) => ({
-            period: periodKey,
-            value: map.get(periodKey) ?? 0,
-          })),
+          points: trendPoints,
         }),
       ],
       breakdowns: [
@@ -1051,20 +1109,19 @@ export class AnalyticsService {
       _count: { _all: true },
     });
 
-    const rows = await this.prisma.laboratoryRequests.findMany({
-      where,
-      select: { request_date: true, status: true },
-    });
-    const buckets = enumerateBuckets(
-      period.from,
-      period.to,
-      period.granularity,
+    const trendPoints = await this.seriesPointsWithCompare(
+      period,
+      async (from, to) => {
+        const list = await this.prisma.laboratoryRequests.findMany({
+          where: {
+            ...where,
+            request_date: this.range(from, to),
+          },
+          select: { request_date: true },
+        });
+        return list.map((r) => ({ at: new Date(r.request_date) }));
+      },
     );
-    const map = new Map(buckets.map((b) => [b, 0]));
-    for (const r of rows) {
-      const k = bucketKey(new Date(r.request_date), period.granularity);
-      if (map.has(k)) map.set(k, (map.get(k) ?? 0) + 1);
-    }
 
     const tatRows = await this.prisma.$queryRaw<
       Array<{ avg_hours: number | null; n: bigint }>
@@ -1107,10 +1164,7 @@ export class AnalyticsService {
         series({
           key: 'lab.requests_trend',
           label: 'Lab requests over time',
-          points: buckets.map((periodKey) => ({
-            period: periodKey,
-            value: map.get(periodKey) ?? 0,
-          })),
+          points: trendPoints,
         }),
       ],
       breakdowns: [
@@ -1196,21 +1250,18 @@ export class AnalyticsService {
       : [];
     const medName = new Map(meds.map((m) => [m.id, m.medication_name]));
 
-    const dispensedRows = await this.prisma.prescriptionLines.findMany({
-      where: { dispensed_at: cur },
-      select: { dispensed_at: true, quantity: true },
+    const trendPoints = await this.seriesPointsWithCompare(period, async (from, to) => {
+      const dispensedRows = await this.prisma.prescriptionLines.findMany({
+        where: { dispensed_at: this.range(from, to) },
+        select: { dispensed_at: true, quantity: true },
+      });
+      return dispensedRows
+        .filter((r) => r.dispensed_at)
+        .map((r) => ({
+          at: new Date(r.dispensed_at!),
+          amount: r.quantity,
+        }));
     });
-    const buckets = enumerateBuckets(
-      period.from,
-      period.to,
-      period.granularity,
-    );
-    const map = new Map(buckets.map((b) => [b, 0]));
-    for (const r of dispensedRows) {
-      if (!r.dispensed_at) continue;
-      const k = bucketKey(new Date(r.dispensed_at), period.granularity);
-      if (map.has(k)) map.set(k, (map.get(k) ?? 0) + r.quantity);
-    }
 
     const stockValue = dec(stockValueRows[0]?.stock_value);
 
@@ -1250,10 +1301,7 @@ export class AnalyticsService {
         series({
           key: 'pharmacy.dispensed_qty',
           label: 'Dispensed quantity over time',
-          points: buckets.map((periodKey) => ({
-            period: periodKey,
-            value: map.get(periodKey) ?? 0,
-          })),
+          points: trendPoints,
         }),
       ],
       breakdowns: [
@@ -1345,30 +1393,24 @@ export class AnalyticsService {
       wardUtil.set(b.ward_id, curW);
     }
 
-    const admRows = await this.prisma.admissions.findMany({
-      where: { admission_date: cur },
-      select: { admission_date: true },
-    });
-    const disRows = await this.prisma.admissions.findMany({
-      where: { discharge_date: cur },
-      select: { discharge_date: true },
-    });
-    const buckets = enumerateBuckets(
-      period.from,
-      period.to,
-      period.granularity,
-    );
-    const admMap = new Map(buckets.map((b) => [b, 0]));
-    const disMap = new Map(buckets.map((b) => [b, 0]));
-    for (const r of admRows) {
-      const k = bucketKey(new Date(r.admission_date), period.granularity);
-      if (admMap.has(k)) admMap.set(k, (admMap.get(k) ?? 0) + 1);
-    }
-    for (const r of disRows) {
-      if (!r.discharge_date) continue;
-      const k = bucketKey(new Date(r.discharge_date), period.granularity);
-      if (disMap.has(k)) disMap.set(k, (disMap.get(k) ?? 0) + 1);
-    }
+    const [admissionTrend, dischargeTrend] = await Promise.all([
+      this.seriesPointsWithCompare(period, async (from, to) => {
+        const admRows = await this.prisma.admissions.findMany({
+          where: { admission_date: this.range(from, to) },
+          select: { admission_date: true },
+        });
+        return admRows.map((r) => ({ at: new Date(r.admission_date) }));
+      }),
+      this.seriesPointsWithCompare(period, async (from, to) => {
+        const disRows = await this.prisma.admissions.findMany({
+          where: { discharge_date: this.range(from, to) },
+          select: { discharge_date: true },
+        });
+        return disRows
+          .filter((r) => r.discharge_date)
+          .map((r) => ({ at: new Date(r.discharge_date!) }));
+      }),
+    ]);
 
     const kpis = [
       this.kpiPair('ipd.admissions', 'Admissions', admissions, null, 'count'),
@@ -1407,18 +1449,12 @@ export class AnalyticsService {
         series({
           key: 'ipd.admissions_trend',
           label: 'Admissions',
-          points: buckets.map((periodKey) => ({
-            period: periodKey,
-            value: admMap.get(periodKey) ?? 0,
-          })),
+          points: admissionTrend,
         }),
         series({
           key: 'ipd.discharges_trend',
           label: 'Discharges',
-          points: buckets.map((periodKey) => ({
-            period: periodKey,
-            value: disMap.get(periodKey) ?? 0,
-          })),
+          points: dischargeTrend,
         }),
       ],
       breakdowns: [
@@ -1495,20 +1531,19 @@ export class AnalyticsService {
       )
       .reduce((s, r) => s + r._count._all, 0);
 
-    const rows = await this.prisma.radiologyRequests.findMany({
-      where,
-      select: { created_at: true },
-    });
-    const buckets = enumerateBuckets(
-      period.from,
-      period.to,
-      period.granularity,
+    const trendPoints = await this.seriesPointsWithCompare(
+      period,
+      async (from, to) => {
+        const list = await this.prisma.radiologyRequests.findMany({
+          where: {
+            ...where,
+            created_at: this.range(from, to),
+          },
+          select: { created_at: true },
+        });
+        return list.map((r) => ({ at: new Date(r.created_at) }));
+      },
     );
-    const map = new Map(buckets.map((b) => [b, 0]));
-    for (const r of rows) {
-      const k = bucketKey(new Date(r.created_at), period.granularity);
-      if (map.has(k)) map.set(k, (map.get(k) ?? 0) + 1);
-    }
 
     return {
       meta: this.meta('radiology', period),
@@ -1539,10 +1574,7 @@ export class AnalyticsService {
         series({
           key: 'radiology.trend',
           label: 'Requests over time',
-          points: buckets.map((periodKey) => ({
-            period: periodKey,
-            value: map.get(periodKey) ?? 0,
-          })),
+          points: trendPoints,
         }),
       ],
       breakdowns: [
@@ -1631,12 +1663,6 @@ export class AnalyticsService {
     });
 
     const byInsurer = new Map<string, number>();
-    const buckets = enumerateBuckets(
-      period.from,
-      period.to,
-      period.granularity,
-    );
-    const map = new Map(buckets.map((b) => [b, 0]));
     for (const c of claims) {
       const insurer =
         c.insurance_policy?.provider?.name ?? 'Unknown / self-pay claim';
@@ -1644,10 +1670,27 @@ export class AnalyticsService {
         insurer,
         (byInsurer.get(insurer) ?? 0) + dec(c.amount_claimed),
       );
-      const dt = c.submission_date ?? c.created_at;
-      const k = bucketKey(new Date(dt), period.granularity);
-      if (map.has(k)) map.set(k, (map.get(k) ?? 0) + 1);
     }
+
+    const trendPoints = await this.seriesPointsWithCompare(
+      period,
+      async (from, to) => {
+        const range = this.range(from, to);
+        const list = await this.prisma.insuranceClaims.findMany({
+          where: {
+            OR: [
+              { submission_date: range },
+              { submission_date: null, created_at: range },
+            ],
+            ...(query.status ? { status: query.status } : {}),
+          },
+          select: { submission_date: true, created_at: true },
+        });
+        return list.map((c) => ({
+          at: new Date(c.submission_date ?? c.created_at),
+        }));
+      },
+    );
 
     return {
       meta: this.meta('insurance', period),
@@ -1679,10 +1722,7 @@ export class AnalyticsService {
         series({
           key: 'claims.trend',
           label: 'Claims over time',
-          points: buckets.map((periodKey) => ({
-            period: periodKey,
-            value: map.get(periodKey) ?? 0,
-          })),
+          points: trendPoints,
         }),
       ],
       breakdowns: [
@@ -1778,12 +1818,32 @@ export class AnalyticsService {
       }),
     );
 
+    const activitySeries = await this.seriesPointsWithCompare(
+      period,
+      async (from, to) => {
+        const list = await this.prisma.appointments.findMany({
+          where: {
+            deleted_at: null,
+            appointment_date: this.range(from, to),
+          },
+          select: { appointment_date: true },
+        });
+        return list.map((r) => ({ at: new Date(r.appointment_date) }));
+      },
+    );
+
     return {
       meta: this.meta('staff', period),
       kpis: [
         this.kpiPair('staff.active', 'Active staff', active, null, 'count'),
       ],
-      series: [],
+      series: [
+        series({
+          key: 'staff.activity',
+          label: 'Appointments over time',
+          points: activitySeries,
+        }),
+      ],
       breakdowns: [
         breakdown({
           key: 'staff.by_role',
@@ -1872,6 +1932,20 @@ export class AnalyticsService {
       reasonMap.set(reason, (reasonMap.get(reason) ?? 0) + 1);
     }
 
+    const voidTrend = await this.seriesPointsWithCompare(
+      period,
+      async (from, to) => {
+        const list = await this.prisma.invoices.findMany({
+          where: {
+            is_voided: true,
+            updated_at: this.range(from, to),
+          },
+          select: { updated_at: true },
+        });
+        return list.map((r) => ({ at: new Date(r.updated_at) }));
+      },
+    );
+
     return {
       meta: this.meta('void-audit', period),
       kpis: [
@@ -1897,7 +1971,13 @@ export class AnalyticsService {
           'count',
         ),
       ],
-      series: [],
+      series: [
+        series({
+          key: 'void.trend',
+          label: 'Voided invoices over time',
+          points: voidTrend,
+        }),
+      ],
       breakdowns: [
         breakdown({
           key: 'audit.by_action',
@@ -1967,20 +2047,19 @@ export class AnalyticsService {
       },
     });
 
-    const rows = await this.prisma.followUps.findMany({
-      where,
-      select: { follow_up_date: true },
-    });
-    const buckets = enumerateBuckets(
-      period.from,
-      period.to,
-      period.granularity,
+    const trendPoints = await this.seriesPointsWithCompare(
+      period,
+      async (from, to) => {
+        const list = await this.prisma.followUps.findMany({
+          where: {
+            follow_up_date: this.range(from, to),
+            ...(query.status ? { status: query.status } : {}),
+          },
+          select: { follow_up_date: true },
+        });
+        return list.map((r) => ({ at: new Date(r.follow_up_date) }));
+      },
     );
-    const map = new Map(buckets.map((b) => [b, 0]));
-    for (const r of rows) {
-      const k = bucketKey(new Date(r.follow_up_date), period.granularity);
-      if (map.has(k)) map.set(k, (map.get(k) ?? 0) + 1);
-    }
 
     return {
       meta: this.meta('follow-ups', period),
@@ -2011,10 +2090,7 @@ export class AnalyticsService {
         series({
           key: 'followups.trend',
           label: 'Follow-ups by date',
-          points: buckets.map((periodKey) => ({
-            period: periodKey,
-            value: map.get(periodKey) ?? 0,
-          })),
+          points: trendPoints,
         }),
       ],
       breakdowns: [

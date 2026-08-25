@@ -117,17 +117,41 @@ import { CommunicationModule } from './modules/communication/communication.modul
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
-        const passwordRaw = config.get<string>('redis.password');
-        const password =
-          passwordRaw && passwordRaw.trim().length > 0
-            ? passwordRaw.trim()
+        const redisUrl = (
+          config.get<string>('REDIS_URL') ||
+          process.env.REDIS_URL ||
+          ''
+        ).trim();
+        let host = config.get<string>('redis.host') || '127.0.0.1';
+        let port = config.get<number>('redis.port') || 6379;
+        let password =
+          config.get<string>('redis.password') &&
+          String(config.get<string>('redis.password')).trim().length > 0
+            ? String(config.get<string>('redis.password')).trim()
             : undefined;
+        let db = 0;
+        if (redisUrl) {
+          try {
+            const u = new URL(redisUrl);
+            host = u.hostname || host;
+            port = u.port ? Number(u.port) : port;
+            if (u.password) password = decodeURIComponent(u.password);
+            const dbPath = u.pathname.replace(/^\//u, '');
+            if (dbPath !== '') {
+              const parsedDb = Number(dbPath);
+              if (Number.isFinite(parsedDb)) db = parsedDb;
+            }
+          } catch {
+            // keep host/port from discrete env
+          }
+        }
         return {
           // Isolate Bull keys from other tenants on shared Redis
           prefix: config.get<string>('BULL_PREFIX')?.trim() || 'nyalife',
           redis: {
-            host: config.get<string>('redis.host') || '127.0.0.1',
-            port: config.get<number>('redis.port') || 6379,
+            host,
+            port,
+            db,
             ...(password ? { password } : {}),
             // Bull workers/subscribers require null (ioredis default of 20 breaks them)
             maxRetriesPerRequest: null,

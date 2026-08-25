@@ -1141,6 +1141,278 @@ export class MessagingService {
     return { conversationId, muted };
   }
 
+  public async addParticipants(
+    actorId: string,
+    conversationId: string,
+    userIds: string[],
+    actorSystemRole?: string,
+  ) {
+    this.requireDb();
+    const membership = await this.requireMembership(actorId, conversationId);
+    const conversation = await this.prisma.conversations.findFirst({
+      where: { id: conversationId, deleted_at: null },
+      select: { id: true, conversation_type: true },
+    });
+    if (!conversation) throw new NotFoundException('Conversation not found');
+
+    const manageable = new Set<string>([
+      CONVERSATION_TYPES.GROUP,
+      CONVERSATION_TYPES.DEPARTMENT,
+      CONVERSATION_TYPES.TEAM,
+    ]);
+    if (!manageable.has(conversation.conversation_type)) {
+      throw new BadRequestException(
+        'Participants can only be managed for GROUP, DEPARTMENT, or TEAM conversations',
+      );
+    }
+
+    const isSuper = actorSystemRole === 'SUPER_ADMIN';
+    if (membership.role !== 'ADMIN' && !isSuper) {
+      throw new ForbiddenException('Only conversation admins can add members');
+    }
+
+    const unique = [
+      ...new Set(userIds.filter((id) => typeof id === 'string' && id.length > 0)),
+    ];
+    if (!unique.length) {
+      throw new BadRequestException('At least one userId is required');
+    }
+
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: unique }, deleted_at: null, is_active: true },
+      select: { id: true },
+    });
+    if (users.length !== unique.length) {
+      throw new BadRequestException('One or more users are invalid');
+    }
+
+    for (const userId of unique) {
+      const existing = await this.prisma.conversationParticipants.findFirst({
+        where: { conversation_id: conversationId, user_id: userId },
+      });
+      if (existing) {
+        if (existing.left_at != null) {
+          await this.prisma.conversationParticipants.updateMany({
+            where: { conversation_id: conversationId, user_id: userId },
+            data: { left_at: null, joined_at: new Date(), role: 'MEMBER' },
+          });
+        }
+      } else {
+        await this.prisma.conversationParticipants.create({
+          data: {
+            conversation_id: conversationId,
+            user_id: userId,
+            role: 'MEMBER',
+          },
+        });
+      }
+    }
+
+    await this.prisma.conversations.update({
+      where: { id: conversationId },
+      data: { updated_at: new Date() },
+    });
+
+    const detail = await this.getConversation(actorId, conversationId);
+    const participantIds = detail.participants.map(
+      (p: { userId: string }) => p.userId,
+    );
+    await this.publishRealtime(MESSAGE_EVENTS.CONVERSATION_UPDATED, {
+      room: `conversation:${conversationId}`,
+      userIds: participantIds,
+      payload: {
+        conversationId,
+        participants: detail.participants,
+        action: 'participants.added',
+        addedUserIds: unique,
+      },
+    });
+    this.events.emit(
+      MESSAGE_EVENTS.CONVERSATION_UPDATED,
+      createDomainEventEnvelope({
+        type: MESSAGE_EVENTS.CONVERSATION_UPDATED,
+        actorId,
+        payload: {
+          conversationId,
+          action: 'participants.added',
+          addedUserIds: unique,
+        },
+      }),
+    );
+    return detail;
+  }
+
+  public async removeParticipant(
+    actorId: string,
+    conversationId: string,
+    targetUserId: string,
+    actorSystemRole?: string,
+  ) {
+    this.requireDb();
+    const membership = await this.requireMembership(actorId, conversationId);
+    const conversation = await this.prisma.conversations.findFirst({
+      where: { id: conversationId, deleted_at: null },
+      select: { id: true, conversation_type: true },
+    });
+    if (!conversation) throw new NotFoundException('Conversation not found');
+
+    const manageable = new Set<string>([
+      CONVERSATION_TYPES.GROUP,
+      CONVERSATION_TYPES.DEPARTMENT,
+      CONVERSATION_TYPES.TEAM,
+    ]);
+    if (!manageable.has(conversation.conversation_type)) {
+      throw new BadRequestException(
+        'Participants can only be managed for GROUP, DEPARTMENT, or TEAM conversations',
+      );
+    }
+
+    const leavingSelf = actorId === targetUserId;
+    const isSuper = actorSystemRole === 'SUPER_ADMIN';
+    if (!leavingSelf && membership.role !== 'ADMIN' && !isSuper) {
+      throw new ForbiddenException(
+        'Only conversation admins can remove other members',
+      );
+    }
+
+    const target = await this.prisma.conversationParticipants.findFirst({
+      where: {
+        conversation_id: conversationId,
+        user_id: targetUserId,
+        left_at: null,
+      },
+    });
+    if (!target) {
+      throw new NotFoundException('Participant not found');
+    }
+
+    const admins = await this.prisma.conversationParticipants.findMany({
+      where: {
+        conversation_id: conversationId,
+        left_at: null,
+        role: 'ADMIN',
+      },
+      select: { user_id: true },
+    });
+    if (
+      target.role === 'ADMIN' &&
+      admins.length <= 1 &&
+      admins.some((a) => a.user_id === targetUserId)
+    ) {
+      throw new BadRequestException(
+        'Cannot remove the last admin from the conversation',
+      );
+    }
+
+    await this.prisma.conversationParticipants.updateMany({
+      where: {
+        conversation_id: conversationId,
+        user_id: targetUserId,
+        left_at: null,
+      },
+      data: { left_at: new Date() },
+    });
+
+    await this.prisma.conversations.update({
+      where: { id: conversationId },
+      data: { updated_at: new Date() },
+    });
+
+    // Actor may have left — use remaining participant list for realtime fanout
+    const remainingIds = await this.participantUserIds(conversationId);
+    const fanout = [...new Set([...remainingIds, actorId, targetUserId])];
+
+    let detail: Awaited<ReturnType<MessagingService['getConversation']>> | null =
+      null;
+    if (remainingIds.includes(actorId)) {
+      detail = await this.getConversation(actorId, conversationId);
+    } else {
+      // Build a lightweight snapshot without membership check for emit
+      const c = await this.prisma.conversations.findFirst({
+        where: { id: conversationId, deleted_at: null },
+        include: {
+          communications_conversation_participants_conversation_id: {
+            where: { left_at: null },
+            include: {
+              user: {
+                include: {
+                  core_profiles_user_id: true,
+                  core_user_roles_user_id: { include: { role: true } },
+                },
+              },
+            },
+          },
+        },
+      });
+      detail = c
+        ? {
+            id: c.id,
+            type: c.conversation_type,
+            name: c.name,
+            avatar: c.avatar,
+            createdBy: c.created_by,
+            createdAt: c.created_at.toISOString(),
+            updatedAt: c.updated_at.toISOString(),
+            preview: null,
+            muted: false,
+            unreadCount: 0,
+            participants:
+              c.communications_conversation_participants_conversation_id.map(
+                (p) => {
+                  const profile = p.user.core_profiles_user_id[0];
+                  return {
+                    userId: p.user_id,
+                    displayName: profile
+                      ? `${profile.first_name} ${profile.last_name}`.trim()
+                      : p.user.email,
+                    role:
+                      p.user.core_user_roles_user_id[0]?.role.name ?? 'STAFF',
+                    participantRole: p.role,
+                  };
+                },
+              ),
+          }
+        : null;
+    }
+
+    await this.publishRealtime(MESSAGE_EVENTS.CONVERSATION_UPDATED, {
+      room: `conversation:${conversationId}`,
+      userIds: fanout,
+      payload: {
+        conversationId,
+        participants: detail?.participants ?? [],
+        action: 'participants.removed',
+        removedUserId: targetUserId,
+      },
+    });
+    this.events.emit(
+      MESSAGE_EVENTS.CONVERSATION_UPDATED,
+      createDomainEventEnvelope({
+        type: MESSAGE_EVENTS.CONVERSATION_UPDATED,
+        actorId,
+        payload: {
+          conversationId,
+          action: 'participants.removed',
+          removedUserId: targetUserId,
+        },
+      }),
+    );
+
+    return (
+      detail ?? {
+        id: conversationId,
+        type: conversation.conversation_type,
+        name: null,
+        avatar: null,
+        updatedAt: new Date().toISOString(),
+        preview: null,
+        muted: false,
+        unreadCount: 0,
+        participants: [],
+      }
+    );
+  }
+
   public async uploadAttachment(
     actorId: string,
     conversationId: string,

@@ -1,14 +1,25 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
   Patch,
   Post,
   Req,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import type { Request } from 'express';
+import { memoryStorage } from 'multer';
 import { Public } from '../../common/decorators/public.decorator';
 import { AuthService } from './auth.service';
 import type { AuthUserPublic } from './auth.types';
@@ -21,11 +32,22 @@ import {
   RefreshTokenDto,
   RegisterPatientDto,
   ResetPasswordDto,
-  SetTwoFactorDto,
+  TwoFactorChallengeDto,
+  TwoFactorConfirmDto,
+  UpdateMyProfileDto,
   VerifyLoginOtpDto,
   VerifyResetOtpDto,
 } from './dto/login.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
+
+const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+
+type UploadedAvatar = {
+  buffer: Buffer;
+  originalname?: string;
+  mimetype?: string;
+  size?: number;
+};
 
 @ApiTags('auth')
 @Controller('auth')
@@ -140,16 +162,102 @@ export class AuthController {
     return this.auth.me(req.user.id);
   }
 
+  @Get('me/profile')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Signed-in user profile (self-service)' })
+  getMyProfile(@Req() req: { user: AuthUserPublic }) {
+    return this.auth.getMyProfile(req.user.id);
+  }
+
+  @Patch('me/profile')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Update own profile fields (first/last/phone/image). Email is read-only.',
+  })
+  updateMyProfile(
+    @Req() req: { user: AuthUserPublic },
+    @Body() body: UpdateMyProfileDto,
+  ) {
+    return this.auth.updateMyProfile(req.user.id, body);
+  }
+
+  @Post('me/profile/avatar')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Upload own profile avatar (max 2MB image)' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', format: 'binary' } },
+      required: ['file'],
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: AVATAR_MAX_BYTES },
+    }),
+  )
+  uploadMyAvatar(
+    @Req() req: { user: AuthUserPublic },
+    @UploadedFile() file: UploadedAvatar | undefined,
+  ) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('File is required');
+    }
+    return this.auth.uploadMyAvatar(req.user.id, {
+      buffer: file.buffer,
+      originalname: file.originalname,
+      mimetype: file.mimetype,
+      size: file.size,
+    });
+  }
+
+  @Post('me/two-factor/challenge')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Start OTP challenge to enable or disable 2FA (does not change 2FA yet)',
+  })
+  startTwoFactorChallenge(
+    @Req() req: { user: AuthUserPublic },
+    @Body() body: TwoFactorChallengeDto,
+  ) {
+    return this.auth.startTwoFactorChallenge(
+      req.user.id,
+      body.intent,
+      body.channel,
+      this.meta(req as unknown as Request),
+    );
+  }
+
+  @Post('me/two-factor/confirm')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Confirm OTP and then enable or disable 2FA for the signed-in user',
+  })
+  confirmTwoFactorChallenge(
+    @Req() req: { user: AuthUserPublic },
+    @Body() body: TwoFactorConfirmDto,
+  ) {
+    return this.auth.confirmTwoFactorChallenge(
+      req.user.id,
+      { hash: body.hash, otp: body.otp, intent: body.intent },
+      this.meta(req as unknown as Request),
+    );
+  }
+
   @Patch('me/two-factor')
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Enable or disable email OTP 2FA for the signed-in account',
+    deprecated: true,
+    summary: 'Deprecated — use /me/two-factor/challenge + confirm',
   })
-  setTwoFactor(
-    @Req() req: { user: AuthUserPublic },
-    @Body() body: SetTwoFactorDto,
-  ) {
-    return this.auth.setTwoFactorEnabled(req.user.id, body.enabled);
+  setTwoFactor() {
+    throw new BadRequestException(
+      'Use POST /auth/me/two-factor/challenge then /auth/me/two-factor/confirm',
+    );
   }
 
   @Post('logout')

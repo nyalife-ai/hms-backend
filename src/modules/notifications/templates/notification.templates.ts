@@ -6,6 +6,8 @@
 export type NotificationTemplateKey =
   | 'notifications.sms.test'
   | 'notifications.email.test'
+  | 'auth.two_factor.otp.email'
+  | 'auth.two_factor.otp.sms'
   | 'message.created.push'
   | 'appointment.created.doctor.push'
   | 'appointment.reminder.patient.sms'
@@ -47,6 +49,17 @@ const TEMPLATES: readonly NotificationTemplateDefinition[] = [
     channel: 'email',
     subject: 'NyaLife notification',
     body: 'NyaLife email notification. Ref {{ref}}.',
+  },
+  {
+    key: 'auth.two_factor.otp.email',
+    channel: 'email',
+    subject: 'NyaLife security code',
+    body: 'Your NyaLife verification code is {{otp}}. It expires in {{expiresInMinutes}} minutes. If you did not request this, ignore this email.',
+  },
+  {
+    key: 'auth.two_factor.otp.sms',
+    channel: 'sms',
+    body: 'NyaLife code: {{otp}}. Expires in {{expiresInMinutes}} min.',
   },
   {
     key: 'message.created.push',

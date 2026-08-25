@@ -260,7 +260,7 @@ export class PrismaBillingRepository implements IBillingRepository {
         amount: input.amount,
         account_reference: input.accountReference,
         description: input.description,
-        status: 'PENDING',
+        status: input.status ?? 'PENDING',
         visit_id: input.visitId,
         patient_id: input.patientId,
         source: input.source,
@@ -299,6 +299,12 @@ export class PrismaBillingRepository implements IBillingRepository {
         ...(data.mpesaReceiptNumber !== undefined
           ? { mpesa_receipt_number: data.mpesaReceiptNumber }
           : {}),
+        ...(data.checkoutRequestId !== undefined
+          ? { checkout_request_id: data.checkoutRequestId }
+          : {}),
+        ...(data.merchantRequestId !== undefined
+          ? { merchant_request_id: data.merchantRequestId }
+          : {}),
         ...(data.payload !== undefined
           ? { payload: data.payload as Prisma.InputJsonValue }
           : {}),
@@ -323,6 +329,12 @@ export class PrismaBillingRepository implements IBillingRepository {
         ...(data.mpesaReceiptNumber !== undefined
           ? { mpesa_receipt_number: data.mpesaReceiptNumber }
           : {}),
+        ...(data.checkoutRequestId !== undefined
+          ? { checkout_request_id: data.checkoutRequestId }
+          : {}),
+        ...(data.merchantRequestId !== undefined
+          ? { merchant_request_id: data.merchantRequestId }
+          : {}),
         ...(data.payload !== undefined
           ? { payload: data.payload as Prisma.InputJsonValue }
           : {}),
@@ -330,6 +342,23 @@ export class PrismaBillingRepository implements IBillingRepository {
     });
     if (result.count === 0) return null;
     return this.findMpesaById(id);
+  }
+
+  public async findBillingAlertUserIds(): Promise<string[]> {
+    const rows = await this.prisma.user.findMany({
+      where: {
+        deleted_at: null,
+        is_active: true,
+        core_user_roles_user_id: {
+          some: {
+            role: { name: { in: ['SUPER_ADMIN', 'ADMIN', 'ACCOUNTANT'] } },
+          },
+        },
+      },
+      select: { id: true },
+      take: 50,
+    });
+    return rows.map((r) => r.id);
   }
 
   public async findReceiptByMpesaTxId(

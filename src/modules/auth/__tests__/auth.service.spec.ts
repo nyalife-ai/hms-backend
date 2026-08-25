@@ -25,6 +25,13 @@ describe('AuthService', () => {
 
   let users: jest.Mocked<IAuthUserRepository>;
   let service: AuthService;
+  let prisma: {
+    profiles: {
+      findFirst: jest.Mock;
+      update: jest.Mock;
+    };
+  };
+  let dispatcher: { enqueueIntent: jest.Mock };
 
   beforeEach(async () => {
     user.passwordHash = await bcrypt.hash('secret123', 4);
@@ -46,6 +53,13 @@ describe('AuthService', () => {
       revokeUserChallenges: jest.fn(),
       syncRoleModulePermissions: jest.fn().mockResolvedValue(undefined),
     };
+    prisma = {
+      profiles: {
+        findFirst: jest.fn(),
+        update: jest.fn(),
+      },
+    };
+    dispatcher = { enqueueIntent: jest.fn().mockResolvedValue({ queued: 1, persisted: 1 }) };
     service = new AuthService(
       { sign: jest.fn().mockReturnValue('access') } as unknown as JwtService,
       {
@@ -72,6 +86,9 @@ describe('AuthService', () => {
           .mockResolvedValue({ delivered: false, mode: 'log' }),
       } as unknown as AuthMailService,
       { emit: jest.fn() } as any,
+      prisma as any,
+      dispatcher as any,
+      undefined,
     );
   });
 
@@ -219,6 +236,9 @@ describe('AuthService', () => {
         sendLoginOtp: jest.fn(),
       } as unknown as AuthMailService,
       { emit: jest.fn() } as any,
+      prisma as any,
+      dispatcher as any,
+      undefined,
     );
 
     users.findByRole.mockResolvedValue(user);
@@ -293,5 +313,116 @@ describe('AuthService', () => {
     const res = await service.refresh('refresh-token-value');
     expect(res.accessToken).toBe('access');
     expect(users.revokeRefreshByHash).toHaveBeenCalled();
+  });
+
+  it('security 2FA challenge requires OTP before enable; wrong OTP fails; confirm enables', async () => {
+    users.findById.mockResolvedValue({ ...user, twoFactorEnabled: false });
+    prisma.profiles.findFirst.mockResolvedValue({
+      id: 'p1',
+      user_id: 'u1',
+      first_name: 'A',
+      last_name: 'Test',
+      phone: '+254712345678',
+      profile_image: null,
+      notification_sound_enabled: true,
+      deleted_at: null,
+    });
+
+    const challenge = await service.startTwoFactorChallenge(
+      'u1',
+      'enable',
+      'email',
+    );
+    expect(challenge.hash).toHaveLength(64);
+    expect(challenge.channel).toBe('email');
+    expect(users.updateTwoFactorEnabled).not.toHaveBeenCalled();
+    expect(dispatcher.enqueueIntent).toHaveBeenCalled();
+
+    const intent = dispatcher.enqueueIntent.mock.calls[0][0];
+    const otp = intent.jobs[0].data.variables.otp as string;
+    expect(otp).toMatch(/^\d{6}$/);
+    const wrongOtp = otp === '000000' ? '111111' : '000000';
+
+    users.findChallengeByHash.mockResolvedValue({
+      userId: 'u1',
+      revokedAt: null,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    await expect(
+      service.confirmTwoFactorChallenge('u1', {
+        hash: challenge.hash,
+        otp: wrongOtp,
+        intent: 'enable',
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(users.updateTwoFactorEnabled).not.toHaveBeenCalled();
+
+    users.findChallengeByHash.mockResolvedValue({
+      userId: 'u1',
+      revokedAt: null,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    users.updateTwoFactorEnabled.mockResolvedValue(undefined as never);
+    users.findById
+      .mockResolvedValueOnce({ ...user, twoFactorEnabled: false })
+      .mockResolvedValueOnce({ ...user, twoFactorEnabled: false })
+      .mockResolvedValueOnce({ ...user, twoFactorEnabled: true });
+
+    const pub = await service.confirmTwoFactorChallenge('u1', {
+      hash: challenge.hash,
+      otp,
+      intent: 'enable',
+    });
+    expect(users.updateTwoFactorEnabled).toHaveBeenCalledWith('u1', true);
+    expect(pub.twoFactorEnabled).toBe(true);
+    expect(users.revokeRefreshByHash).toHaveBeenCalledWith(challenge.hash);
+  });
+
+  it('updateMyProfile only updates the JWT user profile row', async () => {
+    users.findById.mockResolvedValue(user);
+    prisma.profiles.findFirst
+      .mockResolvedValueOnce({
+        id: 'p1',
+        user_id: 'u1',
+        first_name: 'A',
+        last_name: 'Test',
+        phone: null,
+        profile_image: null,
+        notification_sound_enabled: true,
+        deleted_at: null,
+      })
+      .mockResolvedValueOnce({
+        id: 'p1',
+        user_id: 'u1',
+        first_name: 'Ada',
+        last_name: 'Test',
+        phone: '+254700',
+        profile_image: null,
+        notification_sound_enabled: true,
+        deleted_at: null,
+      });
+    prisma.profiles.update.mockResolvedValue({});
+
+    const next = await service.updateMyProfile('u1', {
+      firstName: 'Ada',
+      phone: '+254700',
+    });
+    expect(prisma.profiles.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ user_id: 'u1' }),
+      }),
+    );
+    expect(prisma.profiles.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'p1' },
+        data: expect.objectContaining({
+          first_name: 'Ada',
+          phone: '+254700',
+        }),
+      }),
+    );
+    expect(next.firstName).toBe('Ada');
+    expect(next.phone).toBe('+254700');
   });
 });

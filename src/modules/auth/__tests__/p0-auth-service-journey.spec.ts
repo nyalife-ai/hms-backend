@@ -81,6 +81,11 @@ describe('P0 AuthService journeys (Postgres :5433)', () => {
       } as unknown as HmsAuditWriter,
       mail,
       { emit: jest.fn() } as unknown as EventEmitter2,
+      {
+        profiles: { findFirst: jest.fn(), update: jest.fn() },
+      } as any,
+      { enqueueIntent: jest.fn() } as any,
+      undefined,
     );
   });
 

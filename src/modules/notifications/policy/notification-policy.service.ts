@@ -176,10 +176,21 @@ export class NotificationPolicyService {
           event.payload as { patientId?: string },
         );
       case DOMAIN_EVENT_TYPES.PAYMENT_FAILED:
-        return this.patientSms(
-          event,
-          'payment.failed.patient.sms',
-          event.payload as { patientId?: string },
+        return this.onPaymentFailed(
+          event as DomainEventEnvelope<{
+            patientId?: string;
+            visitId?: string;
+            checkoutId?: string;
+            paymentId?: string;
+            amount?: number;
+            phoneMasked?: string;
+            reason?: string;
+            patientName?: string;
+            mrn?: string;
+            initiatedBy?: string;
+            notifyUserIds?: string[];
+            status?: string;
+          }>,
         );
       case DOMAIN_EVENT_TYPES.INVOICE_ISSUED:
         return this.patientSms(
@@ -877,6 +888,74 @@ export class NotificationPolicyService {
         },
       ],
     );
+  }
+
+  private onPaymentFailed(
+    event: DomainEventEnvelope<{
+      patientId?: string;
+      visitId?: string;
+      checkoutId?: string;
+      paymentId?: string;
+      amount?: number;
+      phoneMasked?: string;
+      reason?: string;
+      patientName?: string;
+      mrn?: string;
+      initiatedBy?: string;
+      notifyUserIds?: string[];
+      status?: string;
+    }>,
+  ): NotificationIntent {
+    const p = event.payload;
+    const paymentId = p.paymentId || p.checkoutId || 'unknown';
+    const reason = p.reason || 'M-Pesa payment failed.';
+    const amountLabel =
+      p.amount != null ? `KES ${Number(p.amount).toLocaleString()}` : 'n/a';
+    const body = [
+      p.patientName ? `Patient: ${p.patientName}` : null,
+      p.mrn ? `MRN: ${p.mrn}` : null,
+      `Amount: ${amountLabel}`,
+      p.phoneMasked ? `Phone: ${p.phoneMasked}` : null,
+      `Payment ID: ${paymentId}`,
+      `Status: ${p.status || 'FAILED'}`,
+      `Reason: ${reason}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const durable: DurableNotificationSpec[] = [];
+    const notifyIds = new Set<string>([
+      ...(p.notifyUserIds ?? []),
+      ...(p.initiatedBy ? [p.initiatedBy] : []),
+    ]);
+    for (const userId of notifyIds) {
+      durable.push(
+        staffDurable(event, {
+          userId,
+          type: 'payment.failed',
+          title: 'M-Pesa Payment Failed',
+          body,
+          priority: 'HIGH',
+          entityType: 'mpesa_transaction',
+          entityId: paymentId,
+          actionPath: '/billing',
+        }),
+      );
+    }
+
+    const patientIntent = this.patientSms(
+      event,
+      'payment.failed.patient.sms',
+      { patientId: p.patientId },
+    );
+    if (patientIntent) {
+      return intent(
+        event,
+        [...durable, ...(patientIntent.durable ?? [])],
+        [...(patientIntent.jobs ?? [])],
+      );
+    }
+    return intent(event, durable, []);
   }
 
   private onVisitReadyForBilling(

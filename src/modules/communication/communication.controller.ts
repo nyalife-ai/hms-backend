@@ -46,6 +46,7 @@ import {
   ReactionDto,
   SearchUsersQueryDto,
   SendMessageDto,
+  AddParticipantsDto,
 } from './dto';
 import { MessagingService } from './services/messaging.service';
 
@@ -138,6 +139,36 @@ export class CommunicationController {
     @CurrentUser() user: AuthUserPublic,
   ) {
     return this.messaging.setMuted(user.id, id, body.muted);
+  }
+
+  @Post('conversations/:id/participants')
+  @ApiOperation({ summary: 'Add participants to a group conversation' })
+  addParticipants(
+    @Param('id') id: string,
+    @Body() body: AddParticipantsDto,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.messaging.addParticipants(
+      user.id,
+      id,
+      body.userIds,
+      user.role,
+    );
+  }
+
+  @Delete('conversations/:id/participants/:userId')
+  @ApiOperation({ summary: 'Remove a participant or leave a conversation' })
+  removeParticipant(
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.messaging.removeParticipant(
+      user.id,
+      id,
+      userId,
+      user.role,
+    );
   }
 
   @Post('conversations/:id/attachments')

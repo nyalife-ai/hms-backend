@@ -76,8 +76,9 @@ describe('P1 CheckoutService STK lifecycle', () => {
     countReceipts: jest.Mock;
     createReceipt: jest.Mock;
     updateVisitCheckout: jest.Mock;
+    findBillingAlertUserIds: jest.Mock;
   };
-  let queue: { add: jest.Mock };
+  let queue: { add: jest.Mock; isReady: jest.Mock; client: { status: string } };
   let events: { emit: jest.Mock };
   let billing: {
     getFeeSchedule: jest.Mock;
@@ -96,10 +97,24 @@ describe('P1 CheckoutService STK lifecycle', () => {
     repo = {
       isConnected: jest.fn().mockReturnValue(true),
       findVisitForCheckout: jest.fn().mockResolvedValue(baseVisitRow()),
-      createMpesaTransaction: jest.fn().mockResolvedValue(pendingTx()),
-      findMpesaById: jest.fn(),
+      createMpesaTransaction: jest.fn().mockResolvedValue(
+        pendingTx({ status: 'QUEUED', checkout_request_id: 'QUEUED-tx1' }),
+      ),
+      findMpesaById: jest.fn().mockResolvedValue(
+        pendingTx({ status: 'QUEUED', checkout_request_id: 'QUEUED-tx1' }),
+      ),
       findMpesaByCheckoutRequestId: jest.fn(),
-      updateMpesaTransaction: jest.fn(),
+      updateMpesaTransaction: jest.fn().mockImplementation(async (id, data) =>
+        pendingTx({
+          id,
+          status: data.status ?? 'QUEUED',
+          checkout_request_id: data.checkoutRequestId ?? 'QUEUED-tx1',
+          merchant_request_id: data.merchantRequestId ?? null,
+          result_code: data.resultCode ?? null,
+          result_desc: data.resultDesc ?? null,
+          payload: data.payload ?? {},
+        }),
+      ),
       findReceiptByMpesaTxId: jest.fn().mockResolvedValue(null),
       findPatientByMrn: jest
         .fn()
@@ -111,10 +126,13 @@ describe('P1 CheckoutService STK lifecycle', () => {
         receipt_number: 'RCP-2026-00001',
       }),
       updateVisitCheckout: jest.fn().mockResolvedValue(undefined),
+      findBillingAlertUserIds: jest.fn().mockResolvedValue(['admin-1']),
     };
 
     queue = {
       add: jest.fn().mockResolvedValue({ id: 'job-1' }),
+      isReady: jest.fn().mockResolvedValue(true),
+      client: { status: 'ready' },
     };
     events = { emit: jest.fn() };
 
@@ -164,7 +182,7 @@ describe('P1 CheckoutService STK lifecycle', () => {
       mockClient as unknown as MpesaClient;
   });
 
-  it('initiateStk enqueues payment.stk_push with retries', async () => {
+  it('initiateStk creates QUEUED row then enqueues payment.stk_push with checkoutId', async () => {
     const result = await checkout.initiateStk({
       visitId: 'visit-1',
       phone: '0712345678',
@@ -173,20 +191,44 @@ describe('P1 CheckoutService STK lifecycle', () => {
     });
 
     expect(result.queued).toBe(true);
+    expect(result.paid).toBe(false);
+    expect(result.checkoutId).toBe('tx-1');
+    expect(result.status).toBe('QUEUED');
     expect(result.jobId).toBe('job-1');
+    expect(repo.createMpesaTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'QUEUED',
+        phone: '254712345678',
+        amount: 1500,
+      }),
+    );
     expect(queue.add).toHaveBeenCalledWith(
       BILLING_STK_JOB,
       expect.objectContaining({
+        checkoutId: 'tx-1',
         visitId: 'visit-1',
         phone: '254712345678',
         source: 'RECEPTION',
         actorUserId: 'actor-1',
       }),
       expect.objectContaining({
+        jobId: 'stk-tx-1',
         attempts: 4,
         backoff: { type: 'exponential', delay: 3000 },
       }),
     );
+  });
+
+  it('initiateStk rejects invalid phone before queue', async () => {
+    await expect(
+      checkout.initiateStk({
+        visitId: 'visit-1',
+        phone: '123',
+        source: 'RECEPTION',
+        actorUserId: 'actor-1',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(queue.add).not.toHaveBeenCalled();
   });
 
   it('initiateStk rejects visits not ready for billing', async () => {
@@ -223,9 +265,13 @@ describe('P1 CheckoutService STK lifecycle', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('executeQueuedStk simulation creates PENDING checkout when Daraja unset', async () => {
+  it('executeQueuedStk simulation moves QUEUED → PENDING when Daraja unset', async () => {
     mockClient.configured = false;
+    repo.findMpesaById.mockResolvedValue(
+      pendingTx({ status: 'QUEUED', checkout_request_id: 'QUEUED-tx1' }),
+    );
     const result = await checkout.executeQueuedStk({
+      checkoutId: 'tx-1',
       visitId: 'visit-1',
       phone: '254712345678',
       source: 'RECEPTION',
@@ -234,18 +280,20 @@ describe('P1 CheckoutService STK lifecycle', () => {
 
     expect(result.ok).toBe(true);
     expect(result.mode).toBe('sandbox-sim');
-    expect(repo.createMpesaTransaction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        phone: '254712345678',
-        amount: 1500,
-        visitId: 'visit-1',
-        payload: expect.objectContaining({ simulated: true }),
-      }),
+    expect(result.status).toBe('PENDING');
+    expect(result.paid).toBe(false);
+    expect(repo.updateMpesaTransaction).toHaveBeenCalledWith(
+      'tx-1',
+      expect.objectContaining({ status: 'PENDING' }),
     );
+    expect(repo.createMpesaTransaction).not.toHaveBeenCalled();
   });
 
-  it('executeQueuedStk live path calls stkPush then persists PENDING', async () => {
+  it('executeQueuedStk live path calls stkPush then updates PENDING', async () => {
     mockClient.configured = true;
+    repo.findMpesaById.mockResolvedValue(
+      pendingTx({ status: 'QUEUED', checkout_request_id: 'QUEUED-tx1' }),
+    );
     mockClient.stkPush.mockResolvedValue({
       CheckoutRequestID: 'ws_LIVE',
       MerchantRequestID: 'mr_LIVE',
@@ -255,6 +303,7 @@ describe('P1 CheckoutService STK lifecycle', () => {
     });
 
     const result = await checkout.executeQueuedStk({
+      checkoutId: 'tx-1',
       visitId: 'visit-1',
       phone: '254712345678',
       source: 'RECEPTION',
@@ -265,29 +314,55 @@ describe('P1 CheckoutService STK lifecycle', () => {
       expect.objectContaining({ phone: '254712345678', amount: 1500 }),
     );
     expect(result.mode).toBe('live');
-    expect(repo.createMpesaTransaction).toHaveBeenCalledWith(
+    expect(result.status).toBe('PENDING');
+    expect(repo.updateMpesaTransaction).toHaveBeenCalledWith(
+      'tx-1',
       expect.objectContaining({
+        status: 'PENDING',
         checkoutRequestId: 'ws_LIVE',
         merchantRequestId: 'mr_LIVE',
-        payload: expect.objectContaining({ simulated: false }),
       }),
     );
   });
 
-  it('executeQueuedStk propagates M-Pesa stkPush failure (no orphan tx)', async () => {
+  it('executeQueuedStk marks FAILED on permanent Daraja rejection (no retry throw)', async () => {
     mockClient.configured = true;
-    mockClient.stkPush.mockRejectedValue(new Error('M-Pesa STK failed (500)'));
+    repo.findMpesaById.mockResolvedValue(
+      pendingTx({ status: 'QUEUED', checkout_request_id: 'QUEUED-tx1' }),
+    );
+    mockClient.stkPush.mockRejectedValue(new Error('M-Pesa STK failed (400)'));
+
+    const result = await checkout.executeQueuedStk({
+      checkoutId: 'tx-1',
+      visitId: 'visit-1',
+      phone: '254712345678',
+      source: 'RECEPTION',
+      actorUserId: 'actor-1',
+    });
+
+    expect(result.status).toBe('FAILED');
+    expect(repo.updateMpesaTransaction).toHaveBeenCalledWith(
+      'tx-1',
+      expect.objectContaining({ status: 'FAILED' }),
+    );
+  });
+
+  it('executeQueuedStk retries network-style Daraja failures', async () => {
+    mockClient.configured = true;
+    repo.findMpesaById.mockResolvedValue(
+      pendingTx({ status: 'QUEUED', checkout_request_id: 'QUEUED-tx1' }),
+    );
+    mockClient.stkPush.mockRejectedValue(new Error('fetch failed'));
 
     await expect(
       checkout.executeQueuedStk({
+        checkoutId: 'tx-1',
         visitId: 'visit-1',
         phone: '254712345678',
         source: 'RECEPTION',
         actorUserId: 'actor-1',
       }),
-    ).rejects.toThrow(/M-Pesa STK failed/);
-
-    expect(repo.createMpesaTransaction).not.toHaveBeenCalled();
+    ).rejects.toThrow(/fetch failed/);
   });
 
   it('getStatus returns terminal FAILED without re-query', async () => {
@@ -443,22 +518,30 @@ describe('P1 CheckoutService STK lifecycle', () => {
 
   it('executeQueuedStk → getStatus returns PENDING (status update path)', async () => {
     mockClient.configured = false;
-    const created = pendingTx({
-      status: 'PENDING',
+    const queued = pendingTx({
+      status: 'QUEUED',
+      checkout_request_id: 'QUEUED-tx1',
       payload: { simulated: true, lines: [{ description: 'CBC', amount: 1500 }] },
       created_at: new Date(),
     });
-    repo.createMpesaTransaction.mockResolvedValue(created);
+    repo.findMpesaById.mockResolvedValue(queued);
 
     const executed = await checkout.executeQueuedStk({
+      checkoutId: 'tx-1',
       visitId: 'visit-1',
       phone: '254712345678',
       source: 'RECEPTION',
       actorUserId: 'actor-1',
     });
     expect(executed.checkoutId).toBe('tx-1');
+    expect(executed.status).toBe('PENDING');
 
-    repo.findMpesaById.mockResolvedValue(created);
+    const pending = pendingTx({
+      status: 'PENDING',
+      payload: { simulated: true, lines: [{ description: 'CBC', amount: 1500 }] },
+      created_at: new Date(),
+    });
+    repo.findMpesaById.mockResolvedValue(pending);
     const status = await checkout.getStatus('tx-1');
     expect(status.status).toBe('PENDING');
     expect(status.paid).toBe(false);
@@ -725,24 +808,31 @@ describe('P1 BillingStkProcessor → CheckoutService', () => {
     const executeQueuedStk = jest.fn().mockResolvedValue({
       ok: true,
       checkoutId: 'tx-1',
+      status: 'PENDING',
     });
     const processor = new BillingStkProcessor({
       executeQueuedStk,
+      markStkJobFailed: jest.fn(),
     } as never);
 
     await processor.handle({
       id: '1',
       name: BILLING_STK_JOB,
       data: {
+        checkoutId: 'tx-1',
         visitId: 'visit-1',
         phone: '254712345678',
         source: 'RECEPTION',
         actorUserId: 'actor-1',
         dedupeKey: 'stk:visit-1',
       },
+      attemptsMade: 0,
+      opts: { attempts: 4 },
+      discard: jest.fn(),
     } as never);
 
     expect(executeQueuedStk).toHaveBeenCalledWith({
+      checkoutId: 'tx-1',
       visitId: 'visit-1',
       phone: '254712345678',
       source: 'RECEPTION',
@@ -755,6 +845,7 @@ describe('P1 BillingStkProcessor → CheckoutService', () => {
       executeQueuedStk: jest
         .fn()
         .mockRejectedValue(new Error('M-Pesa STK failed (503)')),
+      markStkJobFailed: jest.fn(),
     } as never);
 
     await expect(
@@ -762,12 +853,16 @@ describe('P1 BillingStkProcessor → CheckoutService', () => {
         id: '2',
         name: BILLING_STK_JOB,
         data: {
+          checkoutId: 'tx-1',
           visitId: 'visit-1',
           phone: '254712345678',
           source: 'RECEPTION',
           actorUserId: 'actor-1',
           dedupeKey: 'stk:v1',
         },
+        attemptsMade: 0,
+        opts: { attempts: 4 },
+        discard: jest.fn(),
       } as never),
     ).rejects.toThrow(/M-Pesa STK failed/);
   });

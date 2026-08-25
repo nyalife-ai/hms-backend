@@ -73,6 +73,7 @@ describe('P0 Bull STK enqueue → process (local Redis)', () => {
     const processor = new BillingStkProcessor(checkout as never);
 
     const payload: BillingStkJobData = {
+      checkoutId: '33333333-3333-4333-8333-333333333333',
       visitId: '11111111-1111-4111-8111-111111111111',
       phone: '254712345678',
       source: 'RECEPTION',
@@ -94,6 +95,7 @@ describe('P0 Bull STK enqueue → process (local Redis)', () => {
     // Process via processor (same contract as @Process handler)
     await processor.handle(job as never);
     expect(checkout.executeQueuedStk).toHaveBeenCalledWith({
+      checkoutId: payload.checkoutId,
       visitId: payload.visitId,
       phone: payload.phone,
       source: payload.source,

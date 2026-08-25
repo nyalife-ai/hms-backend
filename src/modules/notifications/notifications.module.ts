@@ -4,7 +4,7 @@
  */
 
 import { BullModule } from '@nestjs/bull';
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EncryptionService } from '../../common/security/encryption.service';
 import { PrismaModule } from '../../database/prisma/prisma.module';
@@ -41,7 +41,7 @@ import { FcmService } from './services/fcm.service';
 @Module({
   imports: [
     PrismaModule,
-    AuthModule,
+    forwardRef(() => AuthModule),
     BullModule.registerQueue({ name: NOTIFICATIONS_QUEUE.NAME }),
   ],
   controllers: [NotificationsController],

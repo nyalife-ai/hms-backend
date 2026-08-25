@@ -8,3 +8,4 @@ export * from './list-messages-query.dto';
 export * from './search-users-query.dto';
 export * from './mute-conversation.dto';
 export * from './mark-delivered.dto';
+export * from './add-participants.dto';

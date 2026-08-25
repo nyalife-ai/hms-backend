@@ -21,6 +21,7 @@ export const MODULE_PERMISSIONS = [
   'messages',
   'staff',
   'settings',
+  'account',
 ] as const;
 
 export type ModulePermission = (typeof MODULE_PERMISSIONS)[number];
@@ -55,6 +56,7 @@ export const ROLE_MODULE_ACCESS: Record<HmsRole, ModulePermission[]> = {
     'messages',
     'staff',
     'settings',
+    'account',
   ],
   DOCTOR: [
     'dashboard',
@@ -65,6 +67,7 @@ export const ROLE_MODULE_ACCESS: Record<HmsRole, ModulePermission[]> = {
     'inpatient',
     'reports',
     'messages',
+    'account',
   ],
   NURSE: [
     'dashboard',
@@ -74,6 +77,7 @@ export const ROLE_MODULE_ACCESS: Record<HmsRole, ModulePermission[]> = {
     'inpatient',
     'reports',
     'messages',
+    'account',
   ],
   RECEPTIONIST: [
     'dashboard',
@@ -85,11 +89,19 @@ export const ROLE_MODULE_ACCESS: Record<HmsRole, ModulePermission[]> = {
     'billing',
     'reports',
     'messages',
+    'account',
   ],
-  PHARMACIST: ['dashboard', 'pharmacy', 'reports', 'messages'],
-  LAB_TECHNICIAN: ['dashboard', 'laboratory', 'reports', 'messages'],
-  RADIOLOGIST: ['dashboard', 'radiology', 'reports', 'messages'],
-  ACCOUNTANT: ['dashboard', 'billing', 'billing-ledger', 'reports', 'messages'],
+  PHARMACIST: ['dashboard', 'pharmacy', 'reports', 'messages', 'account'],
+  LAB_TECHNICIAN: ['dashboard', 'laboratory', 'reports', 'messages', 'account'],
+  RADIOLOGIST: ['dashboard', 'radiology', 'reports', 'messages', 'account'],
+  ACCOUNTANT: [
+    'dashboard',
+    'billing',
+    'billing-ledger',
+    'reports',
+    'messages',
+    'account',
+  ],
   PATIENT: [
     'dashboard',
     'appointments',
@@ -97,5 +109,6 @@ export const ROLE_MODULE_ACCESS: Record<HmsRole, ModulePermission[]> = {
     'billing',
     'pharmacy',
     'laboratory',
+    'account',
   ],
 };

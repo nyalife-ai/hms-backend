@@ -74,6 +74,8 @@ export type CreateMpesaTransactionInput = {
   source: string;
   initiatedBy: string;
   payload: unknown;
+  /** Lifecycle status; default PENDING for legacy callers. */
+  status?: string;
 };
 
 export type UpdateMpesaTransactionInput = {
@@ -82,6 +84,8 @@ export type UpdateMpesaTransactionInput = {
   resultDesc?: string | null;
   mpesaReceiptNumber?: string | null;
   payload?: unknown;
+  checkoutRequestId?: string;
+  merchantRequestId?: string | null;
 };
 
 export type CreateReceiptInput = {
@@ -163,4 +167,6 @@ export interface IBillingRepository {
   countReceipts(): Promise<number>;
   createReceipt(input: CreateReceiptInput): Promise<ReceiptRow>;
   findPatientForReceipt(patientId: string): Promise<ReceiptPatientRow | null>;
+  /** Active ADMIN / SUPER_ADMIN / ACCOUNTANT user ids for payment alerts. */
+  findBillingAlertUserIds(): Promise<string[]>;
 }

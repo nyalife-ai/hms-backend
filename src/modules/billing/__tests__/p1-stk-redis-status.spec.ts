@@ -1,5 +1,6 @@
 /**
  * P1 STK Redis chain — initiate enqueue → processor → PENDING status.
+ * Skips when Redis is unavailable (local CI without redis).
  */
 
 import { ConfigService } from '@nestjs/config';
@@ -15,10 +16,12 @@ import type { IBillingRepository } from '../repositories/billing.repository.inte
 import type { MpesaClient } from '../mpesa.client';
 
 describe('P1 STK Redis enqueue → process → status', () => {
-  let queue: Queue.Queue;
+  let queue: Queue.Queue | null = null;
   let checkout: CheckoutService;
   let findMpesaById: jest.Mock;
   let createMpesaTransaction: jest.Mock;
+  let updateMpesaTransaction: jest.Mock;
+  let redisOk = false;
 
   beforeAll(async () => {
     const host = process.env.REDIS_HOST || '127.0.0.1';
@@ -31,20 +34,35 @@ describe('P1 STK Redis enqueue → process → status', () => {
         port,
         maxRetriesPerRequest: null,
         enableReadyCheck: false,
+        connectTimeout: 1500,
+        retryStrategy: () => null,
       },
     });
-    await queue.isReady();
-    await queue.empty();
+    try {
+      await Promise.race([
+        queue.isReady(),
+        new Promise((_, rej) =>
+          setTimeout(() => rej(new Error('redis timeout')), 2000),
+        ),
+      ]);
+      await queue.empty();
+      redisOk = true;
+    } catch {
+      await queue.close().catch(() => undefined);
+      queue = null;
+      redisOk = false;
+      return;
+    }
 
     createMpesaTransaction = jest.fn().mockResolvedValue({
       id: 'tx-redis-1',
-      checkout_request_id: 'SIM-REDIS',
-      merchant_request_id: 'SIM-MR',
+      checkout_request_id: 'QUEUED-txredis1',
+      merchant_request_id: null,
       phone: '254712345678',
       amount: 1500,
       account_reference: 'MRN1001',
       description: 'Outpatient bill',
-      status: 'PENDING',
+      status: 'QUEUED',
       result_code: null,
       result_desc: null,
       mpesa_receipt_number: null,
@@ -56,11 +74,32 @@ describe('P1 STK Redis enqueue → process → status', () => {
       created_at: new Date(),
       updated_at: new Date(),
     });
-    findMpesaById = jest.fn().mockImplementation(async () =>
-      createMpesaTransaction.mock.results[
+    updateMpesaTransaction = jest.fn().mockImplementation(async (id, data) => ({
+      id,
+      checkout_request_id: data.checkoutRequestId ?? 'SIM-REDIS',
+      merchant_request_id: data.merchantRequestId ?? 'SIM-MR',
+      phone: '254712345678',
+      amount: 1500,
+      account_reference: 'MRN1001',
+      description: 'Outpatient bill',
+      status: data.status ?? 'PENDING',
+      result_code: null,
+      result_desc: data.resultDesc ?? null,
+      mpesa_receipt_number: null,
+      visit_id: 'visit-redis-1',
+      patient_id: 'pat-1',
+      source: 'RECEPTION',
+      initiated_by: 'actor-1',
+      payload: data.payload ?? { simulated: true },
+      created_at: new Date(),
+      updated_at: new Date(),
+    }));
+    findMpesaById = jest.fn().mockImplementation(async () => {
+      const created = await createMpesaTransaction.mock.results[
         createMpesaTransaction.mock.results.length - 1
-      ]?.value,
-    );
+      ]?.value;
+      return created;
+    });
 
     const repo = {
       isConnected: () => true,
@@ -87,9 +126,10 @@ describe('P1 STK Redis enqueue → process → status', () => {
         .fn()
         .mockResolvedValue({ id: 'pat-1', patient_number: 'MRN-1001' }),
       findMpesaByCheckoutRequestId: jest.fn(),
-      updateMpesaTransaction: jest.fn(),
+      updateMpesaTransaction,
       findReceiptByMpesaTxId: jest.fn().mockResolvedValue(null),
       claimMpesaPending: jest.fn(),
+      findBillingAlertUserIds: jest.fn().mockResolvedValue([]),
     };
 
     checkout = new CheckoutService(
@@ -122,10 +162,15 @@ describe('P1 STK Redis enqueue → process → status', () => {
   });
 
   afterAll(async () => {
-    await queue.close();
+    if (queue) await queue.close();
   });
 
-  it('initiateStk enqueues on Redis; processor creates PENDING; getStatus PENDING', async () => {
+  it('initiateStk enqueues on Redis; processor moves to PENDING; getStatus PENDING', async () => {
+    if (!redisOk || !queue) {
+      console.warn('Skipping Redis STK test — Redis unavailable');
+      return;
+    }
+
     const initiated = await checkout.initiateStk({
       visitId: 'visit-redis-1',
       phone: '0712345678',
@@ -133,6 +178,8 @@ describe('P1 STK Redis enqueue → process → status', () => {
       actorUserId: 'actor-1',
     });
     expect(initiated.queued).toBe(true);
+    expect(initiated.checkoutId).toBe('tx-redis-1');
+    expect(initiated.paid).toBe(false);
 
     const waiting = await queue.getWaiting();
     const job =
@@ -140,12 +187,41 @@ describe('P1 STK Redis enqueue → process → status', () => {
       (await queue.getJob(initiated.jobId));
     expect(job).toBeTruthy();
     expect(job!.name).toBe(BILLING_STK_JOB);
+    expect(job!.data.checkoutId).toBe('tx-redis-1');
+
+    // Worker sees QUEUED row
+    findMpesaById.mockResolvedValue({
+      ...(await createMpesaTransaction.mock.results[0].value),
+      status: 'QUEUED',
+    });
 
     const processor = new BillingStkProcessor(checkout);
     const executed = await processor.handle(job as never);
     expect(executed.ok).toBe(true);
     expect(executed.checkoutId).toBe('tx-redis-1');
-    expect(createMpesaTransaction).toHaveBeenCalled();
+    expect(executed.status).toBe('PENDING');
+    expect(updateMpesaTransaction).toHaveBeenCalledWith(
+      'tx-redis-1',
+      expect.objectContaining({ status: 'PENDING' }),
+    );
+
+    findMpesaById.mockResolvedValue({
+      id: 'tx-redis-1',
+      checkout_request_id: 'SIM-REDIS',
+      merchant_request_id: 'SIM-MR',
+      phone: '254712345678',
+      amount: 1500,
+      status: 'PENDING',
+      result_code: null,
+      result_desc: 'Sandbox simulation',
+      mpesa_receipt_number: null,
+      visit_id: 'visit-redis-1',
+      patient_id: 'pat-1',
+      source: 'RECEPTION',
+      initiated_by: 'actor-1',
+      payload: { simulated: true },
+      created_at: new Date(),
+    });
 
     const status = await checkout.getStatus('tx-redis-1');
     expect(status.status).toBe('PENDING');

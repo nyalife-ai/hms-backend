@@ -2,6 +2,7 @@
  * AuthController — delegates to AuthService for each route.
  */
 
+import { BadRequestException } from '@nestjs/common';
 import { AuthController } from '../auth.controller';
 import { AuthService } from '../auth.service';
 
@@ -18,7 +19,11 @@ describe('AuthController', () => {
     demoLogin: jest.fn().mockResolvedValue({ accessToken: 'a' }),
     listDemoAccounts: jest.fn().mockResolvedValue([{ email: 'a@test.com' }]),
     me: jest.fn().mockResolvedValue({ id: 'u1' }),
-    setTwoFactorEnabled: jest.fn().mockResolvedValue({ id: 'u1' }),
+    getMyProfile: jest.fn().mockResolvedValue({ firstName: 'A' }),
+    updateMyProfile: jest.fn().mockResolvedValue({ firstName: 'B' }),
+    uploadMyAvatar: jest.fn().mockResolvedValue({ profileImage: 'k' }),
+    startTwoFactorChallenge: jest.fn().mockResolvedValue({ hash: 'h'.repeat(40) }),
+    confirmTwoFactorChallenge: jest.fn().mockResolvedValue({ id: 'u1' }),
     logout: jest.fn().mockResolvedValue({ ok: true }),
     changePassword: jest.fn().mockResolvedValue({ ok: true }),
   };
@@ -106,21 +111,47 @@ describe('AuthController', () => {
     expect(auth.listDemoAccounts).not.toHaveBeenCalled();
   });
 
-  it('authenticated me / 2fa / logout / changePassword', async () => {
+  it('authenticated me / profile / 2fa challenge / logout / changePassword', async () => {
     await controller.me(req);
-    await controller.setTwoFactor(req, { enabled: true } as never);
+    await controller.getMyProfile(req);
+    await controller.updateMyProfile(req, { firstName: 'Ada' } as never);
+    await controller.startTwoFactorChallenge(req, {
+      intent: 'enable',
+      channel: 'email',
+    } as never);
+    await controller.confirmTwoFactorChallenge(req, {
+      hash: 'h'.repeat(40),
+      otp: '123456',
+      intent: 'enable',
+    } as never);
     await controller.logout(req, { refreshToken: 'rt' } as never);
     await controller.changePassword(req, {
       currentPassword: 'old',
       newPassword: 'newpass12',
     } as never);
     expect(auth.me).toHaveBeenCalledWith('u1');
-    expect(auth.setTwoFactorEnabled).toHaveBeenCalledWith('u1', true);
+    expect(auth.getMyProfile).toHaveBeenCalledWith('u1');
+    expect(auth.updateMyProfile).toHaveBeenCalledWith('u1', { firstName: 'Ada' });
+    expect(auth.startTwoFactorChallenge).toHaveBeenCalledWith(
+      'u1',
+      'enable',
+      'email',
+      expect.objectContaining({ userAgent: 'jest' }),
+    );
+    expect(auth.confirmTwoFactorChallenge).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ otp: '123456', intent: 'enable' }),
+      expect.any(Object),
+    );
     expect(auth.logout).toHaveBeenCalledWith('u1', 'rt');
     expect(auth.changePassword).toHaveBeenCalledWith(
       'u1',
       'old',
       'newpass12',
     );
+  });
+
+  it('deprecated PATCH me/two-factor returns 400', () => {
+    expect(() => controller.setTwoFactor()).toThrow(BadRequestException);
   });
 });

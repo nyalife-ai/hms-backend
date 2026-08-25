@@ -279,3 +279,15 @@ export function enumerateBuckets(
   }
   return keys;
 }
+
+/** Map previous-period bucket values onto current points by equal-length index. */
+export function alignSeriesByIndex(
+  current: Array<{ period: string; value: number }>,
+  previous: Array<{ period: string; value: number }> | null,
+): Array<{ period: string; value: number; previousValue: number | null }> {
+  return current.map((p, i) => ({
+    period: p.period,
+    value: p.value,
+    previousValue: previous ? (previous[i]?.value ?? null) : null,
+  }));
+}

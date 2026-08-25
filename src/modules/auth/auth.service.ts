@@ -10,14 +10,28 @@ import {
   Injectable,
   Logger,
   OnModuleInit,
+  Optional,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
-import { createHash, createHmac, randomBytes, randomInt } from 'crypto';
+import { createHash, createHmac, randomBytes, randomInt, randomUUID } from 'crypto';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { PrismaService } from '../../database/prisma/prisma.service';
+import {
+  STORAGE_PROVIDER,
+  type StorageProvider,
+} from '../../platform/storage';
 import { HmsAuditWriter } from '../audit/hms-audit.writer';
+import { NotificationDispatcherService } from '../notifications/dispatch/notification-dispatcher.service';
+import { createDomainEventEnvelope } from '../notifications/infrastructure/domain-event.envelope';
+import {
+  durableKey,
+  NOTIFICATION_JOBS,
+} from '../notifications/jobs/notification.jobs';
+import { DOMAIN_EVENT_TYPES } from '../notifications/policy/notification-policy.service';
 import { AuthMailService } from './auth-mail.service';
 import type {
   AuthTokens,
@@ -31,18 +45,41 @@ import {
   AUTH_USER_REPOSITORY,
   type IAuthUserRepository,
 } from './repositories/auth-user.repository.interface';
-import { EventEmitter2 } from '@nestjs/event-emitter';
-import { createDomainEventEnvelope } from '../notifications/infrastructure/domain-event.envelope';
-import { DOMAIN_EVENT_TYPES } from '../notifications/policy/notification-policy.service';
 
 const OTP_UA = 'password-reset-otp';
 const RESET_UA = 'password-reset';
 const LOGIN_2FA_UA = 'login-2fa-otp';
+const SECURITY_2FA_UA = 'security-2fa-otp';
 const OTP_TTL_MINUTES = 10;
 const RESET_TTL_MINUTES = 15;
 const OTP_MAX_ATTEMPTS = 5;
 const FORGOT_MAX_PER_EMAIL = 3;
 const FORGOT_WINDOW_MS = 15 * 60_000;
+const SECURITY_2FA_MAX_PER_USER = 5;
+const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+const AVATAR_MIME = new Set([
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+]);
+
+export type MyProfileDto = {
+  firstName: string;
+  lastName: string;
+  phone: string | null;
+  email: string;
+  profileImage: string | null;
+  notificationSoundEnabled: boolean;
+};
+
+export type TwoFactorChallengeResult = {
+  hash: string;
+  expiresInMinutes: number;
+  channel: 'email' | 'sms';
+  maskedDestination: string;
+};
 
 export type LoginResult =
   | AuthResponseDto
@@ -72,6 +109,9 @@ export class AuthService implements OnModuleInit {
   /** In-memory forgot-password rate limits (per email + per IP). */
   private readonly forgotHits = new Map<string, number[]>();
 
+  /** In-memory security-2FA challenge rate limits (per user). */
+  private readonly security2faHits = new Map<string, number[]>();
+
   constructor(
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
@@ -80,6 +120,12 @@ export class AuthService implements OnModuleInit {
     private readonly audit: HmsAuditWriter,
     private readonly mail: AuthMailService,
     private readonly events: EventEmitter2,
+    private readonly prisma: PrismaService,
+    @Optional()
+    private readonly notificationDispatcher?: NotificationDispatcherService,
+    @Optional()
+    @Inject(STORAGE_PROVIDER)
+    private readonly storage?: StorageProvider,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -247,6 +293,10 @@ export class AuthService implements OnModuleInit {
     return session;
   }
 
+  /**
+   * Internal toggle used only after OTP confirmation.
+   * Controllers must not expose a blind enable/disable path.
+   */
   async setTwoFactorEnabled(
     userId: string,
     enabled: boolean,
@@ -258,7 +308,10 @@ export class AuthService implements OnModuleInit {
     }
     await this.users.updateTwoFactorEnabled(userId, enabled);
     if (!enabled) {
-      await this.users.revokeUserChallenges(userId, [LOGIN_2FA_UA]);
+      await this.users.revokeUserChallenges(userId, [
+        LOGIN_2FA_UA,
+        SECURITY_2FA_UA,
+      ]);
     }
     await this.audit.recordMutation({
       userId,
@@ -276,6 +329,378 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('User not found');
     }
     return this.toPublic(refreshed);
+  }
+
+  async getMyProfile(userId: string): Promise<MyProfileDto> {
+    const user = await this.users.findById(userId);
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+    const profile = await this.prisma.profiles.findFirst({
+      where: { user_id: userId, deleted_at: null },
+    });
+    if (!profile) {
+      throw new BadRequestException('Profile not found for this account');
+    }
+    return {
+      firstName: profile.first_name,
+      lastName: profile.last_name,
+      phone: profile.phone ?? null,
+      email: user.email,
+      profileImage: profile.profile_image ?? null,
+      notificationSoundEnabled: Boolean(profile.notification_sound_enabled),
+    };
+  }
+
+  async updateMyProfile(
+    userId: string,
+    patch: {
+      firstName?: string;
+      lastName?: string;
+      phone?: string;
+      profileImage?: string;
+    },
+  ): Promise<MyProfileDto> {
+    const profile = await this.prisma.profiles.findFirst({
+      where: { user_id: userId, deleted_at: null },
+    });
+    if (!profile) {
+      throw new BadRequestException('Profile not found for this account');
+    }
+
+    const data: {
+      first_name?: string;
+      last_name?: string;
+      phone?: string | null;
+      profile_image?: string | null;
+    } = {};
+    if (patch.firstName !== undefined) {
+      const v = patch.firstName.trim();
+      if (!v) throw new BadRequestException('firstName cannot be empty');
+      data.first_name = v;
+    }
+    if (patch.lastName !== undefined) {
+      const v = patch.lastName.trim();
+      if (!v) throw new BadRequestException('lastName cannot be empty');
+      data.last_name = v;
+    }
+    if (patch.phone !== undefined) {
+      data.phone = patch.phone.trim() || null;
+    }
+    if (patch.profileImage !== undefined) {
+      data.profile_image = patch.profileImage.trim() || null;
+    }
+
+    if (Object.keys(data).length) {
+      await this.prisma.profiles.update({
+        where: { id: profile.id },
+        data,
+      });
+      this.accessUserCache.delete(userId);
+      await this.audit.recordMutation({
+        userId,
+        action: 'UPDATE',
+        entityType: 'auth.profile',
+        entityId: userId,
+        newValues: {
+          firstName: data.first_name,
+          lastName: data.last_name,
+          phone: data.phone,
+          profileImage: data.profile_image ? '[set]' : undefined,
+        },
+      });
+    }
+
+    return this.getMyProfile(userId);
+  }
+
+  async uploadMyAvatar(
+    userId: string,
+    file: {
+      buffer: Buffer;
+      originalname?: string;
+      mimetype?: string;
+      size?: number;
+    },
+  ): Promise<MyProfileDto> {
+    if (!this.storage) {
+      throw new ServiceUnavailableException('Storage is not configured');
+    }
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('File is required');
+    }
+    const size = file.size ?? file.buffer.length;
+    if (size > AVATAR_MAX_BYTES) {
+      throw new BadRequestException('Avatar must be 2MB or smaller');
+    }
+    const mime = (file.mimetype || '').toLowerCase();
+    if (!AVATAR_MIME.has(mime)) {
+      throw new BadRequestException(
+        'Avatar must be an image (jpeg, png, webp, or gif)',
+      );
+    }
+    const ext =
+      mime === 'image/png'
+        ? 'png'
+        : mime === 'image/webp'
+          ? 'webp'
+          : mime === 'image/gif'
+            ? 'gif'
+            : 'jpg';
+    const key = `profiles/${userId}/${randomUUID()}.${ext}`;
+    await this.storage.put(key, file.buffer, { contentType: mime });
+
+    let profileImage = key;
+    try {
+      const signed = await this.storage.signedUrl(key, {
+        expiresInSeconds: 60 * 60 * 24 * 365,
+        operation: 'get',
+      });
+      if (signed) profileImage = signed;
+    } catch {
+      // Persist storage key; clients can still resolve via storage.
+    }
+
+    return this.updateMyProfile(userId, { profileImage });
+  }
+
+  /**
+   * Step 1 — request OTP to enable/disable 2FA. Does not change two_factor_enabled.
+   */
+  async startTwoFactorChallenge(
+    userId: string,
+    intent: 'enable' | 'disable',
+    channel: 'email' | 'sms',
+    meta?: { userAgent?: string; ip?: string },
+  ): Promise<TwoFactorChallengeResult> {
+    this.assertSecurity2faRateLimit(userId);
+
+    const user = await this.users.findById(userId);
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    if (intent === 'enable' && user.twoFactorEnabled) {
+      throw new BadRequestException(
+        'Two-factor authentication is already enabled',
+      );
+    }
+    if (intent === 'disable' && !user.twoFactorEnabled) {
+      throw new BadRequestException('Two-factor authentication is not enabled');
+    }
+
+    const profile = await this.prisma.profiles.findFirst({
+      where: { user_id: userId, deleted_at: null },
+    });
+
+    let maskedDestination: string;
+    if (channel === 'sms') {
+      const phone = profile?.phone?.trim();
+      if (!phone) {
+        throw new BadRequestException(
+          'Add a phone number to your profile before using SMS verification',
+        );
+      }
+      maskedDestination = this.maskPhone(phone);
+    } else {
+      maskedDestination = this.maskEmail(user.email);
+    }
+
+    if (!this.notificationDispatcher) {
+      throw new ServiceUnavailableException(
+        'Notification delivery is unavailable',
+      );
+    }
+
+    await this.users.revokeUserChallenges(userId, [SECURITY_2FA_UA]);
+    this.otpAttempts.delete(`security2fa:${userId}`);
+
+    const otp = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const otpHash = this.hashOtp(userId, otp);
+    await this.users.createRefreshToken({
+      userId,
+      tokenHash: otpHash,
+      expiresAt: new Date(Date.now() + OTP_TTL_MINUTES * 60_000),
+      userAgent: SECURITY_2FA_UA,
+      ip: meta?.ip,
+    });
+
+    const eventId = randomUUID();
+    const templateKey =
+      channel === 'sms' ? 'auth.two_factor.otp.sms' : 'auth.two_factor.otp.email';
+    const variables = {
+      otp,
+      expiresInMinutes: String(OTP_TTL_MINUTES),
+      intent,
+    };
+
+    await this.notificationDispatcher.enqueueIntent({
+      eventId,
+      eventType: 'auth.two_factor.otp',
+      durable: [
+        {
+          userId,
+          notificationType: 'AUTH_2FA_OTP',
+          title: 'Security verification code',
+          body: `A verification code was sent via ${channel} to confirm your 2FA change.`,
+          priority: 'HIGH',
+          entityType: 'auth.two_factor',
+          entityId: userId,
+          actionPath: '/account',
+          idempotencyKey: durableKey(eventId, userId, 'AUTH_2FA_OTP'),
+        },
+      ],
+      jobs: [
+        channel === 'sms'
+          ? {
+              name: NOTIFICATION_JOBS.SEND_SMS,
+              data: {
+                eventId,
+                templateKey,
+                userId,
+                variables,
+                dedupeKey: `auth-2fa-otp:${eventId}`,
+              },
+              jobId: `auth-2fa-otp:${eventId}`,
+            }
+          : {
+              name: NOTIFICATION_JOBS.SEND_EMAIL,
+              data: {
+                eventId,
+                templateKey,
+                userId,
+                variables,
+                dedupeKey: `auth-2fa-otp:${eventId}`,
+              },
+              jobId: `auth-2fa-otp:${eventId}`,
+            },
+      ],
+    });
+
+    await this.audit.recordMutation({
+      userId,
+      action: 'UPDATE',
+      entityType: 'auth.two_factor',
+      entityId: userId,
+      newValues: { event: 'SECURITY_2FA_CHALLENGE', intent, channel },
+      ipAddress: meta?.ip,
+      userAgent: meta?.userAgent,
+    });
+
+    return {
+      hash: otpHash,
+      expiresInMinutes: OTP_TTL_MINUTES,
+      channel,
+      maskedDestination,
+    };
+  }
+
+  /**
+   * Step 2 — verify OTP then enable/disable 2FA.
+   */
+  async confirmTwoFactorChallenge(
+    userId: string,
+    input: { hash: string; otp: string; intent: 'enable' | 'disable' },
+    meta?: { userAgent?: string; ip?: string },
+  ): Promise<AuthUserPublic> {
+    const code = input.otp.trim();
+    if (!/^\d{6}$/.test(code)) {
+      throw new BadRequestException('Enter the 6-digit verification code');
+    }
+    const challengeHash = input.hash.trim();
+    if (!challengeHash || challengeHash.length < 32) {
+      throw new BadRequestException('Invalid verification challenge');
+    }
+
+    const user = await this.users.findById(userId);
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    if (input.intent === 'enable' && user.twoFactorEnabled) {
+      throw new BadRequestException(
+        'Two-factor authentication is already enabled',
+      );
+    }
+    if (input.intent === 'disable' && !user.twoFactorEnabled) {
+      throw new BadRequestException('Two-factor authentication is not enabled');
+    }
+
+    const attemptKey = `security2fa:${userId}`;
+    const attempts = this.otpAttempts.get(attemptKey);
+    if (attempts && attempts.count >= OTP_MAX_ATTEMPTS) {
+      if (Date.now() - attempts.windowStarted < FORGOT_WINDOW_MS) {
+        throw new UnauthorizedException(
+          'Too many incorrect codes. Request a new code and try again later.',
+        );
+      }
+      this.otpAttempts.delete(attemptKey);
+    }
+
+    const record = await this.users.findChallengeByHash(
+      challengeHash,
+      SECURITY_2FA_UA,
+    );
+    if (
+      !record ||
+      record.revokedAt ||
+      record.expiresAt.getTime() < Date.now() ||
+      record.userId !== userId
+    ) {
+      this.bumpOtpAttempt(attemptKey);
+      throw new UnauthorizedException('Invalid or expired verification code');
+    }
+
+    const expected = this.hashOtp(userId, code);
+    if (expected !== challengeHash) {
+      this.bumpOtpAttempt(attemptKey);
+      throw new UnauthorizedException('Invalid or expired verification code');
+    }
+
+    await this.users.revokeRefreshByHash(challengeHash);
+    this.otpAttempts.delete(attemptKey);
+
+    const enabled = input.intent === 'enable';
+    const pub = await this.setTwoFactorEnabled(userId, enabled);
+
+    await this.audit.recordMutation({
+      userId,
+      action: 'UPDATE',
+      entityType: 'auth.two_factor',
+      entityId: userId,
+      newValues: { event: 'SECURITY_2FA_CONFIRMED', intent: input.intent },
+      ipAddress: meta?.ip,
+      userAgent: meta?.userAgent,
+    });
+
+    return pub;
+  }
+
+  private assertSecurity2faRateLimit(userId: string): void {
+    const now = Date.now();
+    const hits = (this.security2faHits.get(userId) ?? []).filter(
+      (t) => now - t < FORGOT_WINDOW_MS,
+    );
+    if (hits.length >= SECURITY_2FA_MAX_PER_USER) {
+      throw new BadRequestException(
+        'Too many verification requests. Please wait a few minutes and try again.',
+      );
+    }
+    hits.push(now);
+    this.security2faHits.set(userId, hits);
+  }
+
+  private maskEmail(email: string): string {
+    const [local, domain] = email.split('@');
+    if (!domain) return '***';
+    const visible = local.slice(0, Math.min(2, local.length));
+    return `${visible}***@${domain}`;
+  }
+
+  private maskPhone(phone: string): string {
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length < 4) return '***';
+    return `***${digits.slice(-4)}`;
   }
 
   async registerPatient(

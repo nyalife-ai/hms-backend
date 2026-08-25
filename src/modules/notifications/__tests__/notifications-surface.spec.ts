@@ -228,6 +228,12 @@ describe('templates + jobs + constants', () => {
     expect(renderNotificationBody('Hi {{name}}', { name: 'Amina' })).toBe('Hi Amina');
     expect(renderNotificationBody('Hi {{name}}', {})).toBe('Hi ');
     expect(findNotificationTemplate('notifications.sms.test')).toEqual(tpl);
+    expect(getNotificationTemplate('auth.two_factor.otp.email')?.channel).toBe(
+      'email',
+    );
+    expect(getNotificationTemplate('auth.two_factor.otp.sms')?.channel).toBe(
+      'sms',
+    );
   });
 
   it('builds durable keys and exposes constants', () => {

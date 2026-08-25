@@ -209,3 +209,61 @@ export class SetTwoFactorDto {
   @IsBoolean()
   enabled!: boolean;
 }
+
+export class UpdateMyProfileDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  firstName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  lastName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  phone?: string;
+
+  @ApiPropertyOptional({
+    description: 'Profile image URL or storage path (prefer avatar upload endpoint)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  profileImage?: string;
+}
+
+export class TwoFactorChallengeDto {
+  @ApiProperty({ enum: ['enable', 'disable'] })
+  @IsIn(['enable', 'disable'])
+  intent!: 'enable' | 'disable';
+
+  @ApiProperty({ enum: ['email', 'sms'] })
+  @IsIn(['email', 'sms'])
+  channel!: 'email' | 'sms';
+}
+
+export class TwoFactorConfirmDto {
+  @ApiProperty({
+    description: 'Challenge hash returned by /auth/me/two-factor/challenge',
+  })
+  @IsString()
+  @MinLength(32)
+  hash!: string;
+
+  @ApiProperty({ example: '123456', description: '6-digit one-time code' })
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'OTP must be a 6-digit code' })
+  otp!: string;
+
+  @ApiProperty({ enum: ['enable', 'disable'] })
+  @IsIn(['enable', 'disable'])
+  intent!: 'enable' | 'disable';
+}

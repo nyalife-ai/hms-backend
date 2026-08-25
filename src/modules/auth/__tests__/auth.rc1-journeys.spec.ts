@@ -85,6 +85,11 @@ describe('AuthService RC1 journeys', () => {
       audit as any,
       mail as unknown as AuthMailService,
       { emit: jest.fn() } as any,
+      {
+        profiles: { findFirst: jest.fn(), update: jest.fn() },
+      } as any,
+      { enqueueIntent: jest.fn() } as any,
+      undefined,
     );
   });
 

@@ -2,6 +2,7 @@ import {
   changePercent,
   resolvePeriod,
   toYmd,
+  alignSeriesByIndex,
 } from '../services/period.util';
 
 describe('analytics period.util', () => {
@@ -34,5 +35,24 @@ describe('analytics period.util', () => {
     expect(changePercent(0, 0)).toBe(0);
     expect(changePercent(120, 100)).toBe(20);
     expect(changePercent(80, 100)).toBe(-20);
+  });
+
+  it('alignSeriesByIndex maps previous values by equal-length index', () => {
+    const current = [
+      { period: '2026-08-01', value: 10 },
+      { period: '2026-08-02', value: 20 },
+    ];
+    const previous = [
+      { period: '2026-07-01', value: 5 },
+      { period: '2026-07-02', value: 15 },
+    ];
+    expect(alignSeriesByIndex(current, previous)).toEqual([
+      { period: '2026-08-01', value: 10, previousValue: 5 },
+      { period: '2026-08-02', value: 20, previousValue: 15 },
+    ]);
+    expect(alignSeriesByIndex(current, null)).toEqual([
+      { period: '2026-08-01', value: 10, previousValue: null },
+      { period: '2026-08-02', value: 20, previousValue: null },
+    ]);
   });
 });
