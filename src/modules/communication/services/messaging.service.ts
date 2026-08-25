@@ -1413,6 +1413,141 @@ export class MessagingService {
     );
   }
 
+  public async updateParticipantRole(
+    actorId: string,
+    conversationId: string,
+    targetUserId: string,
+    role: 'ADMIN' | 'MEMBER',
+    actorSystemRole?: string,
+  ) {
+    this.requireDb();
+    const membership = await this.requireMembership(actorId, conversationId);
+    const conversation = await this.prisma.conversations.findFirst({
+      where: { id: conversationId, deleted_at: null },
+      select: { id: true, conversation_type: true },
+    });
+    if (!conversation) throw new NotFoundException('Conversation not found');
+
+    const manageable = new Set<string>([
+      CONVERSATION_TYPES.GROUP,
+      CONVERSATION_TYPES.DEPARTMENT,
+      CONVERSATION_TYPES.TEAM,
+    ]);
+    if (!manageable.has(conversation.conversation_type)) {
+      throw new BadRequestException(
+        'Roles can only be managed for GROUP, DEPARTMENT, or TEAM conversations',
+      );
+    }
+
+    const isSuper = actorSystemRole === 'SUPER_ADMIN';
+    if (membership.role !== 'ADMIN' && !isSuper) {
+      throw new ForbiddenException(
+        'Only conversation admins can change member roles',
+      );
+    }
+
+    const target = await this.prisma.conversationParticipants.findFirst({
+      where: {
+        conversation_id: conversationId,
+        user_id: targetUserId,
+        left_at: null,
+      },
+    });
+    if (!target) throw new NotFoundException('Participant not found');
+
+    if (role === 'MEMBER' && target.role === 'ADMIN') {
+      const admins = await this.prisma.conversationParticipants.count({
+        where: {
+          conversation_id: conversationId,
+          left_at: null,
+          role: 'ADMIN',
+        },
+      });
+      if (admins <= 1) {
+        throw new BadRequestException(
+          'Cannot demote the last admin from the conversation',
+        );
+      }
+    }
+
+    await this.prisma.conversationParticipants.updateMany({
+      where: {
+        conversation_id: conversationId,
+        user_id: targetUserId,
+        left_at: null,
+      },
+      data: { role },
+    });
+
+    const detail = await this.getConversation(actorId, conversationId);
+    await this.publishRealtime(MESSAGE_EVENTS.CONVERSATION_UPDATED, {
+      room: `conversation:${conversationId}`,
+      userIds: detail.participants.map((p: { userId: string }) => p.userId),
+      payload: {
+        conversationId,
+        participants: detail.participants,
+        action: 'participant.role_updated',
+        targetUserId,
+        role,
+      },
+    });
+    return detail;
+  }
+
+  public async updateConversation(
+    actorId: string,
+    conversationId: string,
+    body: { name?: string },
+    actorSystemRole?: string,
+  ) {
+    this.requireDb();
+    const membership = await this.requireMembership(actorId, conversationId);
+    const conversation = await this.prisma.conversations.findFirst({
+      where: { id: conversationId, deleted_at: null },
+      select: { id: true, conversation_type: true, name: true },
+    });
+    if (!conversation) throw new NotFoundException('Conversation not found');
+
+    const manageable = new Set<string>([
+      CONVERSATION_TYPES.GROUP,
+      CONVERSATION_TYPES.DEPARTMENT,
+      CONVERSATION_TYPES.TEAM,
+    ]);
+    if (!manageable.has(conversation.conversation_type)) {
+      throw new BadRequestException(
+        'Only group conversations can be renamed',
+      );
+    }
+
+    const isSuper = actorSystemRole === 'SUPER_ADMIN';
+    if (membership.role !== 'ADMIN' && !isSuper) {
+      throw new ForbiddenException(
+        'Only conversation admins can update group details',
+      );
+    }
+
+    const name = body.name?.trim();
+    if (!name) throw new BadRequestException('Group name is required');
+
+    await this.prisma.conversations.update({
+      where: { id: conversationId },
+      data: { name, updated_at: new Date() },
+    });
+
+    const detail = await this.getConversation(actorId, conversationId);
+    await this.publishRealtime(MESSAGE_EVENTS.CONVERSATION_UPDATED, {
+      room: `conversation:${conversationId}`,
+      userIds: detail.participants.map((p: { userId: string }) => p.userId),
+      payload: {
+        conversationId,
+        participants: detail.participants,
+        name: detail.name,
+        action: 'conversation.updated',
+      },
+    });
+    return detail;
+  }
+
   public async uploadAttachment(
     actorId: string,
     conversationId: string,

@@ -74,6 +74,8 @@ export type AppointmentReminderJobData = {
   readonly appointmentId: string;
   readonly expectedStartsAt: string;
   readonly dedupeKey: string;
+  readonly offsetKey?: string;
+  readonly doctorUserId?: string;
 };
 
 export type StkPushJobData = {

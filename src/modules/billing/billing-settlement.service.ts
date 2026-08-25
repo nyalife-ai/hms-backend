@@ -207,6 +207,10 @@ export class BillingSettlementService {
     return lines;
   }
 
+  /**
+   * Authoritative billing tax rate from `billing.tax_rates` (not Admin Settings `tax_rate`).
+   * `tax_enabled` may disable tax application entirely.
+   */
   private async resolveDefaultTaxRateId(): Promise<string | undefined> {
     try {
       const enabledRow = await this.prisma.settings.findUnique({
@@ -226,6 +230,76 @@ export class BillingSettlementService {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Tax-inclusive checkout amount for M-Pesa STK — must match settleVisit / invoice totals.
+   */
+  async resolveTaxInclusiveCharge(input: {
+    lines: Array<{ description: string; amount: number }>;
+    invoiceId?: string | null;
+  }): Promise<{
+    amount: number;
+    subtotal: string;
+    tax: string;
+    totalAmount: string;
+    taxRatePercentage: string | null;
+    taxCode: string | null;
+  }> {
+    if (input.invoiceId) {
+      const inv = await this.finance.getInvoice(input.invoiceId);
+      const due =
+        inv.status === 'DRAFT'
+          ? Number(inv.totalAmount)
+          : Number(inv.outstanding);
+      if (!(due > 0)) {
+        throw new BadRequestException('Invoice has no outstanding balance');
+      }
+      return {
+        amount: due,
+        subtotal: inv.subtotal,
+        tax: inv.tax,
+        totalAmount: inv.totalAmount,
+        taxRatePercentage: null,
+        taxCode: null,
+      };
+    }
+
+    if (!input.lines.length) {
+      throw new BadRequestException('Nothing to charge');
+    }
+
+    const taxRateId = await this.resolveDefaultTaxRateId();
+    let taxRatePercentage: string | null = null;
+    let taxCode: string | null = null;
+    if (taxRateId) {
+      const rate = await this.prisma.taxRates.findUnique({
+        where: { id: taxRateId },
+        select: { rate_percentage: true, tax_code: true, is_active: true },
+      });
+      if (rate?.is_active) {
+        taxRatePercentage = rate.rate_percentage.toString();
+        taxCode = rate.tax_code;
+      }
+    }
+
+    const totals = calculateInvoiceTotals({
+      lines: input.lines.map((l) => ({
+        description: l.description,
+        quantity: 1,
+        unitPrice: l.amount,
+      })),
+      taxRatePercentage,
+    });
+
+    return {
+      amount: Number(totals.totalAmount),
+      subtotal: totals.subtotal,
+      tax: totals.tax,
+      totalAmount: totals.totalAmount,
+      taxRatePercentage,
+      taxCode,
+    };
   }
 
   /**
@@ -458,6 +532,12 @@ export class BillingSettlementService {
             : `Cash settlement for ${issued.invoiceNumber}`,
         allocateToInvoiceId: issued.id,
         actorUserId: input.createdByUserId,
+        skipDomainEvent: input.mode === 'MPESA',
+        domainPayload: {
+          purpose: 'VISIT_SETTLEMENT',
+          invoiceId: issued.id,
+          invoiceNumber: issued.invoiceNumber,
+        },
       });
       return {
         invoiceId: issued.id,
@@ -578,7 +658,9 @@ export class BillingSettlementService {
     });
   }
 
-  /** Server quote for a visit payload — authoritative total for UI display. */
+  /** Server quote for a visit payload — authoritative total for UI display.
+   * Uses the same billing tax-rate resolution as settleVisit so quotes match invoices.
+   */
   async quoteVisit(input: {
     consultCount?: number;
     labCount?: number;
@@ -586,6 +668,20 @@ export class BillingSettlementService {
     extraServiceIds?: string[];
   }) {
     await this.ensureFeeSchedule();
+    const taxRateId = await this.resolveDefaultTaxRateId();
+    let taxRatePercentage: string | null = null;
+    let taxCode: string | null = null;
+    if (taxRateId) {
+      const rate = await this.prisma.taxRates.findUnique({
+        where: { id: taxRateId },
+        select: { rate_percentage: true, tax_code: true, is_active: true },
+      });
+      if (rate?.is_active) {
+        taxRatePercentage = rate.rate_percentage.toString();
+        taxCode = rate.tax_code;
+      }
+    }
+
     const baseCounts =
       (input.consultCount ?? 0) +
       (input.labCount ?? 0) +
@@ -596,6 +692,7 @@ export class BillingSettlementService {
             consultCount: input.consultCount,
             labCount: input.labCount,
             medCount: input.medCount,
+            taxRateId,
           })
         : {
             lines: [] as Array<{
@@ -610,10 +707,27 @@ export class BillingSettlementService {
             discount: '0',
             tax: '0',
             totalAmount: '0',
+            taxRatePercentage: null as string | null,
+            taxCode: null as string | null,
           };
 
     const extraIds = [...new Set(input.extraServiceIds ?? [])];
-    if (!extraIds.length) return base;
+    if (!extraIds.length) {
+      return {
+        ...base,
+        taxRatePercentage:
+          'taxRatePercentage' in base &&
+          (base as { taxRatePercentage?: string | null }).taxRatePercentage !=
+            null
+            ? (base as { taxRatePercentage?: string | null }).taxRatePercentage
+            : taxRatePercentage,
+        taxCode:
+          'taxCode' in base &&
+          (base as { taxCode?: string | null }).taxCode != null
+            ? (base as { taxCode?: string | null }).taxCode
+            : taxCode,
+      };
+    }
 
     const extras = await this.prisma.services.findMany({
       where: { id: { in: extraIds }, is_active: true },
@@ -627,7 +741,10 @@ export class BillingSettlementService {
       totalPrice: s.standard_price.toString(),
     }));
     const merged = [...base.lines, ...extraLines];
-    const totals = calculateInvoiceTotals({ lines: merged });
+    const totals = calculateInvoiceTotals({
+      lines: merged,
+      taxRatePercentage,
+    });
     return {
       lines: merged.map((line, idx) => ({
         ...line,
@@ -639,6 +756,8 @@ export class BillingSettlementService {
       discount: totals.discount,
       tax: totals.tax,
       totalAmount: totals.totalAmount,
+      taxRatePercentage,
+      taxCode,
     };
   }
 
@@ -665,7 +784,11 @@ export class BillingSettlementService {
         `Patient ${input.mrn} not found — register the patient before billing`,
       );
     }
-    const quote = await this.finance.quoteVisitLines({ consultCount: 1 });
+    const taxRateId = await this.resolveDefaultTaxRateId();
+    const quote = await this.finance.quoteVisitLines({
+      consultCount: 1,
+      taxRateId,
+    });
     if (!quote.lines.length) {
       throw new BadRequestException('Consultation service is not configured');
     }
@@ -678,6 +801,7 @@ export class BillingSettlementService {
         quantity: l.quantity,
         unitPrice: l.unitPrice,
       })),
+      taxRateId,
       actorUserId: input.actorUserId,
     });
     return {
@@ -702,6 +826,9 @@ export class BillingSettlementService {
     transactionReference?: string;
     mpesaReceipt?: string;
     notes?: string;
+    visitId?: string;
+    purpose?: string;
+    skipDomainEvent?: boolean;
   }): Promise<{
     invoiceId: string;
     invoiceNumber: string;
@@ -825,6 +952,13 @@ export class BillingSettlementService {
           : `Cash collection for ${invoice.invoiceNumber}`),
       allocateToInvoiceId: invoice.id,
       actorUserId: input.actorUserId,
+      skipDomainEvent: input.skipDomainEvent,
+      domainPayload: {
+        visitId: input.visitId,
+        purpose: input.purpose ?? 'INVOICE_COLLECTION',
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+      },
     });
 
     const refreshed = await this.finance.getInvoice(invoice.id);

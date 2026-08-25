@@ -439,6 +439,18 @@ export class VisitsService implements OnModuleInit {
       stage: 'WAITING_DOCTOR',
     }).then(async (updated) => {
       await this.persistTriageVitalsRow(updated, vitals, actor);
+      const doctorUserId = await this.resolveDoctorUserId(
+        updated.doctorStaffId ?? body.doctorStaffId,
+      );
+      const patientId = await this.resolvePatientIdByMrn(updated.mrn);
+      this.emitDomain('triage.completed', {
+        visitId: updated.id,
+        patientId,
+        doctorUserId,
+        patientName: updated.patientName,
+        mrn: updated.mrn,
+        priority,
+      });
       return updated;
     });
   }

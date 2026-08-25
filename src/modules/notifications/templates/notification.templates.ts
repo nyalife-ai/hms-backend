@@ -117,6 +117,30 @@ const TEMPLATES: readonly NotificationTemplateDefinition[] = [
     body: 'Payment for your NyaLife visit did not complete. Please try again at reception.',
   },
   {
+    key: 'payment.failed.staff.push',
+    channel: 'fcm',
+    subject: 'M-Pesa payment failed',
+    body: 'Payment failed ({{amount}}). {{reason}}',
+  },
+  {
+    key: 'payment.received.triage.push',
+    channel: 'fcm',
+    subject: 'Ready for triage',
+    body: 'Consult fee paid ({{amount}}). Patient ready for triage.',
+  },
+  {
+    key: 'payment.received.pharmacy.push',
+    channel: 'fcm',
+    subject: 'Pharmacy order paid',
+    body: 'Payment cleared for pharmacy order ({{amount}}).',
+  },
+  {
+    key: 'triage.completed.doctor.push',
+    channel: 'fcm',
+    subject: 'Patient ready for consultation',
+    body: '{{patientName}} ({{mrn}}) completed triage — {{priority}}.',
+  },
+  {
     key: 'admission.created.staff.push',
     channel: 'websocket',
     subject: 'Patient admitted',

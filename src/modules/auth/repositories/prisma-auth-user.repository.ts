@@ -7,6 +7,7 @@ import { createHash } from 'crypto';
 import { PrismaService } from '../../../database/prisma/prisma.service';
 import { AUTH_USERS } from '../auth.users';
 import {
+  MODULE_PERMISSIONS,
   modulePermission,
   ROLE_MODULE_ACCESS,
 } from '../auth.permissions';
@@ -345,6 +346,22 @@ export class PrismaAuthUserRepository implements IAuthUserRepository {
 
   public async syncRoleModulePermissions(): Promise<void> {
     if (!this.prisma.isConnected) return;
+
+    // Ensure every MODULE_PERMISSIONS key exists as a DB row (seed may lag behind
+    // new modules such as `account`). Without this, ROLE_MODULE_ACCESS links are
+    // skipped and staff JWT/session permission lists omit module:account.
+    for (const module of MODULE_PERMISSIONS) {
+      const name = modulePermission(module);
+      await this.prisma.permissions.upsert({
+        where: { name },
+        create: {
+          name,
+          module,
+          description: `Access to ${module} module`,
+        },
+        update: { module },
+      });
+    }
 
     const roles = await this.prisma.roles.findMany();
     const permissions = await this.prisma.permissions.findMany();

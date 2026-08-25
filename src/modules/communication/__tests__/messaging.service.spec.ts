@@ -442,4 +442,44 @@ describe('MessagingService', () => {
       service.removeParticipant('u1', 'c-group', 'u1'),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
+
+  it('editMessage rejects non-sender edits', async () => {
+    prisma.messages.findFirst.mockResolvedValue({
+      id: 'm1',
+      conversation_id: 'c1',
+      sender_id: 'u1',
+      is_deleted: false,
+    });
+    await expect(
+      service.editMessage('u2', 'm1', 'hacked'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('softDeleteMessage rejects non-sender deletes', async () => {
+    prisma.messages.findFirst.mockResolvedValue({
+      id: 'm1',
+      conversation_id: 'c1',
+      sender_id: 'u1',
+      is_deleted: false,
+    });
+    await expect(
+      service.softDeleteMessage('u2', 'm1'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('updateParticipantRole forbids non-admins', async () => {
+    prisma.conversationParticipants.findFirst.mockResolvedValue({
+      user_id: 'u2',
+      role: 'MEMBER',
+      left_at: null,
+    });
+    prisma.conversations.findFirst.mockResolvedValue({
+      id: 'c-group',
+      conversation_type: CONVERSATION_TYPES.GROUP,
+      deleted_at: null,
+    });
+    await expect(
+      service.updateParticipantRole('u2', 'c-group', 'u3', 'ADMIN'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
 });

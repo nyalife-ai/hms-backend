@@ -25,6 +25,8 @@ const PRESETS = [
   'last_7_days',
   'last_30_days',
   'last_90_days',
+  'last_180_days',
+  'last_365_days',
   'this_week',
   'last_week',
   'this_month',

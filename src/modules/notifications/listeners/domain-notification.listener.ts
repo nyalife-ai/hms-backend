@@ -40,6 +40,7 @@ export class DomainNotificationListener {
   @OnEvent(DOMAIN_EVENT_TYPES.PRESCRIPTION_DISPENSED)
   @OnEvent(DOMAIN_EVENT_TYPES.PAYMENT_RECEIVED)
   @OnEvent(DOMAIN_EVENT_TYPES.PAYMENT_FAILED)
+  @OnEvent(DOMAIN_EVENT_TYPES.TRIAGE_COMPLETED)
   @OnEvent(DOMAIN_EVENT_TYPES.INVOICE_ISSUED)
   @OnEvent(DOMAIN_EVENT_TYPES.INSURANCE_CLAIM_SUBMITTED)
   @OnEvent(DOMAIN_EVENT_TYPES.INSURANCE_CLAIM_APPROVED)
@@ -61,6 +62,12 @@ export class DomainNotificationListener {
       const appointmentId = (envelope.payload as { appointmentId?: string })
         .appointmentId;
       if (appointmentId) {
+        for (const key of ['2d', '5h', '30m', '15m'] as const) {
+          await this.dispatcher.cancelJob(
+            `appointment-reminder:${appointmentId}:${key}`,
+          );
+        }
+        // Legacy single-offset job id
         await this.dispatcher.cancelJob(
           `appointment-reminder:${appointmentId}`,
         );
@@ -274,6 +281,37 @@ export class DomainNotificationListener {
           },
         };
       }
+    }
+    if (event.type === DOMAIN_EVENT_TYPES.PAYMENT_RECEIVED) {
+      const payload = event.payload as {
+        purpose?: string;
+        source?: string;
+        nurseUserIds?: string[];
+        billingUserIds?: string[];
+        pharmacistUserIds?: string[];
+      };
+      const next = { ...payload };
+      if (
+        payload.purpose === 'CONSULT_FEE' &&
+        !payload.nurseUserIds?.length
+      ) {
+        next.nurseUserIds = await this.resolveRoleUserIds(['NURSE']);
+      }
+      if (
+        (payload.purpose === 'VISIT_SETTLEMENT' ||
+          payload.purpose === 'PAYMENT' ||
+          !payload.purpose) &&
+        !payload.billingUserIds?.length
+      ) {
+        next.billingUserIds = await this.resolveRoleUserIds([
+          'ACCOUNTANT',
+          'RECEPTIONIST',
+        ]);
+      }
+      if (payload.source === 'PHARMACY' && !payload.pharmacistUserIds?.length) {
+        next.pharmacistUserIds = await this.resolveRoleUserIds(['PHARMACIST']);
+      }
+      return { ...event, payload: next };
     }
     return event;
   }

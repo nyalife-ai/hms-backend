@@ -77,6 +77,29 @@ function displayNotes(notes: string | null | undefined): string | null {
   return notes.replace(TAX_RATE_META, '').trim() || null;
 }
 
+/** Canonical invoice money fields — amountPaid is an alias of allocated. */
+function invoiceMoneyFields(input: {
+  totalAmount: string;
+  allocated: string;
+  outstanding: string;
+  status: string;
+  subtotal: string;
+  discount: string;
+  tax: string;
+}) {
+  return {
+    subtotal: input.subtotal,
+    discount: input.discount,
+    tax: input.tax,
+    totalAmount: input.totalAmount,
+    allocated: input.allocated,
+    amountPaid: input.allocated,
+    outstanding: input.outstanding,
+    balance: input.outstanding,
+    status: input.status,
+  };
+}
+
 function patientDisplayName(patient: {
   patient_number: string;
   user: { core_profiles_user_id: Array<{ first_name: string; last_name: string }> };
@@ -994,6 +1017,8 @@ export class BillingFinanceService {
                 r.total_amount.toString(),
                 moneyToDecimal(allocated),
               );
+        const allocatedStr = moneyToDecimal(allocated);
+        const outstandingStr = moneyToDecimal(outstanding);
         return {
           id: r.id,
           invoiceNumber: r.invoice_number,
@@ -1002,13 +1027,15 @@ export class BillingFinanceService {
           patientMrn: r.patient.patient_number,
           invoiceDate: r.invoice_date,
           dueDate: r.due_date,
-          subtotal: r.subtotal.toString(),
-          discount: r.discount.toString(),
-          tax: r.tax.toString(),
-          totalAmount: r.total_amount.toString(),
-          allocated: moneyToDecimal(allocated),
-          outstanding: moneyToDecimal(outstanding),
-          status: r.status,
+          ...invoiceMoneyFields({
+            subtotal: r.subtotal.toString(),
+            discount: r.discount.toString(),
+            tax: r.tax.toString(),
+            totalAmount: r.total_amount.toString(),
+            allocated: allocatedStr,
+            outstanding: outstandingStr,
+            status: r.status,
+          }),
           notes: displayNotes(r.notes),
         };
       }),
@@ -1060,6 +1087,8 @@ export class BillingFinanceService {
             row.total_amount.toString(),
             moneyToDecimal(allocated),
           );
+    const allocatedStr = moneyToDecimal(allocated);
+    const outstandingStr = moneyToDecimal(outstanding);
     return {
       id: row.id,
       invoiceNumber: row.invoice_number,
@@ -1070,13 +1099,15 @@ export class BillingFinanceService {
       admissionId: row.admission_id,
       invoiceDate: row.invoice_date,
       dueDate: row.due_date,
-      subtotal: row.subtotal.toString(),
-      discount: row.discount.toString(),
-      tax: row.tax.toString(),
-      totalAmount: row.total_amount.toString(),
-      allocated: moneyToDecimal(allocated),
-      outstanding: moneyToDecimal(outstanding),
-      status: row.status,
+      ...invoiceMoneyFields({
+        subtotal: row.subtotal.toString(),
+        discount: row.discount.toString(),
+        tax: row.tax.toString(),
+        totalAmount: row.total_amount.toString(),
+        allocated: allocatedStr,
+        outstanding: outstandingStr,
+        status: row.status,
+      }),
       isVoided: row.is_voided,
       voidReason: row.void_reason,
       notes: displayNotes(row.notes),
@@ -1755,6 +1786,9 @@ export class BillingFinanceService {
     notes?: string;
     allocateToInvoiceId?: string;
     actorUserId: string;
+    /** When true, caller emits a richer domain event (e.g. M-Pesa finalize). */
+    skipDomainEvent?: boolean;
+    domainPayload?: Record<string, string | undefined>;
   }) {
     const amount = moneyFrom(input.amount);
     assertPositive(amount, 'Payment amount');
@@ -1850,6 +1884,20 @@ export class BillingFinanceService {
         amount: moneyToDecimal(amount),
       },
     });
+
+    // Domain event after commit — notification failures must not roll back payment.
+    if (!input.skipDomainEvent) {
+      this.emitDomainEvent('payment.received', {
+        patientId: input.patientId,
+        paymentId: created.id,
+        amount: moneyToDecimal(amount),
+        invoiceId: input.allocateToInvoiceId,
+        purpose: input.domainPayload?.purpose ?? 'PAYMENT',
+        visitId: input.domainPayload?.visitId,
+        ...input.domainPayload,
+      });
+    }
+
     return this.getPayment(created.id);
   }
 
@@ -2872,6 +2920,15 @@ export class BillingFinanceService {
       };
     });
 
+    let taxCode: string | null = null;
+    if (input.taxRateId) {
+      const taxRate = await this.prisma.taxRates.findUnique({
+        where: { id: input.taxRateId },
+        select: { tax_code: true },
+      });
+      taxCode = taxRate?.tax_code ?? null;
+    }
+
     const totals = calculateInvoiceTotals({
       lines,
       discount: input.discount ?? 0,
@@ -2889,6 +2946,8 @@ export class BillingFinanceService {
       discount: totals.discount,
       tax: totals.tax,
       totalAmount: totals.totalAmount,
+      taxRatePercentage,
+      taxCode,
     };
   }
 }

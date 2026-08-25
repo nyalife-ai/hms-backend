@@ -3,12 +3,17 @@
  *
  * Journey (correlation id = mpesa_transactions.id):
  *   UI → POST /billing/checkout/stk
- *     → create row QUEUED + Bull job payment.stk_push
+ *     → create row (DB status PENDING, stage QUEUED) + Bull job payment.stk_push
  *     → worker PROCESSING → Daraja STK
- *     → PENDING (STK accepted, waiting customer/callback)
+ *     → PENDING / stage WAITING_CALLBACK (STK accepted, waiting customer/callback)
  *     → SUCCESS | FAILED | CANCELLED | TIMEOUT
  *
  * QUEUED / PROCESSING / PENDING are NOT payment success.
+ *
+ * DB note: the original CHECK only allows PENDING|SUCCESS|FAILED|CANCELLED.
+ * Logical lifecycle (QUEUED/PROCESSING/FINALIZING/TIMEOUT) lives in payload.stage
+ * (+ result_code for FINALIZING/TIMEOUT) so STK works even before the lifecycle
+ * migration is applied. Prefer applying 20260825070000_mpesa_lifecycle_statuses.
  */
 
 export const MPESA_STATUSES = [
@@ -23,6 +28,17 @@ export const MPESA_STATUSES = [
 ] as const;
 
 export type MpesaStatus = (typeof MPESA_STATUSES)[number];
+
+/**
+ * Status values safe for billing.mpesa_transactions under the original CHECK
+ * constraint (and the expanded lifecycle migration).
+ */
+export const DB_SAFE_MPESA_STATUSES = [
+  'PENDING',
+  'SUCCESS',
+  'FAILED',
+  'CANCELLED',
+] as const;
 
 /** Fine-grained stage for timeline / UI (stored in payload.stage + payload.timeline). */
 export const MPESA_STAGES = [
@@ -71,6 +87,69 @@ export const MPESA_STK_TIMEOUT_MS = 90_000;
 
 export function isTerminalMpesaStatus(status: string): boolean {
   return TERMINAL_MPESA_STATUSES.has(status);
+}
+
+/** Map logical lifecycle status → column value allowed by legacy CHECK. */
+export function toDbMpesaStatus(logical: string): string {
+  switch (logical) {
+    case 'QUEUED':
+    case 'PROCESSING':
+    case 'FINALIZING':
+    case 'PENDING':
+      return 'PENDING';
+    case 'TIMEOUT':
+      return 'FAILED';
+    case 'SUCCESS':
+    case 'FAILED':
+    case 'CANCELLED':
+      return logical;
+    default:
+      return 'PENDING';
+  }
+}
+
+/** Public/API status derived from DB row + payload.stage. */
+export function resolvePublicMpesaStatus(tx: {
+  status: string;
+  result_code?: string | null;
+  payload?: unknown;
+}): string {
+  if (tx.status === 'SUCCESS' || tx.status === 'CANCELLED') return tx.status;
+  if (tx.status === 'FAILED') {
+    return tx.result_code === 'TIMEOUT' ? 'TIMEOUT' : 'FAILED';
+  }
+  // PENDING (or unexpected)
+  if (tx.result_code === 'FINALIZING') return 'FINALIZING';
+  const stage = (tx.payload as { stage?: string } | null | undefined)?.stage;
+  if (
+    stage === 'QUEUED' ||
+    stage === 'JOB_CREATED' ||
+    stage === 'INITIATED'
+  ) {
+    return 'QUEUED';
+  }
+  if (
+    stage === 'PROCESSING' ||
+    stage === 'JOB_PICKED_UP' ||
+    stage === 'DARAJA_REQUEST_STARTED' ||
+    stage === 'DARAJA_AUTH' ||
+    stage === 'DARAJA_RESPONSE_RECEIVED'
+  ) {
+    return 'PROCESSING';
+  }
+  if (stage === 'TIMEOUT') return 'TIMEOUT';
+  if (stage === 'FAILED' || stage === 'JOB_FAILED') return 'FAILED';
+  if (stage === 'CANCELLED') return 'CANCELLED';
+  if (stage === 'SUCCESS') return 'SUCCESS';
+  return 'PENDING';
+}
+
+export function isTerminalMpesaRow(tx: {
+  status: string;
+  result_code?: string | null;
+  payload?: unknown;
+}): boolean {
+  return isTerminalMpesaStatus(resolvePublicMpesaStatus(tx));
 }
 
 export function maskMpesaPhone(phone: string): string {

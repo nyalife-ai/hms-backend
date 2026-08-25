@@ -9,7 +9,9 @@ import {
   mapMpesaFailureReason,
   maskMpesaPhone,
   placeholderCheckoutRequestId,
+  resolvePublicMpesaStatus,
   statusUserMessage,
+  toDbMpesaStatus,
 } from '../mpesa-lifecycle';
 
 describe('mpesa-lifecycle', () => {
@@ -59,5 +61,37 @@ describe('mpesa-lifecycle', () => {
     expect(isTerminalMpesaStatus('PENDING')).toBe(false);
     expect(statusUserMessage('QUEUED')).toMatch(/queued/i);
     expect(statusUserMessage('PENDING')).toMatch(/PIN/i);
+  });
+
+  it('maps logical statuses onto legacy-safe DB values', () => {
+    expect(toDbMpesaStatus('QUEUED')).toBe('PENDING');
+    expect(toDbMpesaStatus('PROCESSING')).toBe('PENDING');
+    expect(toDbMpesaStatus('FINALIZING')).toBe('PENDING');
+    expect(toDbMpesaStatus('TIMEOUT')).toBe('FAILED');
+    expect(toDbMpesaStatus('SUCCESS')).toBe('SUCCESS');
+  });
+
+  it('resolves public status from payload stage', () => {
+    expect(
+      resolvePublicMpesaStatus({
+        status: 'PENDING',
+        result_code: null,
+        payload: { stage: 'QUEUED' },
+      }),
+    ).toBe('QUEUED');
+    expect(
+      resolvePublicMpesaStatus({
+        status: 'PENDING',
+        result_code: null,
+        payload: { stage: 'WAITING_CALLBACK' },
+      }),
+    ).toBe('PENDING');
+    expect(
+      resolvePublicMpesaStatus({
+        status: 'FAILED',
+        result_code: 'TIMEOUT',
+        payload: {},
+      }),
+    ).toBe('TIMEOUT');
   });
 });

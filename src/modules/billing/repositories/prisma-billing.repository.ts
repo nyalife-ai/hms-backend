@@ -316,10 +316,14 @@ export class PrismaBillingRepository implements IBillingRepository {
     id: string,
     data: UpdateMpesaTransactionInput,
   ): Promise<MpesaTransactionRow | null> {
+    // Claim only rows still waiting for customer/callback (PENDING + no result yet).
+    // Do not require status=FINALIZING — legacy CHECK rejects that value.
     const result = await this.prisma.mpesaTransactions.updateMany({
-      where: { id, status: 'PENDING' },
+      where: { id, status: 'PENDING', result_code: null },
       data: {
-        ...(data.status !== undefined ? { status: data.status } : {}),
+        ...(data.status !== undefined
+          ? { status: data.status }
+          : {}),
         ...(data.resultCode !== undefined
           ? { result_code: data.resultCode }
           : {}),

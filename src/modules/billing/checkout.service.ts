@@ -27,12 +27,15 @@ import { loadMpesaConfigFromEnv, MpesaClient } from './mpesa.client';
 import {
   appendTimeline,
   isRetryableStkError,
+  isTerminalMpesaRow,
   isTerminalMpesaStatus,
   mapMpesaFailureReason,
   maskMpesaPhone,
   MPESA_STK_TIMEOUT_MS,
   placeholderCheckoutRequestId,
+  resolvePublicMpesaStatus,
   statusUserMessage,
+  toDbMpesaStatus,
   type MpesaStage,
 } from './mpesa-lifecycle';
 import {
@@ -220,11 +223,17 @@ export class CheckoutService {
       ? [
           {
             description: 'Consultation',
-            amount: visit.billing?.consultFeeAmount ?? fees.consult,
+            // Fee schedule is pre-tax; tax applied in resolveTaxInclusiveCharge
+            // unless a draft invoice already exists (authoritative).
+            amount: fees.consult,
           },
         ]
       : await this.visitLines(visit);
-    const total = lines.reduce((s, l) => s + l.amount, 0);
+    const charge = await this.billing.resolveTaxInclusiveCharge({
+      lines,
+      invoiceId: consultFeeDue ? visit.billing?.invoiceId : undefined,
+    });
+    const total = charge.amount;
     if (!(total > 0)) {
       throw new BadRequestException(
         'Checkout amount must be greater than zero before M-Pesa STK',
@@ -260,6 +269,11 @@ export class CheckoutService {
         correlationId: paymentId,
         phoneMasked: maskMpesaPhone(phone),
         mode,
+        subtotal: charge.subtotal,
+        tax: charge.tax,
+        taxRatePercentage: charge.taxRatePercentage,
+        taxCode: charge.taxCode,
+        totalAmount: charge.totalAmount,
       },
       'INITIATED',
       'Payment initiated from billing UI',
@@ -280,7 +294,9 @@ export class CheckoutService {
       patientId: patient?.id,
       source: input.source,
       initiatedBy: input.actorUserId,
-      status: 'QUEUED',
+      // DB CHECK (legacy) only allows PENDING|SUCCESS|FAILED|CANCELLED.
+      // Logical QUEUED is carried in payload.stage for the UI/worker.
+      status: toDbMpesaStatus('QUEUED'),
       payload: {
         ...payload,
         // Force id used in placeholder; Prisma generates id — replace after create.
@@ -391,12 +407,12 @@ export class CheckoutService {
     if (!existing) {
       throw new NotFoundException(`Checkout ${input.checkoutId} not found`);
     }
-    if (isTerminalMpesaStatus(existing.status)) {
+    if (isTerminalMpesaRow(existing)) {
       this.logger.warn(
         JSON.stringify({
           event: 'JOB_SKIPPED_TERMINAL',
           paymentId: existing.id,
-          status: existing.status,
+          status: resolvePublicMpesaStatus(existing),
           correlationId: existing.id,
         }),
       );
@@ -423,7 +439,7 @@ export class CheckoutService {
     payload = appendTimeline(payload, 'PROCESSING', 'Preparing Daraja STK');
 
     await this.billingRepo.updateMpesaTransaction(existing.id, {
-      status: 'PROCESSING',
+      status: toDbMpesaStatus('PROCESSING'),
       payload,
     });
 
@@ -466,7 +482,8 @@ export class CheckoutService {
           },
         ]
       : await this.visitLines(visit);
-    const total = lines.reduce((s, l) => s + l.amount, 0);
+    // Authoritative amount was locked at initiateStk (tax-inclusive).
+    const total = Number(existing.amount);
     if (!(total > 0)) {
       const msg =
         'Checkout amount must be greater than zero before M-Pesa STK';
@@ -649,7 +666,12 @@ export class CheckoutService {
   /** Called by processor on terminal Bull failure (exhausted retries). */
   async markStkJobFailed(checkoutId: string, error: Error): Promise<void> {
     const tx = await this.billingRepo.findMpesaById(checkoutId);
-    if (!tx || isTerminalMpesaStatus(tx.status) || tx.status === 'PENDING') {
+    if (!tx || isTerminalMpesaRow(tx)) {
+      return;
+    }
+    // STK already accepted by Daraja — leave waiting for callback/query.
+    const publicStatus = resolvePublicMpesaStatus(tx);
+    if (publicStatus === 'PENDING' && !tx.checkout_request_id.startsWith('QUEUED-')) {
       return;
     }
     const reason = mapMpesaFailureReason({ rawMessage: error.message });
@@ -667,7 +689,7 @@ export class CheckoutService {
     const tx = await this.billingRepo.findMpesaById(checkoutId);
     if (!tx) throw new NotFoundException('Checkout not found');
 
-    if (isTerminalMpesaStatus(tx.status) || tx.status === 'FINALIZING') {
+    if (isTerminalMpesaRow(tx) || tx.result_code === 'FINALIZING') {
       const receipt = await this.billingRepo.findReceiptByMpesaTxId(tx.id);
       return this.toStatusPayload(tx, receipt?.id);
     }
@@ -679,12 +701,13 @@ export class CheckoutService {
       timeline?: unknown[];
     };
 
-    if (tx.status === 'QUEUED' || tx.status === 'PROCESSING') {
+    const publicStatus = resolvePublicMpesaStatus(tx);
+    if (publicStatus === 'QUEUED' || publicStatus === 'PROCESSING') {
       // Still in worker path — do not claim success.
       return this.toStatusPayload(tx);
     }
 
-    if (payload.simulated && tx.status === 'PENDING') {
+    if (payload.simulated && publicStatus === 'PENDING') {
       if (Date.now() - tx.created_at.getTime() > 8_000) {
         return this.finalizeSuccess(tx.id, {
           mpesaReceipt: `SIM${Date.now().toString(36).toUpperCase()}`,
@@ -694,7 +717,7 @@ export class CheckoutService {
       return this.toStatusPayload(tx);
     }
 
-    if (this.client.configured && tx.status === 'PENDING') {
+    if (this.client.configured && publicStatus === 'PENDING') {
       try {
         const q = await this.client.stkQuery(tx.checkout_request_id);
         const code = String(q.ResultCode ?? '');
@@ -760,11 +783,11 @@ export class CheckoutService {
     }
 
     if (
-      tx.status === 'PENDING' &&
+      publicStatus === 'PENDING' &&
       Date.now() - tx.created_at.getTime() > MPESA_STK_TIMEOUT_MS
     ) {
       const updated = await this.billingRepo.updateMpesaTransaction(tx.id, {
-        status: 'TIMEOUT',
+        status: toDbMpesaStatus('TIMEOUT'),
         resultCode: 'TIMEOUT',
         resultDesc: statusUserMessage('TIMEOUT'),
         payload: appendTimeline(
@@ -953,13 +976,14 @@ export class CheckoutService {
       simulated?: boolean;
       mode?: string;
     };
-    const stage = payload.stage || tx.status;
+    const status = resolvePublicMpesaStatus(tx);
+    const stage = payload.stage || status;
     return {
       ok: true,
       checkoutId: tx.id,
       paymentId: tx.id,
       correlationId: tx.id,
-      status: tx.status,
+      status,
       stage,
       phone: tx.phone,
       phoneMasked: payload.phoneMasked || maskMpesaPhone(tx.phone),
@@ -970,8 +994,8 @@ export class CheckoutService {
       merchantRequestId: tx.merchant_request_id ?? undefined,
       mpesaReceipt: tx.mpesa_receipt_number,
       resultCode: tx.result_code,
-      message: statusUserMessage(tx.status, stage, tx.result_desc),
-      failureReason: ['FAILED', 'CANCELLED', 'TIMEOUT'].includes(tx.status)
+      message: statusUserMessage(status, stage, tx.result_desc),
+      failureReason: ['FAILED', 'CANCELLED', 'TIMEOUT'].includes(status)
         ? mapMpesaFailureReason({
             resultCode: tx.result_code,
             resultDesc: tx.result_desc,
@@ -979,7 +1003,7 @@ export class CheckoutService {
         : undefined,
       source: tx.source,
       receiptId: receiptId ?? undefined,
-      paid: tx.status === 'SUCCESS',
+      paid: status === 'SUCCESS',
       timeline: payload.timeline ?? [],
       daraja: payload.daraja,
       mode: payload.simulated
@@ -1027,9 +1051,10 @@ export class CheckoutService {
   ): Promise<MpesaTransactionRow> {
     const tx = await this.billingRepo.findMpesaById(checkoutId);
     if (!tx) throw new NotFoundException('Checkout not found');
-    if (isTerminalMpesaStatus(tx.status)) return tx;
+    if (isTerminalMpesaRow(tx)) return tx;
 
-    const status = opts.status ?? 'FAILED';
+    const logical = opts.status ?? 'FAILED';
+    const status = toDbMpesaStatus(logical);
     const payload = appendTimeline(
       {
         ...((tx.payload as Record<string, unknown>) || {}),
@@ -1048,7 +1073,7 @@ export class CheckoutService {
       JSON.stringify({
         event: 'JOB_FAILED',
         paymentId: updated.id,
-        status,
+        status: resolvePublicMpesaStatus(updated),
         stage: opts.stage,
         resultCode: opts.resultCode,
         phoneMasked: maskMpesaPhone(updated.phone),
@@ -1100,21 +1125,25 @@ export class CheckoutService {
   ) {
     // Atomic PENDING → FINALIZING claim (poll + callback race).
     const claimed = await this.billingRepo.claimMpesaPending(txId, {
-      status: 'FINALIZING',
+      // Keep DB status PENDING (legacy CHECK). Claim via result_code.
+      resultCode: 'FINALIZING',
       resultDesc: info.resultDesc || 'Finalizing',
       mpesaReceiptNumber: info.mpesaReceipt,
     });
     if (!claimed) {
       const existing = await this.billingRepo.findMpesaById(txId);
       if (!existing) throw new NotFoundException('Checkout not found');
-      if (existing.status === 'SUCCESS' || existing.status === 'FINALIZING') {
+      if (
+        existing.status === 'SUCCESS' ||
+        existing.result_code === 'FINALIZING'
+      ) {
         const receipt = await this.billingRepo.findReceiptByMpesaTxId(
           existing.id,
         );
         return this.toStatusPayload(existing, receipt?.id);
       }
       throw new BadRequestException(
-        `Checkout cannot be finalized from status ${existing.status}`,
+        `Checkout cannot be finalized from status ${resolvePublicMpesaStatus(existing)}`,
       );
     }
     const tx = await this.billingRepo.updateMpesaTransaction(claimed.id, {
@@ -1150,6 +1179,9 @@ export class CheckoutService {
         actorUserId: tx.initiated_by,
         mpesaReceipt: info.mpesaReceipt,
         transactionReference: info.mpesaReceipt || tx.checkout_request_id,
+        visitId: visit.id,
+        purpose: 'CONSULT_FEE',
+        skipDomainEvent: true,
       });
       const total = Number(paid.totalAmount ?? tx.amount);
 
@@ -1179,6 +1211,12 @@ export class CheckoutService {
           mrn: visit.mrn,
           patientName: visit.patientName,
           purpose: 'CONSULT_FEE',
+          subtotal: (tx.payload as { subtotal?: string })?.subtotal,
+          tax: (tx.payload as { tax?: string })?.tax,
+          taxRatePercentage: (tx.payload as { taxRatePercentage?: string })
+            ?.taxRatePercentage,
+          invoiceTotal: total,
+          invoiceNumber: paid.invoiceNumber,
         },
       });
 
@@ -1221,12 +1259,15 @@ export class CheckoutService {
 
       const updatedTx = await this.billingRepo.findMpesaById(tx.id);
       if (!updatedTx) throw new NotFoundException('Checkout not found');
+      // payment.received emitted by createPayment inside collectOnInvoice
       this.emitPaymentDomain('payment.received', {
         patientId: patient.id,
         visitId: visit.id,
         checkoutId: tx.id,
-        paymentId: tx.id,
+        paymentId: paid.paymentId || tx.id,
         amount: total,
+        purpose: 'CONSULT_FEE',
+        invoiceId: paid.invoiceId,
       });
       return this.toStatusPayload(updatedTx, receipt.id);
     }
@@ -1264,7 +1305,21 @@ export class CheckoutService {
       channel: 'MPESA',
       amount: total,
       issuedBy: tx.initiated_by,
-      lineItems: lines,
+      lineItems: [
+        ...lines,
+        ...(Number((tx.payload as { tax?: string })?.tax) > 0
+          ? [
+              {
+                description: `Tax${
+                  (tx.payload as { taxCode?: string })?.taxCode
+                    ? ` (${(tx.payload as { taxCode?: string }).taxCode})`
+                    : ''
+                }`,
+                amount: Number((tx.payload as { tax?: string }).tax),
+              },
+            ]
+          : []),
+      ],
       meta: {
         mpesaReceipt: info.mpesaReceipt,
         phone: tx.phone,
@@ -1273,6 +1328,12 @@ export class CheckoutService {
         mrn: visit.mrn,
         patientName: visit.patientName,
         diagnosis: visit.diagnosis,
+        subtotal: (tx.payload as { subtotal?: string })?.subtotal,
+        tax: (tx.payload as { tax?: string })?.tax,
+        taxRatePercentage: (tx.payload as { taxRatePercentage?: string })
+          ?.taxRatePercentage,
+        invoiceTotal: total,
+        invoiceNumber: settled.invoiceNumber,
       },
     });
 
@@ -1338,8 +1399,11 @@ export class CheckoutService {
       patientId: patient.id,
       visitId: visit.id,
       checkoutId: tx.id,
-      paymentId: tx.id,
+      paymentId: settled.paymentId || tx.id,
       amount: total,
+      purpose: 'VISIT_SETTLEMENT',
+      invoiceId: settled.invoiceId,
+      source: tx.source,
     });
     return this.toStatusPayload(updatedTx, receipt.id);
   }
@@ -1359,6 +1423,9 @@ export class CheckoutService {
       initiatedBy?: string;
       notifyUserIds?: string[];
       status?: string;
+      purpose?: string;
+      invoiceId?: string;
+      source?: string;
     },
   ): void {
     this.events.emit(type, {

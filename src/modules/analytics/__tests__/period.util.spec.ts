@@ -30,6 +30,24 @@ describe('analytics period.util', () => {
     expect(p.compareFrom).toBeNull();
   });
 
+  it('resolves last_180_days and last_365_days', () => {
+    const half = resolvePeriod({
+      preset: 'last_180_days',
+      compare: 'none',
+      now,
+    });
+    expect(toYmd(half.to)).toBe('2026-08-23');
+    expect(toYmd(half.from)).toBe('2026-02-25');
+
+    const year = resolvePeriod({
+      preset: 'last_365_days',
+      compare: 'none',
+      now,
+    });
+    expect(toYmd(year.to)).toBe('2026-08-23');
+    expect(toYmd(year.from)).toBe('2025-08-24');
+  });
+
   it('changePercent never returns Infinity', () => {
     expect(changePercent(100, 0)).toBeNull();
     expect(changePercent(0, 0)).toBe(0);

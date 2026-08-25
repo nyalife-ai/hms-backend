@@ -9,3 +9,4 @@ export * from './search-users-query.dto';
 export * from './mute-conversation.dto';
 export * from './mark-delivered.dto';
 export * from './add-participants.dto';
+export * from './update-participant-role.dto';

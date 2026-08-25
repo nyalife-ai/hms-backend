@@ -8,6 +8,8 @@ export type AnalyticsPreset =
   | 'last_7_days'
   | 'last_30_days'
   | 'last_90_days'
+  | 'last_180_days'
+  | 'last_365_days'
   | 'this_week'
   | 'last_week'
   | 'this_month'
@@ -126,6 +128,14 @@ export function resolvePeriod(input: {
       break;
     case 'last_90_days':
       from = startOfDay(addDays(now, -89));
+      to = endOfDay(now);
+      break;
+    case 'last_180_days':
+      from = startOfDay(addDays(now, -179));
+      to = endOfDay(now);
+      break;
+    case 'last_365_days':
+      from = startOfDay(addDays(now, -364));
       to = endOfDay(now);
       break;
     case 'this_week':

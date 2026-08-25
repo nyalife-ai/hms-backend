@@ -153,6 +153,7 @@ describe('BillingSettlementService', () => {
     },
     taxRates: {
       findFirst: jest.fn().mockResolvedValue(null),
+      findUnique: jest.fn().mockResolvedValue(null),
     },
     insuranceClaims: {
       update: jest.fn().mockResolvedValue({}),
@@ -483,7 +484,9 @@ describe('BillingSettlementService', () => {
         actorUserId: 'u1',
         visitId: 'v1',
       });
-      expect(finance.quoteVisitLines).toHaveBeenCalledWith({ consultCount: 1 });
+      expect(finance.quoteVisitLines).toHaveBeenCalledWith(
+        expect.objectContaining({ consultCount: 1 }),
+      );
       expect(finance.createInvoice).toHaveBeenCalled();
       expect(draft).toEqual({
         invoiceId: 'inv1',

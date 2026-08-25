@@ -43,10 +43,16 @@ export const DOMAIN_EVENT_TYPES = {
   AUTH_LOGOUT: 'auth.logout',
   AUTH_PASSWORD_CHANGED: 'auth.password.changed',
   AUTH_ACCOUNT_SECURITY_CHANGED: 'auth.account.security.changed',
+  TRIAGE_COMPLETED: 'triage.completed',
   MESSAGE_CREATED: 'message.created',
 } as const;
 
-const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+const REMINDER_OFFSETS = [
+  { key: '2d', ms: 2 * 24 * 60 * 60 * 1000 },
+  { key: '5h', ms: 5 * 60 * 60 * 1000 },
+  { key: '30m', ms: 30 * 60 * 1000 },
+  { key: '15m', ms: 15 * 60 * 1000 },
+] as const;
 
 type ApptPayload = {
   appointmentId: string;
@@ -170,10 +176,19 @@ export class NotificationPolicyService {
           }>,
         );
       case DOMAIN_EVENT_TYPES.PAYMENT_RECEIVED:
-        return this.patientSms(
-          event,
-          'payment.received.patient.sms',
-          event.payload as { patientId?: string },
+        return this.onPaymentReceived(
+          event as DomainEventEnvelope<{
+            patientId?: string;
+            visitId?: string;
+            paymentId?: string;
+            amount?: number | string;
+            purpose?: string;
+            invoiceId?: string;
+            nurseUserIds?: string[];
+            billingUserIds?: string[];
+            pharmacistUserIds?: string[];
+            source?: string;
+          }>,
         );
       case DOMAIN_EVENT_TYPES.PAYMENT_FAILED:
         return this.onPaymentFailed(
@@ -190,6 +205,17 @@ export class NotificationPolicyService {
             initiatedBy?: string;
             notifyUserIds?: string[];
             status?: string;
+          }>,
+        );
+      case DOMAIN_EVENT_TYPES.TRIAGE_COMPLETED:
+        return this.onTriageCompleted(
+          event as DomainEventEnvelope<{
+            visitId: string;
+            patientId?: string;
+            doctorUserId?: string;
+            patientName?: string;
+            mrn?: string;
+            priority?: string;
           }>,
         );
       case DOMAIN_EVENT_TYPES.INVOICE_ISSUED:
@@ -334,13 +360,14 @@ export class NotificationPolicyService {
         }),
       );
       // Notification-center / sound only — chat content is already on the wire
-      // via MessagingService.publishRealtime (rich payload).
+      // via MessagingService.publishRealtime (rich payload). Use a distinct
+      // event type so clients never merge this thin payload into the thread.
       jobs.push({
         name: NOTIFICATION_JOBS.SEND_WEBSOCKET,
         jobId: `ws:message-notif:${p.messageId}:${userId}`,
         data: {
           eventId: event.id,
-          type: durableType,
+          type: isMention ? 'message.mention' : 'message.notification',
           userId,
           payload: {
             messageId: p.messageId,
@@ -424,17 +451,20 @@ export class NotificationPolicyService {
 
     const startsAtMs = Date.parse(p.startsAt);
     if (Number.isFinite(startsAtMs)) {
-      const delayMs = startsAtMs - Date.now() - TWO_DAYS_MS;
-      if (delayMs > 0) {
+      for (const offset of REMINDER_OFFSETS) {
+        const delayMs = startsAtMs - Date.now() - offset.ms;
+        if (delayMs <= 0) continue;
         jobs.push({
           name: NOTIFICATION_JOBS.APPOINTMENT_REMINDER,
           delayMs,
-          jobId: `appointment-reminder:${p.appointmentId}`,
+          jobId: `appointment-reminder:${p.appointmentId}:${offset.key}`,
           data: {
             eventId: event.id,
             appointmentId: p.appointmentId,
             expectedStartsAt: p.startsAt,
-            dedupeKey: `reminder:${p.appointmentId}:${p.startsAt}`,
+            offsetKey: offset.key,
+            doctorUserId: p.doctorUserId,
+            dedupeKey: `reminder:${p.appointmentId}:${p.startsAt}:${offset.key}`,
           },
         });
       }
@@ -924,6 +954,7 @@ export class NotificationPolicyService {
       .join('\n');
 
     const durable: DurableNotificationSpec[] = [];
+    const jobs: QueuedNotificationJob[] = [];
     const notifyIds = new Set<string>([
       ...(p.notifyUserIds ?? []),
       ...(p.initiatedBy ? [p.initiatedBy] : []),
@@ -941,6 +972,41 @@ export class NotificationPolicyService {
           actionPath: '/billing',
         }),
       );
+      jobs.push({
+        name: NOTIFICATION_JOBS.SEND_WEBSOCKET,
+        jobId: `ws:payment-failed:${paymentId}:${userId}`,
+        data: {
+          eventId: event.id,
+          type: 'payment.failed',
+          userId,
+          room: `user:${userId}`,
+          payload: {
+            paymentId,
+            visitId: p.visitId,
+            checkoutId: p.checkoutId,
+            reason,
+            amount: p.amount,
+          },
+          dedupeKey: `ws:payment-failed:${event.id}:${userId}`,
+        },
+      });
+      jobs.push({
+        name: NOTIFICATION_JOBS.SEND_FCM,
+        jobId: `fcm:payment-failed:${paymentId}:${userId}`,
+        data: {
+          eventId: event.id,
+          templateKey: 'payment.failed.staff.push',
+          userId,
+          variables: {
+            paymentId,
+            reason,
+            amount: amountLabel,
+            patientName: p.patientName ?? '',
+            mrn: p.mrn ?? '',
+          },
+          dedupeKey: `fcm:payment-failed:${event.id}:${userId}`,
+        },
+      });
     }
 
     const patientIntent = this.patientSms(
@@ -952,10 +1018,229 @@ export class NotificationPolicyService {
       return intent(
         event,
         [...durable, ...(patientIntent.durable ?? [])],
-        [...(patientIntent.jobs ?? [])],
+        [...jobs, ...(patientIntent.jobs ?? [])],
       );
     }
-    return intent(event, durable, []);
+    return intent(event, durable, jobs);
+  }
+
+  private onPaymentReceived(
+    event: DomainEventEnvelope<{
+      patientId?: string;
+      visitId?: string;
+      paymentId?: string;
+      amount?: number | string;
+      purpose?: string;
+      invoiceId?: string;
+      nurseUserIds?: string[];
+      billingUserIds?: string[];
+      pharmacistUserIds?: string[];
+      source?: string;
+    }>,
+  ): NotificationIntent {
+    const p = event.payload;
+    const durable: DurableNotificationSpec[] = [];
+    const jobs: QueuedNotificationJob[] = [];
+    const amountLabel =
+      p.amount != null ? `KES ${Number(p.amount).toLocaleString()}` : 'n/a';
+    const paymentId = p.paymentId || 'unknown';
+
+    const patientIntent = this.patientSms(
+      event,
+      'payment.received.patient.sms',
+      { patientId: p.patientId },
+    );
+    if (patientIntent) {
+      durable.push(...(patientIntent.durable ?? []));
+      jobs.push(...(patientIntent.jobs ?? []));
+    }
+
+    // Consult fee cleared → triage nurses
+    if (p.purpose === 'CONSULT_FEE' && p.nurseUserIds?.length) {
+      for (const userId of p.nurseUserIds) {
+        durable.push(
+          staffDurable(event, {
+            userId,
+            type: 'payment.received',
+            title: 'Consult fee paid — ready for triage',
+            body: `Payment ${amountLabel} received. Patient is ready for triage.`,
+            priority: 'HIGH',
+            entityType: 'visit',
+            entityId: p.visitId,
+            actionPath: '/triage',
+          }),
+        );
+        jobs.push({
+          name: NOTIFICATION_JOBS.SEND_WEBSOCKET,
+          jobId: `ws:payment-triage:${paymentId}:${userId}`,
+          data: {
+            eventId: event.id,
+            type: 'payment.received',
+            userId,
+            room: `user:${userId}`,
+            payload: {
+              visitId: p.visitId,
+              paymentId,
+              purpose: p.purpose,
+            },
+            dedupeKey: `ws:payment-triage:${event.id}:${userId}`,
+          },
+        });
+        jobs.push({
+          name: NOTIFICATION_JOBS.SEND_FCM,
+          jobId: `fcm:payment-triage:${paymentId}:${userId}`,
+          data: {
+            eventId: event.id,
+            templateKey: 'payment.received.triage.push',
+            userId,
+            variables: { amount: amountLabel, visitId: p.visitId ?? '' },
+            dedupeKey: `fcm:payment-triage:${event.id}:${userId}`,
+          },
+        });
+      }
+    }
+
+    // Visit settlement → finance / reception
+    if (
+      (p.purpose === 'VISIT_SETTLEMENT' || p.purpose === 'PAYMENT') &&
+      p.billingUserIds?.length
+    ) {
+      for (const userId of p.billingUserIds) {
+        durable.push(
+          staffDurable(event, {
+            userId,
+            type: 'payment.received',
+            title: 'Payment received',
+            body: `Payment ${amountLabel} recorded.`,
+            entityType: 'payment',
+            entityId: paymentId,
+            actionPath: '/billing',
+          }),
+        );
+        jobs.push({
+          name: NOTIFICATION_JOBS.SEND_WEBSOCKET,
+          jobId: `ws:payment-finance:${paymentId}:${userId}`,
+          data: {
+            eventId: event.id,
+            type: 'payment.received',
+            userId,
+            room: `user:${userId}`,
+            payload: { paymentId, visitId: p.visitId, amount: p.amount },
+            dedupeKey: `ws:payment-finance:${event.id}:${userId}`,
+          },
+        });
+      }
+    }
+
+    // Pharmacy source settlement → pharmacists
+    if (
+      p.source === 'PHARMACY' &&
+      p.pharmacistUserIds?.length
+    ) {
+      for (const userId of p.pharmacistUserIds) {
+        durable.push(
+          staffDurable(event, {
+            userId,
+            type: 'payment.received',
+            title: 'Pharmacy order paid',
+            body: `Payment ${amountLabel} cleared for pharmacy order.`,
+            entityType: 'visit',
+            entityId: p.visitId,
+            actionPath: '/pharmacy',
+          }),
+        );
+        jobs.push({
+          name: NOTIFICATION_JOBS.SEND_WEBSOCKET,
+          jobId: `ws:payment-pharmacy:${paymentId}:${userId}`,
+          data: {
+            eventId: event.id,
+            type: 'payment.received',
+            userId,
+            room: `user:${userId}`,
+            payload: { paymentId, visitId: p.visitId },
+            dedupeKey: `ws:payment-pharmacy:${event.id}:${userId}`,
+          },
+        });
+        jobs.push({
+          name: NOTIFICATION_JOBS.SEND_FCM,
+          jobId: `fcm:payment-pharmacy:${paymentId}:${userId}`,
+          data: {
+            eventId: event.id,
+            templateKey: 'payment.received.pharmacy.push',
+            userId,
+            variables: { amount: amountLabel },
+            dedupeKey: `fcm:payment-pharmacy:${event.id}:${userId}`,
+          },
+        });
+      }
+    }
+
+    return intent(event, durable, jobs);
+  }
+
+  private onTriageCompleted(
+    event: DomainEventEnvelope<{
+      visitId: string;
+      patientId?: string;
+      doctorUserId?: string;
+      patientName?: string;
+      mrn?: string;
+      priority?: string;
+    }>,
+  ): NotificationIntent | null {
+    const p = event.payload;
+    if (!p.doctorUserId) return null;
+    const who = [p.patientName, p.mrn].filter(Boolean).join(' · ') || 'Patient';
+    const priority = p.priority ? ` (${p.priority})` : '';
+    return intent(
+      event,
+      [
+        staffDurable(event, {
+          userId: p.doctorUserId,
+          type: 'triage.completed',
+          title: 'Patient ready for consultation',
+          body: `${who} completed triage${priority} and is waiting.`,
+          priority: p.priority === 'EMERGENCY' || p.priority === 'URGENT' ? 'HIGH' : 'NORMAL',
+          entityType: 'visit',
+          entityId: p.visitId,
+          actionPath: '/consultations',
+        }),
+      ],
+      [
+        {
+          name: NOTIFICATION_JOBS.SEND_WEBSOCKET,
+          jobId: `ws:triage-completed:${p.visitId}:${p.doctorUserId}`,
+          data: {
+            eventId: event.id,
+            type: 'triage.completed',
+            userId: p.doctorUserId,
+            room: `user:${p.doctorUserId}`,
+            payload: {
+              visitId: p.visitId,
+              patientId: p.patientId,
+              priority: p.priority,
+            },
+            dedupeKey: `ws:triage-completed:${event.id}`,
+          },
+        },
+        {
+          name: NOTIFICATION_JOBS.SEND_FCM,
+          jobId: `fcm:triage-completed:${p.visitId}`,
+          data: {
+            eventId: event.id,
+            templateKey: 'triage.completed.doctor.push',
+            userId: p.doctorUserId,
+            variables: {
+              visitId: p.visitId,
+              patientName: p.patientName ?? '',
+              mrn: p.mrn ?? '',
+              priority: p.priority ?? 'NORMAL',
+            },
+            dedupeKey: `fcm:triage-completed:${event.id}`,
+          },
+        },
+      ],
+    );
   }
 
   private onVisitReadyForBilling(

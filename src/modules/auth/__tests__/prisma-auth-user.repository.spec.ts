@@ -28,7 +28,10 @@ describe('PrismaAuthUserRepository', () => {
         findMany: jest.fn().mockResolvedValue([]),
         findUnique: jest.fn(),
       },
-      permissions: { findMany: jest.fn().mockResolvedValue([]) },
+      permissions: {
+        findMany: jest.fn().mockResolvedValue([]),
+        upsert: jest.fn().mockResolvedValue({}),
+      },
       rolePermissions: {
         upsert: jest.fn().mockResolvedValue({}),
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -347,8 +350,17 @@ describe('PrismaAuthUserRepository', () => {
       prisma.permissions.findMany.mockResolvedValue([
         { id: 'p-visits', name: 'module:visits' },
         { id: 'p-billing', name: 'module:billing' },
+        { id: 'p-account', name: 'module:account' },
       ]);
       await repo.syncRoleModulePermissions();
+      expect(prisma.permissions.upsert).toHaveBeenCalled();
+      expect(
+        prisma.permissions.upsert.mock.calls.some(
+          (c: unknown[]) =>
+            (c[0] as { where: { name: string } }).where.name ===
+            'module:account',
+        ),
+      ).toBe(true);
       expect(prisma.rolePermissions.upsert).toHaveBeenCalled();
       expect(prisma.rolePermissions.deleteMany).toHaveBeenCalled();
     });

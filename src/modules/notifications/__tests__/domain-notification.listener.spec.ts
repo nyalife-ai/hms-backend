@@ -45,6 +45,18 @@ describe('DomainNotificationListener', () => {
     });
     await listener.onDomainEvent(envelope);
     expect(dispatcher.cancelJob).toHaveBeenCalledWith(
+      'appointment-reminder:a1:2d',
+    );
+    expect(dispatcher.cancelJob).toHaveBeenCalledWith(
+      'appointment-reminder:a1:5h',
+    );
+    expect(dispatcher.cancelJob).toHaveBeenCalledWith(
+      'appointment-reminder:a1:30m',
+    );
+    expect(dispatcher.cancelJob).toHaveBeenCalledWith(
+      'appointment-reminder:a1:15m',
+    );
+    expect(dispatcher.cancelJob).toHaveBeenCalledWith(
       'appointment-reminder:a1',
     );
     expect(dispatcher.dispatchDomainEvent).toHaveBeenCalled();

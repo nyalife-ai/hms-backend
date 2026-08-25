@@ -32,6 +32,19 @@ describe('auth.permissions', () => {
     );
     expect(ROLE_MODULE_ACCESS.PATIENT).toContain('patients');
   });
+
+  it('every role can access self-service account module (not settings)', () => {
+    expect(MODULE_PERMISSIONS).toContain('account');
+    expect(MODULE_PERMISSIONS).toContain('settings');
+    for (const [role, modules] of Object.entries(ROLE_MODULE_ACCESS)) {
+      expect(modules).toContain('account');
+      if (role === 'ADMIN' || role === 'SUPER_ADMIN') {
+        expect(modules).toContain('settings');
+      } else {
+        expect(modules).not.toContain('settings');
+      }
+    }
+  });
 });
 
 describe('role-sets', () => {

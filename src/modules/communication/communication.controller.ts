@@ -47,6 +47,8 @@ import {
   SearchUsersQueryDto,
   SendMessageDto,
   AddParticipantsDto,
+  UpdateParticipantRoleDto,
+  UpdateConversationDto,
 } from './dto';
 import { MessagingService } from './services/messaging.service';
 
@@ -169,6 +171,33 @@ export class CommunicationController {
       userId,
       user.role,
     );
+  }
+
+  @Patch('conversations/:id/participants/:userId')
+  @ApiOperation({ summary: 'Promote/demote a group participant role' })
+  updateParticipantRole(
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+    @Body() body: UpdateParticipantRoleDto,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.messaging.updateParticipantRole(
+      user.id,
+      id,
+      userId,
+      body.role,
+      user.role,
+    );
+  }
+
+  @Patch('conversations/:id')
+  @ApiOperation({ summary: 'Update group conversation metadata (name)' })
+  updateConversation(
+    @Param('id') id: string,
+    @Body() body: UpdateConversationDto,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.messaging.updateConversation(user.id, id, body, user.role);
   }
 
   @Post('conversations/:id/attachments')

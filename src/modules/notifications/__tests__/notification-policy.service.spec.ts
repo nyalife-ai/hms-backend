@@ -231,6 +231,19 @@ describe('NotificationPolicyService', () => {
         }),
       }),
     );
+    const ws = intent!.jobs.find(
+      (j) => j.name === NOTIFICATION_JOBS.SEND_WEBSOCKET,
+    );
+    expect(ws?.data).toEqual(
+      expect.objectContaining({
+        type: 'message.notification',
+        payload: expect.objectContaining({
+          messageId: 'm1',
+          conversationId: 'c1',
+          senderName: 'Ada Okello',
+        }),
+      }),
+    );
   });
 
   it('uses mention title and durable type for mentioned recipients', () => {
@@ -254,5 +267,13 @@ describe('NotificationPolicyService', () => {
     expect(mention?.notificationType).toBe('message.mention');
     expect(regular?.title).toBe('New message from Ada Okello');
     expect(regular?.notificationType).toBe(DOMAIN_EVENT_TYPES.MESSAGE_CREATED);
+    const mentionWs = intent!.jobs.find(
+      (j) =>
+        j.name === NOTIFICATION_JOBS.SEND_WEBSOCKET &&
+        (j.data as { userId?: string }).userId === 'r1',
+    );
+    expect(mentionWs?.data).toEqual(
+      expect.objectContaining({ type: 'message.mention' }),
+    );
   });
 });

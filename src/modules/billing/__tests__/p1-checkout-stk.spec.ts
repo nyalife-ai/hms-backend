@@ -85,6 +85,7 @@ describe('P1 CheckoutService STK lifecycle', () => {
     priceVisitBillLines: jest.Mock;
     collectOnInvoice: jest.Mock;
     settleVisit: jest.Mock;
+    resolveTaxInclusiveCharge: jest.Mock;
   };
   let mockClient: {
     configured: boolean;
@@ -161,6 +162,25 @@ describe('P1 CheckoutService STK lifecycle', () => {
         invoiceId: 'inv-2',
         paymentId: 'pay-2',
       }),
+      resolveTaxInclusiveCharge: jest.fn().mockImplementation(
+        async (input: {
+          lines: Array<{ amount: number }>;
+          invoiceId?: string;
+        }) => {
+          const subtotal = (input.lines ?? []).reduce(
+            (s, l) => s + Number(l.amount || 0),
+            0,
+          );
+          return {
+            amount: subtotal,
+            subtotal: subtotal.toFixed(2),
+            tax: '0.00',
+            totalAmount: subtotal.toFixed(2),
+            taxRatePercentage: null,
+            taxCode: null,
+          };
+        },
+      ),
     };
 
     checkout = new CheckoutService(
@@ -197,7 +217,7 @@ describe('P1 CheckoutService STK lifecycle', () => {
     expect(result.jobId).toBe('job-1');
     expect(repo.createMpesaTransaction).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: 'QUEUED',
+        status: 'PENDING',
         phone: '254712345678',
         amount: 1500,
       }),
@@ -485,6 +505,14 @@ describe('P1 CheckoutService STK lifecycle', () => {
 
   it('initiateStk rejects zero-amount checkout', async () => {
     billing.priceVisitBillLines.mockResolvedValue([]);
+    billing.resolveTaxInclusiveCharge.mockResolvedValue({
+      amount: 0,
+      subtotal: '0.00',
+      tax: '0.00',
+      totalAmount: '0.00',
+      taxRatePercentage: null,
+      taxCode: null,
+    });
     await expect(
       checkout.initiateStk({
         visitId: 'visit-1',
@@ -629,7 +657,7 @@ describe('P1 CheckoutService STK lifecycle', () => {
 
     expect(repo.claimMpesaPending).toHaveBeenCalledWith(
       'tx-1',
-      expect.objectContaining({ status: 'FINALIZING' }),
+      expect.objectContaining({ resultCode: 'FINALIZING' }),
     );
     expect(billing.settleVisit).toHaveBeenCalled();
     expect(repo.createReceipt).toHaveBeenCalled();

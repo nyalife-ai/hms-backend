@@ -324,13 +324,75 @@ export class AnalyticsService {
       'patients',
     );
 
-    const revenueSeries = await this.invoiceSeries(period);
+    const [
+      revenueSeries,
+      collectedSeries,
+      appointmentSeries,
+      labSeries,
+      consultationSeries,
+      paymentMethods,
+      apptByType,
+      consultationsByStatus,
+      topDiagnoses,
+      volumeByDepartment,
+    ] = await Promise.all([
+      this.invoiceSeries(period),
+      this.paymentSeries(period),
+      this.seriesPointsWithCompare(period, async (from, to) => {
+        const list = await this.prisma.appointments.findMany({
+          where: {
+            deleted_at: null,
+            appointment_date: this.range(from, to),
+            ...(query.doctorId ? { doctor_id: query.doctorId } : {}),
+          },
+          select: { appointment_date: true },
+        });
+        return list.map((r) => ({ at: new Date(r.appointment_date) }));
+      }),
+      this.seriesPointsWithCompare(period, async (from, to) => {
+        const list = await this.prisma.laboratoryRequests.findMany({
+          where: { request_date: this.range(from, to) },
+          select: { request_date: true },
+        });
+        return list.map((r) => ({ at: new Date(r.request_date) }));
+      }),
+      this.seriesPointsWithCompare(period, async (from, to) => {
+        const list = await this.prisma.consultations.findMany({
+          where: {
+            deleted_at: null,
+            consultation_date: this.range(from, to),
+            ...(query.doctorId ? { doctor_id: query.doctorId } : {}),
+          },
+          select: { consultation_date: true },
+        });
+        return list.map((r) => ({ at: new Date(r.consultation_date) }));
+      }),
+      this.paymentsByMethod(cur),
+      this.prisma.appointments.groupBy({
+        by: ['appointment_type'],
+        where: { deleted_at: null, appointment_date: cur },
+        _count: { _all: true },
+      }),
+      this.prisma.consultations.groupBy({
+        by: ['status'],
+        where: {
+          deleted_at: null,
+          consultation_date: cur,
+          ...(query.doctorId ? { doctor_id: query.doctorId } : {}),
+        },
+        _count: { _all: true },
+      }),
+      this.topDiagnoses(cur, 10),
+      this.appointmentVolumeByDepartment(cur),
+    ]);
+
     const apptByStatus = await this.prisma.appointments.groupBy({
       by: ['status'],
       where: { deleted_at: null, appointment_date: cur },
       _count: { _all: true },
     });
 
+    // Keep overview KPIs lean — storytelling lives in charts below.
     return {
       meta: this.meta('overview', period),
       kpis: [
@@ -349,32 +411,18 @@ export class AnalyticsService {
           'count',
         ),
         this.kpiPair(
-          'appointments.completed',
-          'Completed appointments',
-          apptCompletedCur,
-          null,
-          'count',
+          'revenue.billed',
+          'Billed',
+          billedCur,
+          billedPrev,
+          'currency',
         ),
         this.kpiPair(
-          'appointments.cancelled',
-          'Cancelled appointments',
-          apptCancelledCur,
-          null,
-          'count',
-        ),
-        this.kpiPair(
-          'ipd.admissions',
-          'Admissions',
-          admissionsCur,
-          null,
-          'count',
-        ),
-        this.kpiPair(
-          'ipd.discharges',
-          'Discharges',
-          dischargesCur,
-          null,
-          'count',
+          'revenue.collected',
+          'Collected',
+          collectedCur,
+          collectedPrev,
+          'currency',
         ),
         this.kpiPair(
           'ipd.current_inpatients',
@@ -392,48 +440,6 @@ export class AnalyticsService {
         ),
         this.kpiPair('lab.requests', 'Lab requests', labCur, null, 'count'),
         this.kpiPair(
-          'lab.completed',
-          'Lab completed',
-          labDoneCur,
-          null,
-          'count',
-        ),
-        this.kpiPair(
-          'radiology.requests',
-          'Radiology requests',
-          radCur,
-          null,
-          'count',
-        ),
-        this.kpiPair(
-          'pharmacy.dispensed_lines',
-          'Dispensed lines',
-          rxLinesCur,
-          null,
-          'count',
-        ),
-        this.kpiPair(
-          'revenue.billed',
-          'Billed',
-          billedCur,
-          billedPrev,
-          'currency',
-        ),
-        this.kpiPair(
-          'revenue.collected',
-          'Collected',
-          collectedCur,
-          collectedPrev,
-          'currency',
-        ),
-        this.kpiPair(
-          'claims.submitted',
-          'Claims submitted',
-          claimsCur,
-          null,
-          'count',
-        ),
-        this.kpiPair(
           'followups.overdue',
           'Overdue follow-ups',
           followOverdue,
@@ -448,9 +454,29 @@ export class AnalyticsService {
           points: patientSeries,
         }),
         series({
+          key: 'appointments.trend',
+          label: 'Appointments over time',
+          points: appointmentSeries,
+        }),
+        series({
           key: 'revenue.billed',
           label: 'Billed revenue',
           points: revenueSeries,
+        }),
+        series({
+          key: 'revenue.collected',
+          label: 'Collected revenue',
+          points: collectedSeries,
+        }),
+        series({
+          key: 'consultations.trend',
+          label: 'Consultations over time',
+          points: consultationSeries,
+        }),
+        series({
+          key: 'lab.requests_trend',
+          label: 'Lab requests over time',
+          points: labSeries,
         }),
       ],
       breakdowns: [
@@ -461,6 +487,37 @@ export class AnalyticsService {
             name: r.status,
             value: r._count._all,
           })),
+        }),
+        breakdown({
+          key: 'appointments.by_type',
+          label: 'Appointments by type',
+          rows: apptByType.map((r) => ({
+            name: r.appointment_type || 'Unspecified',
+            value: r._count._all,
+          })),
+        }),
+        breakdown({
+          key: 'payments.by_method',
+          label: 'Collections by payment method',
+          rows: paymentMethods,
+        }),
+        breakdown({
+          key: 'consultations.by_status',
+          label: 'Consultations by status',
+          rows: consultationsByStatus.map((r) => ({
+            name: r.status,
+            value: r._count._all,
+          })),
+        }),
+        breakdown({
+          key: 'appointments.by_department',
+          label: 'Appointment volume by department',
+          rows: volumeByDepartment,
+        }),
+        breakdown({
+          key: 'diagnoses.top',
+          label: 'Common diagnoses (period)',
+          rows: topDiagnoses,
         }),
         breakdown({
           key: 'beds.by_status',
@@ -479,8 +536,16 @@ export class AnalyticsService {
           rows: [
             { Metric: 'New patients', Value: patientsCur },
             { Metric: 'Appointments', Value: apptCur },
+            { Metric: 'Completed appointments', Value: apptCompletedCur },
+            { Metric: 'Cancelled appointments', Value: apptCancelledCur },
+            { Metric: 'Admissions', Value: admissionsCur },
+            { Metric: 'Discharges', Value: dischargesCur },
             { Metric: 'Current inpatients', Value: currentInpatients },
             { Metric: 'Bed occupancy %', Value: occupancy },
+            { Metric: 'Lab completed', Value: labDoneCur },
+            { Metric: 'Radiology requests', Value: radCur },
+            { Metric: 'Dispensed lines', Value: rxLinesCur },
+            { Metric: 'Claims submitted', Value: claimsCur },
             { Metric: 'Billed (KES)', Value: billedCur },
             { Metric: 'Collected (KES)', Value: collectedCur },
           ],
@@ -825,6 +890,59 @@ export class AnalyticsService {
     );
   }
 
+  /** Appointment counts grouped by the doctor's department (real staff→department link). */
+  private async appointmentVolumeByDepartment(range: Range) {
+    const rows = await this.prisma.appointments.findMany({
+      where: { deleted_at: null, appointment_date: range },
+      select: {
+        doctor: {
+          select: { department_id: true },
+        },
+      },
+    });
+    const counts = new Map<string, number>();
+    for (const r of rows) {
+      const id = r.doctor?.department_id || '__none__';
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    const deptIds = [...counts.keys()].filter((id) => id !== '__none__');
+    const depts = deptIds.length
+      ? await this.prisma.departments.findMany({
+          where: { id: { in: deptIds } },
+          select: { id: true, name: true },
+        })
+      : [];
+    const nameById = new Map(depts.map((d) => [d.id, d.name]));
+    return [...counts.entries()]
+      .map(([id, value]) => ({
+        name: id === '__none__' ? 'Unassigned' : (nameById.get(id) ?? 'Unknown'),
+        value,
+      }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 15);
+  }
+
+  /** Top diagnoses in period by description frequency (supports clinical storytelling). */
+  private async topDiagnoses(range: Range, take = 10) {
+    const rows = await this.prisma.diagnoses.groupBy({
+      by: ['description'],
+      where: {
+        created_at: range,
+        diagnosis_type: 'PRIMARY',
+      },
+      _count: { _all: true },
+      orderBy: { _count: { description: 'desc' } },
+      take,
+    });
+    return rows.map((r) => ({
+      name:
+        r.description.length > 40
+          ? `${r.description.slice(0, 38)}…`
+          : r.description,
+      value: r._count._all,
+    }));
+  }
+
   // ── Appointments ──────────────────────────────────────────
   private async appointments(
     period: ResolvedPeriod,
@@ -902,6 +1020,26 @@ export class AnalyticsService {
       },
     );
 
+    const [byType, byDepartment, consultationTrend] = await Promise.all([
+      this.prisma.appointments.groupBy({
+        by: ['appointment_type'],
+        where: baseWhere,
+        _count: { _all: true },
+      }),
+      this.appointmentVolumeByDepartment(cur),
+      this.seriesPointsWithCompare(period, async (from, to) => {
+        const list = await this.prisma.consultations.findMany({
+          where: {
+            deleted_at: null,
+            consultation_date: this.range(from, to),
+            ...(query.doctorId ? { doctor_id: query.doctorId } : {}),
+          },
+          select: { consultation_date: true },
+        });
+        return list.map((r) => ({ at: new Date(r.consultation_date) }));
+      }),
+    ]);
+
     const byDoctor = [...doctorMap.entries()]
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value)
@@ -953,6 +1091,11 @@ export class AnalyticsService {
           label: 'Appointments over time',
           points: trendPoints,
         }),
+        series({
+          key: 'consultations.trend',
+          label: 'Consultations over time',
+          points: consultationTrend,
+        }),
       ],
       breakdowns: [
         breakdown({
@@ -964,9 +1107,22 @@ export class AnalyticsService {
           })),
         }),
         breakdown({
+          key: 'appointments.by_type',
+          label: 'By appointment type',
+          rows: byType.map((r) => ({
+            name: r.appointment_type || 'Unspecified',
+            value: r._count._all,
+          })),
+        }),
+        breakdown({
           key: 'appointments.by_doctor',
           label: 'By doctor',
           rows: byDoctor,
+        }),
+        breakdown({
+          key: 'appointments.by_department',
+          label: 'By department',
+          rows: byDepartment,
         }),
       ],
       tables: [
@@ -994,18 +1150,26 @@ export class AnalyticsService {
         ? this.range(period.compareFrom, period.compareTo)
         : null;
 
-    const [registered, registeredPrev, totalActive, genderRows] =
-      await Promise.all([
-        this.prisma.patients.count({
-          where: { deleted_at: null, created_at: cur },
-        }),
-        prev
-          ? this.prisma.patients.count({
-              where: { deleted_at: null, created_at: prev },
-            })
-          : Promise.resolve(null),
-        this.prisma.patients.count({ where: { deleted_at: null } }),
-        this.prisma.$queryRaw<Array<{ gender: string | null; n: bigint }>>`
+    const [
+      registered,
+      registeredPrev,
+      totalActive,
+      genderRows,
+      ageRows,
+      bloodRows,
+      visitMix,
+      deptVolume,
+    ] = await Promise.all([
+      this.prisma.patients.count({
+        where: { deleted_at: null, created_at: cur },
+      }),
+      prev
+        ? this.prisma.patients.count({
+            where: { deleted_at: null, created_at: prev },
+          })
+        : Promise.resolve(null),
+      this.prisma.patients.count({ where: { deleted_at: null } }),
+      this.prisma.$queryRaw<Array<{ gender: string | null; n: bigint }>>`
           SELECT p.gender, COUNT(*)::bigint AS n
           FROM patients.patients pt
           JOIN core.profiles p ON p.user_id = pt.user_id
@@ -1014,7 +1178,53 @@ export class AnalyticsService {
             AND pt.created_at <= ${period.to}
           GROUP BY p.gender
         `,
-      ]);
+      this.prisma.$queryRaw<Array<{ band: string; n: bigint }>>`
+          SELECT CASE
+            WHEN p.date_of_birth IS NULL THEN 'Unknown'
+            WHEN EXTRACT(YEAR FROM AGE(p.date_of_birth)) < 5 THEN '0–4'
+            WHEN EXTRACT(YEAR FROM AGE(p.date_of_birth)) < 13 THEN '5–12'
+            WHEN EXTRACT(YEAR FROM AGE(p.date_of_birth)) < 18 THEN '13–17'
+            WHEN EXTRACT(YEAR FROM AGE(p.date_of_birth)) < 30 THEN '18–29'
+            WHEN EXTRACT(YEAR FROM AGE(p.date_of_birth)) < 45 THEN '30–44'
+            WHEN EXTRACT(YEAR FROM AGE(p.date_of_birth)) < 60 THEN '45–59'
+            WHEN EXTRACT(YEAR FROM AGE(p.date_of_birth)) < 75 THEN '60–74'
+            ELSE '75+'
+          END AS band,
+          COUNT(*)::bigint AS n
+          FROM patients.patients pt
+          JOIN core.profiles p ON p.user_id = pt.user_id
+          WHERE pt.deleted_at IS NULL
+            AND pt.created_at >= ${period.from}
+            AND pt.created_at <= ${period.to}
+          GROUP BY band
+          ORDER BY MIN(CASE
+            WHEN p.date_of_birth IS NULL THEN 99
+            WHEN EXTRACT(YEAR FROM AGE(p.date_of_birth)) < 5 THEN 0
+            WHEN EXTRACT(YEAR FROM AGE(p.date_of_birth)) < 13 THEN 1
+            WHEN EXTRACT(YEAR FROM AGE(p.date_of_birth)) < 18 THEN 2
+            WHEN EXTRACT(YEAR FROM AGE(p.date_of_birth)) < 30 THEN 3
+            WHEN EXTRACT(YEAR FROM AGE(p.date_of_birth)) < 45 THEN 4
+            WHEN EXTRACT(YEAR FROM AGE(p.date_of_birth)) < 60 THEN 5
+            WHEN EXTRACT(YEAR FROM AGE(p.date_of_birth)) < 75 THEN 6
+            ELSE 7
+          END)
+        `,
+      this.prisma.patients.groupBy({
+        by: ['blood_group'],
+        where: {
+          deleted_at: null,
+          created_at: cur,
+          blood_group: { not: null },
+        },
+        _count: { _all: true },
+      }),
+      this.prisma.outpatientVisits.groupBy({
+        by: ['first_visit'],
+        where: { checked_in_at: cur },
+        _count: { _all: true },
+      }),
+      this.appointmentVolumeByDepartment(cur),
+    ]);
 
     const trend = await this.timeSeriesCounts(
       period,
@@ -1022,6 +1232,11 @@ export class AnalyticsService {
       (d) => d.created_at,
       'patients',
     );
+
+    const newVisits =
+      visitMix.find((v) => v.first_visit === true)?._count._all ?? 0;
+    const returningVisits =
+      visitMix.find((v) => v.first_visit === false)?._count._all ?? 0;
 
     return {
       meta: this.meta('patients', period),
@@ -1057,6 +1272,35 @@ export class AnalyticsService {
             value: Number(r.n),
           })),
         }),
+        breakdown({
+          key: 'patients.by_age',
+          label: 'New patients by age band',
+          rows: ageRows.map((r) => ({
+            name: r.band,
+            value: Number(r.n),
+          })),
+        }),
+        breakdown({
+          key: 'patients.new_vs_returning_visits',
+          label: 'OPD visits — new vs returning',
+          rows: [
+            { name: 'First visit', value: newVisits },
+            { name: 'Returning', value: returningVisits },
+          ].filter((r) => r.value > 0),
+        }),
+        breakdown({
+          key: 'patients.by_blood_group',
+          label: 'New patients by blood group',
+          rows: bloodRows.map((r) => ({
+            name: r.blood_group || 'Unknown',
+            value: r._count._all,
+          })),
+        }),
+        breakdown({
+          key: 'patients.appt_by_department',
+          label: 'Appointment volume by department',
+          rows: deptVolume,
+        }),
       ],
       tables: [
         table({
@@ -1065,6 +1309,15 @@ export class AnalyticsService {
           columns: ['Gender', 'Count'],
           rows: genderRows.map((r) => ({
             Gender: r.gender || 'Unknown',
+            Count: Number(r.n),
+          })),
+        }),
+        table({
+          key: 'patients.age',
+          label: 'Age distribution (new in period)',
+          columns: ['Age band', 'Count'],
+          rows: ageRows.map((r) => ({
+            'Age band': r.band,
             Count: Number(r.n),
           })),
         }),
@@ -1205,7 +1458,7 @@ export class AnalyticsService {
     _query: AnalyticsQueryDto,
   ): Promise<AnalyticsPayload> {
     const cur = this.range(period.from, period.to);
-    const [rxCount, dispensedLines, topMeds, stockValueRows, nearExpiry] =
+    const [rxCount, dispensedLines, topMeds, stockValueRows, nearExpiry, byStatus] =
       await Promise.all([
         this.prisma.prescriptions.count({
           where: {
@@ -1238,6 +1491,15 @@ export class AnalyticsService {
               gte: new Date(),
             },
           },
+        }),
+        this.prisma.prescriptions.groupBy({
+          by: ['status'],
+          where: {
+            deleted_at: null,
+            is_voided: false,
+            prescription_date: cur,
+          },
+          _count: { _all: true },
         }),
       ]);
 
@@ -1305,6 +1567,14 @@ export class AnalyticsService {
         }),
       ],
       breakdowns: [
+        breakdown({
+          key: 'pharmacy.by_status',
+          label: 'Prescriptions by status',
+          rows: byStatus.map((r) => ({
+            name: r.status,
+            value: r._count._all,
+          })),
+        }),
         breakdown({
           key: 'pharmacy.top_medications',
           label: 'Top dispensed medications',
@@ -2036,6 +2306,11 @@ export class AnalyticsService {
       where,
       _count: { _all: true },
     });
+    const byType = await this.prisma.followUps.groupBy({
+      by: ['follow_up_type'],
+      where,
+      _count: { _all: true },
+    });
     const scheduled =
       byStatus.find((s) => s.status === 'SCHEDULED')?._count._all ?? 0;
     const completed =
@@ -2099,6 +2374,14 @@ export class AnalyticsService {
           label: 'By status',
           rows: byStatus.map((r) => ({
             name: r.status,
+            value: r._count._all,
+          })),
+        }),
+        breakdown({
+          key: 'followups.by_type',
+          label: 'By follow-up type',
+          rows: byType.map((r) => ({
+            name: r.follow_up_type || 'Unspecified',
             value: r._count._all,
           })),
         }),

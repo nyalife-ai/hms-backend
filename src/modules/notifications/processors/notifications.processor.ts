@@ -318,8 +318,60 @@ export class NotificationsProcessor {
     });
     await this.adapter.sendSms({ to: phone, body });
     this.logger.log(
-      `Appointment reminder sent appointmentId=${data.appointmentId}`,
+      `Appointment reminder sent appointmentId=${data.appointmentId} offset=${data.offsetKey ?? 'legacy'}`,
     );
+
+    if (data.doctorUserId) {
+      const doctorTitle = 'Upcoming appointment';
+      const doctorBody = `You have an appointment at ${data.expectedStartsAt}.`;
+      try {
+        const persisted = await this.durable.persistOne({
+          userId: data.doctorUserId,
+          notificationType: 'appointment.reminder',
+          title: doctorTitle,
+          body: doctorBody,
+          priority: 'NORMAL',
+          entityType: 'appointment',
+          entityId: data.appointmentId,
+          actionPath: '/appointments',
+          idempotencyKey: `reminder:${data.appointmentId}:${data.offsetKey ?? 'legacy'}:${data.doctorUserId}`,
+        });
+        if (this.realtime) {
+          await this.realtime.publishToUser(data.doctorUserId, {
+            type: 'appointment.reminder',
+            payload: {
+              appointmentId: data.appointmentId,
+              offsetKey: data.offsetKey,
+              notificationId: persisted.id,
+            },
+          });
+          await this.durable.markWsDelivered(persisted.id);
+        }
+        if (this.fcm.isConfigured()) {
+          const tokens = await this.deviceTokens.listActiveTokens(
+            data.doctorUserId,
+          );
+          for (const token of tokens) {
+            await this.fcm.send({
+              token,
+              title: doctorTitle,
+              body: doctorBody,
+              data: {
+                type: 'appointment.reminder',
+                appointmentId: data.appointmentId,
+              },
+            });
+          }
+        }
+      } catch (err) {
+        this.logger.warn(
+          `Doctor appointment reminder channel failed appointmentId=${data.appointmentId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+
     return { sent: true };
   }
 }
