@@ -5,12 +5,14 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { createDomainEventId } from '../../core/domain';
 import type { Prisma } from '../../generated/prisma';
 import { PrismaService } from '../../database/prisma/prisma.service';
+import { isDbPoolExhaustedError } from '../../database/prisma/prisma-datasource-url';
 import { HmsAuditWriter } from '../audit/hms-audit.writer';
 import { Money } from '../../shared/money/money';
 import {
@@ -134,6 +136,8 @@ function asDateOnly(value?: string | Date | null, fallback?: Date): Date {
 
 @Injectable()
 export class BillingFinanceService {
+  private readonly logger = new Logger(BillingFinanceService.name);
+
   public constructor(
     private readonly prisma: PrismaService,
     private readonly audit: HmsAuditWriter,
@@ -2528,41 +2532,58 @@ export class BillingFinanceService {
     const from = startOfDay();
     const to = endOfDay();
 
-    const [issuedToday, paymentsToday, openInvoices, pendingClaims] =
-      await Promise.all([
-        this.prisma.invoices.findMany({
-          where: {
-            status: { in: ['ISSUED', 'PARTIALLY_PAID', 'PAID'] },
-            invoice_date: { gte: from, lte: startOfDay(to) },
-            deleted_at: null,
-            is_voided: false,
+    // Keep concurrency low so we don't burn the Supabase session pool
+    // (EMAXCONNSESSION). Claims count is best-effort — never fail the page.
+    const [issuedToday, paymentsToday, openInvoices] = await Promise.all([
+      this.prisma.invoices.findMany({
+        where: {
+          status: { in: ['ISSUED', 'PARTIALLY_PAID', 'PAID'] },
+          invoice_date: { gte: from, lte: startOfDay(to) },
+          deleted_at: null,
+          is_voided: false,
+        },
+        select: { total_amount: true },
+      }),
+      this.prisma.payments.aggregate({
+        where: {
+          status: 'COMPLETED',
+          payment_date: { gte: from, lte: to },
+        },
+        _sum: { amount: true },
+      }),
+      this.prisma.invoices.findMany({
+        where: {
+          status: { in: ['ISSUED', 'PARTIALLY_PAID'] },
+          deleted_at: null,
+          is_voided: false,
+        },
+        include: {
+          billing_payment_allocations_invoice_id: {
+            where: { payment: { status: 'COMPLETED' } },
+            select: { allocated_amount: true },
           },
-          select: { total_amount: true },
-        }),
-        this.prisma.payments.aggregate({
-          where: {
-            status: 'COMPLETED',
-            payment_date: { gte: from, lte: to },
-          },
-          _sum: { amount: true },
-        }),
-        this.prisma.invoices.findMany({
-          where: {
-            status: { in: ['ISSUED', 'PARTIALLY_PAID'] },
-            deleted_at: null,
-            is_voided: false,
-          },
-          include: {
-            billing_payment_allocations_invoice_id: {
-              where: { payment: { status: 'COMPLETED' } },
-              select: { allocated_amount: true },
-            },
-          },
-        }),
-        this.prisma.insuranceClaims.count({
-          where: { status: { in: ['SUBMITTED', 'UNDER_REVIEW'] } },
-        }),
-      ]);
+        },
+      }),
+    ]);
+
+    let pendingClaims = 0;
+    try {
+      pendingClaims = await this.prisma.insuranceClaims.count({
+        where: { status: { in: ['SUBMITTED', 'UNDER_REVIEW'] } },
+      });
+    } catch (error) {
+      if (isDbPoolExhaustedError(error)) {
+        this.logger.warn(
+          'Billing overview: claims count skipped (DB pool exhausted)',
+        );
+      } else {
+        this.logger.warn(
+          `Billing overview: claims count failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
 
     const issuedTotal = issuedToday.reduce(
       (sum, r) => sum.add(moneyFrom(r.total_amount.toString())),

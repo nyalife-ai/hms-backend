@@ -6,44 +6,15 @@ import {
 } from '@nestjs/common';
 import { PrismaClient } from '../../generated/prisma';
 import { registerPrismaAuditMiddleware } from '../../modules/audit/prisma-audit.middleware';
-
-/**
- * Ensure Prisma's client-side pool settings play nicely with Supabase.
- *
- * - Transaction pooler (6543 + pgbouncer=true): keep Prisma pool tiny (PgBouncer
- *   owns multiplexing). Default Prisma limit of ~5 often times out on free tiers.
- * - Session pooler / direct (5432): allow a small Nest pool with a longer wait.
- */
-function datasourceUrlWithPool(raw: string | undefined): string | undefined {
-  if (!raw) return raw;
-  try {
-    const url = new URL(raw);
-    const isPgBouncer =
-      url.searchParams.get('pgbouncer') === 'true' ||
-      url.port === '6543' ||
-      raw.includes(':6543/');
-
-    if (!url.searchParams.has('connection_limit')) {
-      url.searchParams.set('connection_limit', isPgBouncer ? '1' : '5');
-    }
-    if (!url.searchParams.has('pool_timeout')) {
-      url.searchParams.set('pool_timeout', isPgBouncer ? '20' : '30');
-    }
-    if (!url.searchParams.has('connect_timeout')) {
-      url.searchParams.set('connect_timeout', '15');
-    }
-    return url.toString();
-  } catch {
-    return raw;
-  }
-}
+import { datasourceUrlWithPool } from './prisma-datasource-url';
 
 /**
  * Nest-managed Prisma client for the NyaLife multi-schema HMS database.
  *
  * Prefer Session-mode pooler (port 5432 on `*.pooler.supabase.com`) for the
- * Nest `DATABASE_URL`. Keep Transaction-mode (6543) only if you must, and
- * always pair it with `pgbouncer=true` + a low `connection_limit`.
+ * Nest `DATABASE_URL`, with a low `connection_limit` (capped in
+ * {@link datasourceUrlWithPool}). Keep Transaction-mode (6543) only if you
+ * must, and always pair it with `pgbouncer=true` + `connection_limit=1`.
  * `DIRECT_URL` is for `prisma migrate` / `db push`.
  */
 @Injectable()
@@ -64,11 +35,11 @@ export class PrismaService
           ? ['warn', 'error']
           : ['error'],
     });
-    if (url && process.env.NODE_ENV !== 'production') {
+    if (url) {
       try {
         const parsed = new URL(url);
         this.logger.log(
-          `Prisma datasource pool: port=${parsed.port || '5432'} ` +
+          `Prisma datasource pool: host=${parsed.hostname} port=${parsed.port || '5432'} ` +
             `connection_limit=${parsed.searchParams.get('connection_limit') || 'default'} ` +
             `pgbouncer=${parsed.searchParams.get('pgbouncer') || 'false'}`,
         );
