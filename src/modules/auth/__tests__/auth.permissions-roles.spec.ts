@@ -45,6 +45,11 @@ describe('auth.permissions', () => {
       }
     }
   });
+
+  it('keeps billing restricted to finance/admin roles', () => {
+    expect(ROLE_MODULE_ACCESS.RECEPTIONIST).not.toContain('billing');
+    expect(ROLE_MODULE_ACCESS.RECEPTIONIST).not.toContain('billing-ledger');
+  });
 });
 
 describe('role-sets', () => {

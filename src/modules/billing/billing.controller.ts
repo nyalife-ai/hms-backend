@@ -39,7 +39,7 @@ export class BillingController {
   @Get('fees')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST', 'PHARMACIST', 'DOCTOR')
+  @Roles('ADMIN', 'ACCOUNTANT', 'PHARMACIST', 'DOCTOR')
   @ApiOperation({ summary: 'OPD fee schedule (CONSULT / LAB / MED)' })
   fees() {
     return this.settlement.getFeeSchedule();
@@ -48,7 +48,7 @@ export class BillingController {
   @Get('mpesa/mode')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST', 'PHARMACIST')
+  @Roles('ADMIN', 'ACCOUNTANT', 'PHARMACIST')
   mode() {
     return { mode: this.checkout.mode() };
   }
@@ -56,7 +56,7 @@ export class BillingController {
   @Post('checkout/stk')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST', 'PHARMACIST')
+  @Roles('ADMIN', 'ACCOUNTANT', 'PHARMACIST')
   @ApiOperation({ summary: 'Start M-Pesa STK Push for a visit checkout' })
   @ApiBody({ type: StkCheckoutDto })
   stk(
@@ -74,7 +74,7 @@ export class BillingController {
   @Get('checkout/:id/status')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST', 'PHARMACIST')
+  @Roles('ADMIN', 'ACCOUNTANT', 'PHARMACIST')
   @ApiOperation({ summary: 'Poll STK status; finalizes receipt on success' })
   status(@Param('id') id: string) {
     return this.checkout.getStatus(id);
@@ -114,7 +114,7 @@ export class BillingController {
   @Get('receipts/:id')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST', 'PHARMACIST')
+  @Roles('ADMIN', 'ACCOUNTANT', 'PHARMACIST')
   receipt(@Param('id') id: string) {
     return this.checkout.getReceipt(id);
   }

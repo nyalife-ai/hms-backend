@@ -26,7 +26,6 @@ import { BillingSettlementService } from './billing-settlement.service';
 const BILLING_OPS = [
   'ADMIN',
   'ACCOUNTANT',
-  'RECEPTIONIST',
 ] as const satisfies readonly HmsRole[];
 /** Chart of accounts / journals / tax / periods — finance only. */
 const BILLING_ACCT = [
@@ -37,7 +36,6 @@ const BILLING_ACCT = [
 const BILLING_READ = [
   'ADMIN',
   'ACCOUNTANT',
-  'RECEPTIONIST',
   'PHARMACIST',
   'DOCTOR',
 ] as const satisfies readonly HmsRole[];

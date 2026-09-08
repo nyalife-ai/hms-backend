@@ -86,7 +86,6 @@ export const ROLE_MODULE_ACCESS: Record<HmsRole, ModulePermission[]> = {
     'appointments',
     'follow-ups',
     'doctors',
-    'billing',
     'reports',
     'messages',
     'account',

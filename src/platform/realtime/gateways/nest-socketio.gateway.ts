@@ -23,7 +23,7 @@ const DEPARTMENT_ROOMS: Record<string, string[]> = {
   laboratory: ['LAB_TECHNICIAN', 'ADMIN', 'DOCTOR'],
   pharmacy: ['PHARMACIST', 'ADMIN', 'DOCTOR'],
   radiology: ['RADIOLOGIST', 'ADMIN', 'DOCTOR'],
-  billing: ['ACCOUNTANT', 'RECEPTIONIST', 'ADMIN'],
+  billing: ['ACCOUNTANT', 'ADMIN'],
   ipd: ['NURSE', 'DOCTOR', 'ADMIN'],
 };
 

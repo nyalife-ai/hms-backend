@@ -23,26 +23,26 @@ export class InsuranceController {
   constructor(private readonly insurance: InsuranceService) {}
 
   @Get('providers')
-  @Roles('ADMIN', 'RECEPTIONIST', 'ACCOUNTANT')
+  @Roles('ADMIN', 'ACCOUNTANT')
   @ApiOperation({ summary: 'List insurance providers and integration channels' })
   providers() {
     return this.insurance.listProviders();
   }
 
   @Post('eligibility')
-  @Roles('ADMIN', 'RECEPTIONIST')
+  @Roles('ADMIN', 'ACCOUNTANT')
   eligibility(@Body() body: EligibilityDto) {
     return this.insurance.verifyEligibility(body.providerId, body.memberNumber);
   }
 
   @Post('otp/send')
-  @Roles('ADMIN', 'RECEPTIONIST')
+  @Roles('ADMIN', 'ACCOUNTANT')
   sendOtp(@Body() body: OtpSendDto) {
     return this.insurance.sendOtp(body.providerId, body.sessionId);
   }
 
   @Post('otp/verify')
-  @Roles('ADMIN', 'RECEPTIONIST')
+  @Roles('ADMIN', 'ACCOUNTANT')
   verifyOtp(@Body() body: OtpVerifyDto) {
     return this.insurance.verifyOtp(
       body.providerId,
@@ -56,7 +56,7 @@ export class InsuranceController {
   }
 
   @Post('claims')
-  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
+  @Roles('ADMIN', 'ACCOUNTANT')
   submitClaim(
     @Body() body: SubmitClaimDto,
     @CurrentUser() user: AuthUserPublic,
@@ -69,13 +69,13 @@ export class InsuranceController {
   }
 
   @Post('claims/status')
-  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
+  @Roles('ADMIN', 'ACCOUNTANT')
   claimStatus(@Body() body: ClaimStatusQueryDto) {
     return this.insurance.getClaimStatus(body.providerId, body.claimId);
   }
 
   @Post('claims/sync')
-  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
+  @Roles('ADMIN', 'ACCOUNTANT')
   @ApiOperation({
     summary:
       'Poll insurer for claim status and sign off the visit when accepted',
