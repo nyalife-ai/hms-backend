@@ -44,7 +44,7 @@ export class BulkImportsController {
   public constructor(private readonly service: BulkImportsService) {}
 
   @Get(':resource/template')
-  @Roles('ADMIN', 'RECEPTIONIST', 'SUPER_ADMIN')
+  @Roles('ADMIN', 'RECEPTIONIST', 'SUPER_ADMIN', 'PHARMACIST')
   @ApiOperation({ summary: 'Download CSV template (headers only)' })
   template(
     @Param('resource') resource: string,
@@ -60,7 +60,7 @@ export class BulkImportsController {
   }
 
   @Get(':resource/example')
-  @Roles('ADMIN', 'RECEPTIONIST', 'SUPER_ADMIN')
+  @Roles('ADMIN', 'RECEPTIONIST', 'SUPER_ADMIN', 'PHARMACIST')
   @ApiOperation({ summary: 'Download example CSV with sample rows' })
   example(
     @Param('resource') resource: string,
@@ -76,7 +76,7 @@ export class BulkImportsController {
   }
 
   @Post(':resource/validate')
-  @Roles('ADMIN', 'RECEPTIONIST', 'SUPER_ADMIN')
+  @Roles('ADMIN', 'RECEPTIONIST', 'SUPER_ADMIN', 'PHARMACIST')
   @ApiOperation({
     summary: 'Upload CSV, validate, and return a preview session (no writes)',
   })
@@ -112,7 +112,7 @@ export class BulkImportsController {
   }
 
   @Post(':resource/commit')
-  @Roles('ADMIN', 'RECEPTIONIST', 'SUPER_ADMIN')
+  @Roles('ADMIN', 'RECEPTIONIST', 'SUPER_ADMIN', 'PHARMACIST')
   @ApiOperation({
     summary: 'Confirm a validated import session and create records',
   })
@@ -136,7 +136,7 @@ export class BulkImportsController {
   }
 
   @Get(':resource/sessions/:sessionId/errors.csv')
-  @Roles('ADMIN', 'RECEPTIONIST', 'SUPER_ADMIN')
+  @Roles('ADMIN', 'RECEPTIONIST', 'SUPER_ADMIN', 'PHARMACIST')
   @ApiOperation({ summary: 'Download validation error/warning report as CSV' })
   async errorsCsv(
     @Param('resource') resource: string,

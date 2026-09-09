@@ -50,6 +50,12 @@ describe('auth.permissions', () => {
     expect(ROLE_MODULE_ACCESS.RECEPTIONIST).not.toContain('billing');
     expect(ROLE_MODULE_ACCESS.RECEPTIONIST).not.toContain('billing-ledger');
   });
+
+  it('keeps pharmacy access available to pharmacists', () => {
+    expect(ROLE_MODULE_ACCESS.PHARMACIST).toContain('pharmacy');
+    expect(ROLE_MODULE_ACCESS.PHARMACIST).toContain('messages');
+    expect(ROLE_MODULE_ACCESS.PHARMACIST).toContain('account');
+  });
 });
 
 describe('role-sets', () => {
