@@ -6,6 +6,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../database/prisma/prisma.service';
 import { HmsAuditWriter } from '../../audit/hms-audit.writer';
 import { PharmacyOperationsUseCase } from '../../pharmacy/use-cases/pharmacy-operations.usecase';
+import { MEDICATION_FORMS } from '../../pharmacy/medication-forms.constants';
 import type {
   BulkImportCommitResult,
   BulkImportNormalizedRow,
@@ -24,15 +25,6 @@ const HEADERS = [
   'Unit',
   'Standard Selling Price',
   'Description',
-] as const;
-
-const MED_FORMS = [
-  'TABLET',
-  'CAPSULE',
-  'SYRUP',
-  'INJECTION',
-  'CREAM',
-  'OTHER',
 ] as const;
 
 @Injectable()
@@ -148,10 +140,10 @@ export class MedicationsBulkImporter implements BulkImportResource {
         seen.set(medicationName.toLowerCase(), rowNum);
       }
 
-      if (form && !(MED_FORMS as readonly string[]).includes(form)) {
+      if (form && !(MEDICATION_FORMS as readonly string[]).includes(form)) {
         rowErrors.push({
           row: rowNum,
-          message: `Form must be one of: ${MED_FORMS.join(', ')}.`,
+          message: `Form must be one of: ${MEDICATION_FORMS.join(', ')}.`,
           field: 'Form',
           value: form,
         });
@@ -258,10 +250,19 @@ export class MedicationsBulkImporter implements BulkImportResource {
       userId: actorUserId,
       action: 'CREATE',
       entityType: 'bulk-import.medications',
-      entityId: createdIds[0] ?? 'none',
-      newValues: { imported, failed, total: rows.length },
+      entityId: 'bulk-import',
+      details: {
+        imported,
+        failed,
+        createdIds,
+      },
     });
 
-    return { imported, failed, skipped: 0, errors, createdIds };
+    return {
+      imported,
+      failed,
+      createdIds,
+      errors,
+    };
   }
 }

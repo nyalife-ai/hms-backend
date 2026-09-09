@@ -14,15 +14,7 @@ import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../../database/prisma/prisma.service';
 import { HmsAuditWriter } from '../../audit/hms-audit.writer';
 import { profileName, USER_PROFILE_INCLUDE } from '../pharmacy-names';
-
-const MED_FORMS = [
-  'TABLET',
-  'CAPSULE',
-  'SYRUP',
-  'INJECTION',
-  'CREAM',
-  'OTHER',
-] as const;
+import { MEDICATION_FORMS } from '../medication-forms.constants';
 
 const RX_STATUSES = [
   'PENDING',
@@ -382,9 +374,9 @@ export class PharmacyOperationsUseCase {
   }) {
     if (filters?.form) {
       const form = filters.form.toUpperCase();
-      if (!MED_FORMS.includes(form as (typeof MED_FORMS)[number])) {
+      if (!MEDICATION_FORMS.includes(form as (typeof MEDICATION_FORMS)[number])) {
         throw new BadRequestException(
-          `form must be one of ${MED_FORMS.join(', ')}`,
+          `form must be one of ${MEDICATION_FORMS.join(', ')}`,
         );
       }
       filters.form = form;
@@ -502,9 +494,9 @@ export class PharmacyOperationsUseCase {
     const name = input.medicationName?.trim();
     if (!name) throw new BadRequestException('medicationName is required');
     let form = input.form?.toUpperCase();
-    if (form && !MED_FORMS.includes(form as (typeof MED_FORMS)[number])) {
+    if (form && !MEDICATION_FORMS.includes(form as (typeof MEDICATION_FORMS)[number])) {
       throw new BadRequestException(
-        `form must be one of ${MED_FORMS.join(', ')}`,
+        `form must be one of ${MEDICATION_FORMS.join(', ')}`,
       );
     }
     if (
@@ -570,9 +562,9 @@ export class PharmacyOperationsUseCase {
     await this.getMedication(id);
     if (input.form) {
       const form = input.form.toUpperCase();
-      if (!MED_FORMS.includes(form as (typeof MED_FORMS)[number])) {
+      if (!MEDICATION_FORMS.includes(form as (typeof MEDICATION_FORMS)[number])) {
         throw new BadRequestException(
-          `form must be one of ${MED_FORMS.join(', ')}`,
+          `form must be one of ${MEDICATION_FORMS.join(', ')}`,
         );
       }
       input.form = form;

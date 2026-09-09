@@ -14,6 +14,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { MEDICATION_FORMS } from '../medication-forms.constants';
 
 export class CreateSupplierDto {
   @ApiProperty({ example: 'Alpha Pharma Ltd' })
@@ -82,6 +83,11 @@ export class CreateCategoryDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
 }
 
 export class UpdateCategoryDto {
@@ -117,7 +123,7 @@ export class PharmacyCreateMedicationDto {
   categoryId?: string;
 
   @ApiPropertyOptional({
-    enum: ['TABLET', 'CAPSULE', 'SYRUP', 'INJECTION', 'CREAM', 'OTHER'],
+    enum: MEDICATION_FORMS,
   })
   @IsOptional()
   @IsString()
