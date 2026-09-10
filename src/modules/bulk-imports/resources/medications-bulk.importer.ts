@@ -250,17 +250,14 @@ export class MedicationsBulkImporter implements BulkImportResource {
       userId: actorUserId,
       action: 'CREATE',
       entityType: 'bulk-import.medications',
-      entityId: 'bulk-import',
-      details: {
-        imported,
-        failed,
-        createdIds,
-      },
+      entityId: createdIds[0] ?? 'none',
+      newValues: { imported, failed, total: rows.length },
     });
 
     return {
       imported,
       failed,
+      skipped: 0,
       createdIds,
       errors,
     };
