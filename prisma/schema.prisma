@@ -61,6 +61,7 @@ model User {
   laboratory_results_verified_by Results[] @relation(name: "Results_User_verified_by")
   radiology_requests_requested_by RadiologyRequests[] @relation(name: "RadiologyRequests_User_requested_by")
   radiology_images_uploaded_by Images[] @relation(name: "Images_User_uploaded_by")
+  radiology_reports_finalized_by Reports[] @relation(name: "Reports_User_finalized_by")
   billing_journal_entries_created_by JournalEntries[] @relation(name: "JournalEntries_User_created_by")
   billing_journal_entries_posted_by JournalEntries[] @relation(name: "JournalEntries_User_posted_by")
   billing_invoices_created_by Invoices[] @relation(name: "Invoices_User_created_by")
@@ -278,6 +279,7 @@ model Departments {
   created_at DateTime @db.Timestamptz(6) @default(now())
   updated_at DateTime @db.Timestamptz(6) @updatedAt
   inpatient_wards_department_id Wards[] @relation(name: "Wards_Departments_department_id")
+  radiology_scan_types_department_id ScanTypes[] @relation(name: "ScanTypes_Departments_department_id")
   @@map("departments")
   @@schema("core")
 }
@@ -1036,9 +1038,16 @@ model ScanTypes {
   standard_price Decimal @db.Decimal(12, 2) @default(0)
   typical_duration_minutes Int?
   contrast_required Boolean @default(false)
+  /// Free-text patient preparation instructions (fasting, full bladder, etc.)
+  preparation_instructions String?
+  department_id String? @db.Uuid
+  /// Synced billing.services row for this scan type's standard price.
+  billing_service_id String? @db.Uuid
   is_active Boolean @default(true)
   created_at DateTime @db.Timestamptz(6) @default(now())
   updated_at DateTime @db.Timestamptz(6) @updatedAt
+  department Departments? @relation(fields: [department_id], references: [id], name: "ScanTypes_Departments_department_id", onDelete: SetNull)
+  billing_service Services? @relation(fields: [billing_service_id], references: [id], name: "ScanTypes_Services_billing_service_id", onDelete: SetNull)
   radiology_requests_scan_type_id RadiologyRequests[] @relation(name: "RadiologyRequests_ScanTypes_scan_type_id")
   @@map("scan_types")
   @@schema("radiology")
@@ -1055,6 +1064,14 @@ model RadiologyRequests {
   priority String @db.VarChar(20) @default("ROUTINE")
   status String @db.VarChar(20) @default("PENDING")
   requested_by String @db.Uuid
+  cancellation_reason String?
+  scheduled_at DateTime? @db.Timestamptz(6)
+  checked_in_at DateTime? @db.Timestamptz(6)
+  started_at DateTime? @db.Timestamptz(6)
+  completed_at DateTime? @db.Timestamptz(6)
+  reported_at DateTime? @db.Timestamptz(6)
+  finalized_at DateTime? @db.Timestamptz(6)
+  cancelled_at DateTime? @db.Timestamptz(6)
   created_at DateTime @db.Timestamptz(6) @default(now())
   updated_at DateTime @db.Timestamptz(6) @updatedAt
   patient Patients @relation(fields: [patient_id], references: [id], name: "RadiologyRequests_Patients_patient_id")
@@ -1065,13 +1082,15 @@ model RadiologyRequests {
   radiology_findings_request_id Findings[] @relation(name: "Findings_RadiologyRequests_request_id")
   radiology_reports_request_id Reports[] @relation(name: "Reports_RadiologyRequests_request_id")
   radiology_images_request_id Images[] @relation(name: "Images_RadiologyRequests_request_id")
+  @@index([status], map: "idx_radreq_status")
+  @@index([scheduled_at], map: "idx_radreq_scheduled")
   @@map("requests")
   @@schema("radiology")
 }
 
 model Findings {
   id String @db.Uuid @id @default(uuid())
-  request_id String @db.Uuid @unique
+  request_id String @db.Uuid
   radiologist_id String @db.Uuid
   findings_text String?
   status String @db.VarChar(20) @default("DRAFT")
@@ -1080,23 +1099,54 @@ model Findings {
   request RadiologyRequests @relation(fields: [request_id], references: [id], name: "Findings_RadiologyRequests_request_id", onDelete: Cascade)
   radiologist StaffProfiles @relation(fields: [radiologist_id], references: [id], name: "Findings_StaffProfiles_radiologist_id")
   radiology_reports_findings_id Reports[] @relation(name: "Reports_Findings_findings_id")
+  @@index([request_id], map: "idx_findings_request")
   @@map("findings")
   @@schema("radiology")
 }
 
 model Reports {
   id String @db.Uuid @id @default(uuid())
-  findings_id String @db.Uuid @unique
+  findings_id String @db.Uuid
   request_id String @db.Uuid
+  template_id String? @db.Uuid
+  /// Structured template field values (measurements, gestational age, etc.) — see ReportTemplates.
+  sections_data Json?
   final_impression String?
   conclusion String?
   recommendations String?
   radiologist_signature String?
   signed_at DateTime? @db.Timestamptz(6)
+  version Int @default(1)
+  /// DRAFT | FINAL | AMENDED
+  status String @db.VarChar(20) @default("DRAFT")
+  amends_report_id String? @db.Uuid
+  finalized_by String? @db.Uuid
+  finalized_at DateTime? @db.Timestamptz(6)
+  amendment_reason String?
   created_at DateTime @db.Timestamptz(6) @default(now())
   findings Findings @relation(fields: [findings_id], references: [id], name: "Reports_Findings_findings_id", onDelete: Cascade)
   request RadiologyRequests @relation(fields: [request_id], references: [id], name: "Reports_RadiologyRequests_request_id", onDelete: Cascade)
+  rel_finalized_by User? @relation(fields: [finalized_by], references: [id], name: "Reports_User_finalized_by")
+  amends Reports? @relation("Reports_amends", fields: [amends_report_id], references: [id], onDelete: SetNull)
+  amended_by Reports[] @relation("Reports_amends")
+  template ReportTemplates? @relation(fields: [template_id], references: [id], name: "Reports_ReportTemplates_template_id", onDelete: SetNull)
+  @@index([request_id], map: "idx_report_request")
   @@map("reports")
+  @@schema("radiology")
+}
+
+model ReportTemplates {
+  id String @db.Uuid @id @default(uuid())
+  name String @db.VarChar(150) @unique
+  modality String? @db.VarChar(50)
+  body_region String? @db.VarChar(100)
+  /// [{ key, label, type, required }] — data-driven, admin-configurable.
+  sections Json @default("[]")
+  is_active Boolean @default(true)
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  updated_at DateTime @db.Timestamptz(6) @updatedAt
+  radiology_reports_template_id Reports[] @relation(name: "Reports_ReportTemplates_template_id")
+  @@map("report_templates")
   @@schema("radiology")
 }
 
@@ -1104,6 +1154,8 @@ model Images {
   id String @db.Uuid @id @default(uuid())
   request_id String @db.Uuid
   file_path String @db.VarChar(500)
+  file_name String? @db.VarChar(255)
+  mime_type String? @db.VarChar(100)
   modality String? @db.VarChar(30)
   series_description String? @db.VarChar(255)
   number_of_images Int? @default(1)
@@ -1143,6 +1195,7 @@ model Services {
   updated_at DateTime @db.Timestamptz(6) @updatedAt
   category_rel ServiceCategories? @relation(fields: [category_id], references: [id], name: "Services_ServiceCategories_category_id", onDelete: SetNull)
   billing_invoice_items_service_id InvoiceItems[] @relation(name: "InvoiceItems_Services_service_id")
+  radiology_scan_types_billing_service_id ScanTypes[] @relation(name: "ScanTypes_Services_billing_service_id")
   @@index([category_id])
   @@map("services")
   @@schema("billing")

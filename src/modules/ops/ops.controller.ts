@@ -51,13 +51,6 @@ class CreateAdmissionDto {
   @ApiPropertyOptional() @IsOptional() @IsString() reason?: string;
 }
 
-class CreateRadiologyDto {
-  @ApiProperty() @IsString() patientId!: string;
-  @ApiProperty() @IsString() scanTypeId!: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() requestingDoctorId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() indication?: string;
-}
-
 class CreateInvoiceDto {
   @ApiProperty() @IsString() patientId!: string;
   @ApiProperty() @IsNumber() @Min(1) amount!: number;
@@ -183,15 +176,6 @@ export class OpsController {
     @CurrentUser() user: AuthUserPublic,
   ) {
     return this.ops.createAdmission({ ...body, createdBy: user.id });
-  }
-
-  @Post('radiology-requests')
-  @Roles('ADMIN', 'DOCTOR', 'RADIOLOGIST')
-  createRadiology(
-    @Body() body: CreateRadiologyDto,
-    @CurrentUser() user: AuthUserPublic,
-  ) {
-    return this.ops.createRadiologyRequest({ ...body, createdBy: user.id });
   }
 
   @Post('invoices')

@@ -8,6 +8,10 @@
       {
         "include": "generated/prisma/**/*",
         "watchAssets": true
+      },
+      {
+        "include": "modules/radiology/reporting/assets/**/*",
+        "watchAssets": true
       }
     ],
     "watchAssets": true

@@ -11,7 +11,6 @@ import { MessagingService } from '../communication/services/messaging.service';
 import { IpdJourneyUseCase } from '../inpatient/use-cases/ipd-journey.usecase';
 import type { CreatePatientDto } from '../patients/dto';
 import { PatientsService } from '../patients/patients.service';
-import { RadiologyService } from '../radiology/radiology.service';
 
 @Injectable()
 export class OpsService {
@@ -20,7 +19,6 @@ export class OpsService {
     private readonly patientsService: PatientsService,
     private readonly ipd: IpdJourneyUseCase,
     private readonly appointments: AppointmentsService,
-    private readonly radiology: RadiologyService,
     private readonly messaging: MessagingService,
   ) {}
 
@@ -104,32 +102,6 @@ export class OpsService {
       bedId: bed.id,
       admittingDoctorId: doctorId,
       primaryDiagnosis: input.reason || 'Clinical admission',
-    });
-  }
-
-  async createRadiologyRequest(input: {
-    patientId: string;
-    scanTypeId: string;
-    requestingDoctorId?: string;
-    createdBy: string;
-    indication?: string;
-  }) {
-    this.requireDb();
-    const scan = await this.prisma.scanTypes.findUnique({
-      where: { id: input.scanTypeId },
-    });
-    if (!scan) throw new NotFoundException('Scan type not found');
-    const seq = await this.prisma.radiologyRequests.count();
-    const requestNumber = `RAD-${new Date().getFullYear()}-${String(seq + 1).padStart(4, '0')}`;
-    return this.radiology.create({
-      name: requestNumber,
-      patientId: input.patientId,
-      scanTypeId: input.scanTypeId,
-      requestedBy: input.createdBy,
-      requestingDoctorId: input.requestingDoctorId,
-      description: input.indication || 'Clinical imaging',
-      status: 'SCHEDULED',
-      priority: 'ROUTINE',
     });
   }
 

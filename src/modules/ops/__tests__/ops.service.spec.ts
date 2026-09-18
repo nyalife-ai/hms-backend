@@ -18,7 +18,6 @@ describe('OpsService', () => {
   let patientsService: { create: jest.Mock };
   let ipd: { admit: jest.Mock };
   let appointments: { create: jest.Mock; update: jest.Mock };
-  let radiology: { create: jest.Mock };
   let service: OpsService;
 
   beforeEach(() => {
@@ -138,7 +137,6 @@ describe('OpsService', () => {
       create: jest.fn().mockResolvedValue({ id: 'a1' }),
       update: jest.fn().mockResolvedValue({ id: 'a1', status: 'ARRIVED' }),
     };
-    radiology = { create: jest.fn().mockResolvedValue({ id: 'rad1' }) };
     const messaging = {
       createConversation: jest.fn().mockResolvedValue({ id: 'c1' }),
       listMessages: jest.fn().mockResolvedValue({
@@ -168,7 +166,6 @@ describe('OpsService', () => {
       patientsService as never,
       ipd as never,
       appointments as never,
-      radiology as never,
       messaging as never,
     );
     (service as any).__messaging = messaging;
@@ -270,31 +267,6 @@ describe('OpsService', () => {
         admittingDoctorId: 'doc1',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
-  });
-
-  it('creates radiology requests', async () => {
-    await service.createRadiologyRequest({
-      patientId: 'p1',
-      scanTypeId: 'st1',
-      createdBy: 'u1',
-      indication: 'Pain',
-    });
-    expect(radiology.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: expect.stringMatching(/^RAD-/),
-        patientId: 'p1',
-        status: 'SCHEDULED',
-      }),
-    );
-
-    prisma.scanTypes.findUnique.mockResolvedValue(null);
-    await expect(
-      service.createRadiologyRequest({
-        patientId: 'p1',
-        scanTypeId: 'missing',
-        createdBy: 'u1',
-      }),
-    ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('creates invoices', async () => {

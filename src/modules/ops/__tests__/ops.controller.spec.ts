@@ -12,7 +12,6 @@ describe('OpsController', () => {
     bootstrapBillingAndPolicies: jest.fn().mockResolvedValue({ ok: true }),
     createAppointment: jest.fn().mockResolvedValue({ id: 'a1' }),
     createAdmission: jest.fn().mockResolvedValue({ id: 'adm1' }),
-    createRadiologyRequest: jest.fn().mockResolvedValue({ id: 'rad1' }),
     createInvoice: jest.fn().mockResolvedValue({ id: 'inv1' }),
     createPatient: jest.fn().mockResolvedValue({ id: 'p1' }),
     createStaff: jest.fn().mockResolvedValue({ id: 's1' }),
@@ -46,7 +45,7 @@ describe('OpsController', () => {
     expect(ops.bootstrapBillingAndPolicies).toHaveBeenCalled();
   });
 
-  it('creates appointments, admissions, radiology, invoices', async () => {
+  it('creates appointments, admissions, invoices', async () => {
     await controller.createAppointment(
       {
         patientId: 'p1',
@@ -66,14 +65,6 @@ describe('OpsController', () => {
     );
     expect(ops.createAdmission).toHaveBeenCalledWith(
       expect.objectContaining({ wardId: 'w1', createdBy: 'u1' }),
-    );
-
-    await controller.createRadiology(
-      { patientId: 'p1', scanTypeId: 'st1' } as never,
-      user,
-    );
-    expect(ops.createRadiologyRequest).toHaveBeenCalledWith(
-      expect.objectContaining({ scanTypeId: 'st1', createdBy: 'u1' }),
     );
 
     await controller.createInvoice(

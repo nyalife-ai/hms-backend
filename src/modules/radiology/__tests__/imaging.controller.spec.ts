@@ -1,23 +1,39 @@
 /**
- * ImagingController — delegates to RadiologyClinicalUseCase with mocks.
+ * ImagingController — delegates to RadiologyOperationsUseCase (config/read)
+ * and RadiologyJourneyUseCase (lifecycle) with mocks.
  */
 
 import { BadRequestException } from '@nestjs/common';
 import { ImagingController } from '../imaging.controller';
 
 describe('ImagingController', () => {
-  const clinical = {
+  const ops = {
     listScanTypes: jest.fn().mockResolvedValue([]),
     createScanType: jest.fn().mockResolvedValue({ id: 'st1' }),
     updateScanType: jest.fn().mockResolvedValue({ id: 'st1' }),
-    listRequests: jest.fn().mockResolvedValue([]),
+    listReportTemplates: jest.fn().mockResolvedValue([]),
+    getReportTemplate: jest.fn().mockResolvedValue({ id: 'tpl1' }),
+    createReportTemplate: jest.fn().mockResolvedValue({ id: 'tpl1' }),
+    updateReportTemplate: jest.fn().mockResolvedValue({ id: 'tpl1' }),
+    listRequests: jest.fn().mockResolvedValue({ items: [], total: 0 }),
     getRequest: jest.fn().mockResolvedValue({ id: 'r1' }),
-    upsertFindings: jest.fn().mockResolvedValue({ ok: true }),
-    upsertReport: jest.fn().mockResolvedValue({ ok: true }),
-    addImage: jest.fn().mockResolvedValue({ ok: true }),
+    uploadImage: jest.fn().mockResolvedValue({ ok: true }),
+  };
+  const journey = {
+    createRequest: jest.fn().mockResolvedValue({ id: 'r1' }),
+    scheduleRequest: jest.fn().mockResolvedValue({ id: 'r1' }),
+    checkIn: jest.fn().mockResolvedValue({ id: 'r1' }),
+    startExam: jest.fn().mockResolvedValue({ id: 'r1' }),
+    completeExam: jest.fn().mockResolvedValue({ id: 'r1' }),
+    cancelRequest: jest.fn().mockResolvedValue({ id: 'r1' }),
+    markNoShow: jest.fn().mockResolvedValue({ id: 'r1' }),
+    finalizeRequest: jest.fn().mockResolvedValue({ id: 'r1' }),
+    enterFindings: jest.fn().mockResolvedValue({ ok: true }),
+    enterReport: jest.fn().mockResolvedValue({ ok: true }),
+    amendReport: jest.fn().mockResolvedValue({ ok: true }),
   };
 
-  const controller = new ImagingController(clinical as never);
+  const controller = new ImagingController(ops as never, journey as never);
   const id = '00000000-0000-4000-8000-000000000001';
   const user = {
     id: 'u1',
@@ -34,28 +50,29 @@ describe('ImagingController', () => {
 
   it('lists and mutates scan types with active filter parsing', async () => {
     await controller.listScanTypes({ active: 'true', search: 'CT' });
-    expect(clinical.listScanTypes).toHaveBeenCalledWith({
+    expect(ops.listScanTypes).toHaveBeenCalledWith({
       active: true,
+      departmentId: undefined,
       search: 'CT',
     });
 
     await controller.listScanTypes({ active: 'false' });
-    expect(clinical.listScanTypes).toHaveBeenLastCalledWith({
+    expect(ops.listScanTypes).toHaveBeenLastCalledWith({
       active: false,
+      departmentId: undefined,
       search: undefined,
     });
 
-    await controller.listScanTypes({});
-    expect(clinical.listScanTypes).toHaveBeenLastCalledWith({
-      active: undefined,
-      search: undefined,
+    await controller.createScanType({ scanType: 'XRAY' }, user);
+    expect(ops.createScanType).toHaveBeenCalledWith({
+      scanType: 'XRAY',
+      actorUserId: 'u1',
     });
 
-    await controller.createScanType({ scanType: 'XRAY' });
-    await controller.updateScanType(id, { isActive: false });
-    expect(clinical.createScanType).toHaveBeenCalled();
-    expect(clinical.updateScanType).toHaveBeenCalledWith(id, {
+    await controller.updateScanType(id, { isActive: false }, user);
+    expect(ops.updateScanType).toHaveBeenCalledWith(id, {
       isActive: false,
+      actorUserId: 'u1',
     });
   });
 
@@ -67,87 +84,142 @@ describe('ImagingController', () => {
       take: 10,
       skip: 5,
     });
-    expect(clinical.listRequests).toHaveBeenCalledWith({
-      status: 'PENDING',
-      patientId: 'pat1',
-      search: 'q',
-      take: 10,
-      skip: 5,
-    });
-
-    await controller.listRequests({ page: 2, limit: 25 });
-    expect(clinical.listRequests).toHaveBeenLastCalledWith({
-      status: undefined,
-      patientId: undefined,
-      search: undefined,
-      take: 25,
-      skip: 25,
-    });
+    expect(ops.listRequests).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'PENDING',
+        patientId: 'pat1',
+        search: 'q',
+        take: 10,
+        skip: 5,
+      }),
+    );
 
     await expect(controller.getRequest(id)).resolves.toEqual({ id: 'r1' });
   });
 
-  it('upserts findings/report using staffProfileId or body radiologistId', async () => {
-    await controller.upsertFindings(id, user, { findingsText: 'clear' });
-    expect(clinical.upsertFindings).toHaveBeenCalledWith(id, {
-      radiologistId: '00000000-0000-4000-8000-000000000099',
+  it('creates a request via the journey use-case using the current user as requester', async () => {
+    await controller.createRequest(
+      { patientId: 'p1', scanTypeId: 'st1' } as never,
+      user,
+    );
+    expect(journey.createRequest).toHaveBeenCalledWith({
+      patientId: 'p1',
+      scanTypeId: 'st1',
+      requestedBy: 'u1',
+    });
+  });
+
+  it('drives the lifecycle actions through to the journey use-case', async () => {
+    await controller.scheduleRequest(id, { scheduledAt: '2026-01-01' } as never, user);
+    expect(journey.scheduleRequest).toHaveBeenCalledWith(id, {
+      scheduledAt: '2026-01-01',
+      actorUserId: 'u1',
+    });
+
+    await controller.checkIn(id, user);
+    expect(journey.checkIn).toHaveBeenCalledWith(id, 'u1');
+
+    await controller.startExam(id, user);
+    expect(journey.startExam).toHaveBeenCalledWith(id, 'u1');
+
+    await controller.completeExam(id, user);
+    expect(journey.completeExam).toHaveBeenCalledWith(id, 'u1');
+
+    await controller.cancelRequest(id, { reason: 'patient request' }, user);
+    expect(journey.cancelRequest).toHaveBeenCalledWith(id, {
+      reason: 'patient request',
+      actorUserId: 'u1',
+    });
+
+    await controller.markNoShow(id, user);
+    expect(journey.markNoShow).toHaveBeenCalledWith(id, 'u1');
+
+    await controller.finalizeRequest(id, user);
+    expect(journey.finalizeRequest).toHaveBeenCalledWith(id, 'u1');
+  });
+
+  it('enters findings/report using staffProfileId or body radiologistId', async () => {
+    await controller.enterFindings(id, user, { findingsText: 'clear' });
+    expect(journey.enterFindings).toHaveBeenCalledWith(id, {
       findingsText: 'clear',
-      status: undefined,
+      radiologistId: '00000000-0000-4000-8000-000000000099',
+      actorUserId: 'u1',
     });
 
-    await controller.upsertFindings(id, adminNoStaff, {
+    await controller.enterFindings(id, adminNoStaff, {
       radiologistId: 'rad-body',
-      status: 'FINAL',
+      status: 'FINALIZED',
     });
-    expect(clinical.upsertFindings).toHaveBeenLastCalledWith(id, {
+    expect(journey.enterFindings).toHaveBeenLastCalledWith(id, {
       radiologistId: 'rad-body',
-      findingsText: undefined,
-      status: 'FINAL',
+      status: 'FINALIZED',
+      actorUserId: 'admin',
     });
 
-    expect(() =>
-      controller.upsertFindings(id, adminNoStaff, {}),
-    ).toThrow(BadRequestException);
+    expect(() => controller.enterFindings(id, adminNoStaff, {})).toThrow(
+      BadRequestException,
+    );
 
-    await controller.upsertReport(id, user, {
+    await controller.enterReport(id, user, {
       finalImpression: 'normal',
       conclusion: 'ok',
       recommendations: 'n/a',
-      signature: 'sig',
+      finalize: true,
     });
-    expect(clinical.upsertReport).toHaveBeenCalledWith(
+    expect(journey.enterReport).toHaveBeenCalledWith(
       id,
       expect.objectContaining({
         radiologistId: '00000000-0000-4000-8000-000000000099',
         finalImpression: 'normal',
+        finalize: true,
       }),
     );
 
-    expect(() => controller.upsertReport(id, adminNoStaff, {})).toThrow(
+    expect(() => controller.enterReport(id, adminNoStaff, {})).toThrow(
       BadRequestException,
-    );
-
-    await controller.upsertReport(id, adminNoStaff, {
-      radiologistId: 'rad-body',
-      finalImpression: 'ok',
-    });
-    expect(clinical.upsertReport).toHaveBeenLastCalledWith(
-      id,
-      expect.objectContaining({ radiologistId: 'rad-body' }),
     );
   });
 
-  it('adds image with uploadedBy from current user', async () => {
-    await controller.addImage(id, user, {
-      filePath: '/img/1.dcm',
+  it('amends a report with a required reason', async () => {
+    await controller.amendReport(id, user, {
+      reportId: 'rep1',
+      finalImpression: 'revised',
+      reason: 'typo correction',
+    } as never);
+    expect(journey.amendReport).toHaveBeenCalledWith(id, {
+      reportId: 'rep1',
+      finalImpression: 'revised',
+      reason: 'typo correction',
+      radiologistId: '00000000-0000-4000-8000-000000000099',
+      actorUserId: 'u1',
+    });
+  });
+
+  it('uploads an image with uploadedBy from current user', async () => {
+    const file = {
+      buffer: Buffer.from('fake-bytes'),
+      originalname: 'scan.dcm',
+      mimetype: 'application/dicom',
+      size: 10,
+    };
+    await controller.uploadImage(id, file, user, {
       modality: 'CT',
       numberOfImages: 12,
     });
-    expect(clinical.addImage).toHaveBeenCalledWith(id, {
-      filePath: '/img/1.dcm',
+    expect(ops.uploadImage).toHaveBeenCalledWith(id, {
+      buffer: file.buffer,
+      originalname: 'scan.dcm',
+      mimetype: 'application/dicom',
+      size: 10,
       modality: 'CT',
       numberOfImages: 12,
       uploadedBy: 'u1',
     });
+  });
+
+  it('rejects an image upload with no file', () => {
+    expect(() => controller.uploadImage(id, undefined, user, {})).toThrow(
+      'File is required',
+    );
   });
 });
