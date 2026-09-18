@@ -21,7 +21,8 @@ export type FollowUpProps = {
   name: FollowUpName;
   description?: string;
   patientId: string;
-  consultationId: string;
+  /** Absent when the patient has no prior consultation (e.g. a brand-new patient). */
+  consultationId?: string;
   followUpDate: Date;
   followUpType?: string | null;
   reason: string;
@@ -61,7 +62,7 @@ export class FollowUp extends Entity<string> {
     name?: string;
     description?: string;
     patientId: string;
-    consultationId: string;
+    consultationId?: string;
     followUpDate: Date | string;
     followUpType?: string;
     reason: string;
@@ -157,7 +158,7 @@ export class FollowUp extends Entity<string> {
   public getPatientId(): string {
     return this.props.patientId;
   }
-  public getConsultationId(): string {
+  public getConsultationId(): string | undefined {
     return this.props.consultationId;
   }
   public getFollowUpDate(): Date {

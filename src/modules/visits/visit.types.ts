@@ -27,7 +27,7 @@ export type VisitStage =
   | 'CLAIM_SUBMITTED'
   | 'COMPLETED';
 
-export type ConsultFeeStatus = 'PENDING' | 'PAID' | 'WAIVED';
+export type ConsultFeeStatus = 'PENDING' | 'PAID' | 'WAIVED' | 'DEFERRED';
 
 export type InsuranceStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 

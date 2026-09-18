@@ -370,25 +370,48 @@ describe('OpsService', () => {
     expect(prisma.scanTypes.findMany).toHaveBeenCalled();
   });
 
-  it('creates patients with optional emergency contact', async () => {
+  it('forwards the full CreatePatientDto (including demographic/contact fields) to PatientsService', async () => {
     await service.createPatient({
       firstName: 'Ann',
       lastName: 'Wanjiku',
-      gender: 'Female',
+      gender: 'FEMALE',
       phone: '+254700',
+      email: 'ann@example.com',
+      address: '123 Main St',
+      city: 'Nairobi',
+      country: 'Kenya',
+      postalCode: '00100',
+      bloodGroup: 'O+',
+      occupation: 'Teacher',
+      maritalStatus: 'MARRIED',
       createdBy: 'u1',
       emergencyContactName: 'Kin',
       emergencyContactPhone: '+254701',
     });
+    // createFromDto() (inside the mocked PatientsService.create) is the one
+    // atomic place that persists the emergency contact — OpsService must not
+    // duplicate that insert itself.
     expect(patientsService.create).toHaveBeenCalledWith(
-      expect.objectContaining({ gender: 'FEMALE' }),
+      expect.objectContaining({
+        gender: 'FEMALE',
+        email: 'ann@example.com',
+        address: '123 Main St',
+        city: 'Nairobi',
+        country: 'Kenya',
+        postalCode: '00100',
+        bloodGroup: 'O+',
+        occupation: 'Teacher',
+        maritalStatus: 'MARRIED',
+        emergencyContactName: 'Kin',
+        emergencyContactPhone: '+254701',
+      }),
     );
-    expect(prisma.emergencyContacts.create).toHaveBeenCalled();
+    expect(prisma.emergencyContacts.create).not.toHaveBeenCalled();
 
     await service.createPatient({
       firstName: 'Bob',
       lastName: 'O',
-      gender: 'Other',
+      gender: 'OTHER',
       phone: '+254',
       createdBy: 'u1',
     });

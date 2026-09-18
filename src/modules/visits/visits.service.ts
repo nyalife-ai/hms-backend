@@ -7,6 +7,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   OnModuleInit,
   ServiceUnavailableException,
@@ -15,6 +16,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { createDomainEventId } from '../../core/domain';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../database/prisma/prisma.service';
+import { HmsAuditWriter } from '../audit/hms-audit.writer';
 import { BillingSettlementService } from '../billing/billing-settlement.service';
 import { PharmacyDispenseService } from '../billing/pharmacy-dispense.service';
 import { FollowUpsService } from '../follow-ups/follow-ups.service';
@@ -43,6 +45,9 @@ import {
   type IVisitsRepository,
   type VisitRow,
 } from './repositories/visits.repository.interface';
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type VisitPayload = {
   payment: Visit['payment'];
@@ -119,6 +124,7 @@ const MEMORY_SEED: Visit[] = [
 
 @Injectable()
 export class VisitsService implements OnModuleInit {
+  private readonly log = new Logger(VisitsService.name);
   private memory: Visit[] = structuredClone(MEMORY_SEED);
 
   constructor(
@@ -129,6 +135,7 @@ export class VisitsService implements OnModuleInit {
     private readonly pharmacyJourney: PharmacyJourneyUseCase,
     private readonly followUps: FollowUpsService,
     private readonly events: EventEmitter2,
+    private readonly audit: HmsAuditWriter,
   ) {}
 
   private requireDb(): void {
@@ -455,6 +462,84 @@ export class VisitsService implements OnModuleInit {
     });
   }
 
+  /**
+   * Correct a wrong doctor assignment from triage. Allowed while the visit
+   * is still waiting for, or with, a doctor — not once the consultation is
+   * finished or the visit is cancelled. Every change is audited with the
+   * previous and new doctor so a mistaken reassignment is itself traceable.
+   */
+  async reassignDoctor(
+    id: string,
+    input: { doctorStaffId: string; reason?: string },
+    actor: AuthUserPublic,
+  ): Promise<Visit> {
+    const visit = await this.findOne(id);
+    if (!['WAITING_DOCTOR', 'IN_CONSULTATION'].includes(visit.stage)) {
+      throw new BadRequestException(
+        'Doctor can only be reassigned while the patient is waiting for, or with, a doctor.',
+      );
+    }
+    const doctorStaffId = input.doctorStaffId?.trim();
+    if (!doctorStaffId || !UUID_RE.test(doctorStaffId)) {
+      throw new BadRequestException('A valid doctorStaffId is required');
+    }
+    if (doctorStaffId === visit.doctorStaffId) {
+      return visit;
+    }
+
+    const doctorName = await this.resolveDoctorDisplayName(doctorStaffId);
+    if (!doctorName) {
+      throw new BadRequestException('Doctor not found or inactive');
+    }
+
+    const previousDoctorStaffId = visit.doctorStaffId;
+    const previousDoctorName = visit.doctorName;
+
+    const updated = await this.patch(id, { doctorStaffId, doctorName });
+
+    await this.audit.recordMutation({
+      userId: actor.id,
+      action: 'UPDATE',
+      entityType: 'visits.outpatient_visit',
+      entityId: id,
+      oldValues: {
+        doctorStaffId: previousDoctorStaffId ?? null,
+        doctorName: previousDoctorName ?? null,
+      },
+      newValues: {
+        doctorStaffId,
+        doctorName,
+        reason: input.reason?.trim() || undefined,
+      },
+    });
+
+    const doctorUserId = await this.resolveDoctorUserId(doctorStaffId);
+    const patientId = await this.resolvePatientIdByMrn(updated.mrn);
+    this.emitDomain('triage.doctor_reassigned', {
+      visitId: updated.id,
+      patientId,
+      doctorUserId,
+      patientName: updated.patientName,
+      mrn: updated.mrn,
+    });
+
+    return updated;
+  }
+
+  private async resolveDoctorDisplayName(
+    doctorStaffId: string,
+  ): Promise<string | undefined> {
+    const staff = await this.prisma.staffProfiles.findFirst({
+      where: { id: doctorStaffId, deleted_at: null, is_active: true },
+      include: { user: { include: { core_profiles_user_id: true } } },
+    });
+    if (!staff) return undefined;
+    const profile = staff.user.core_profiles_user_id[0];
+    return profile
+      ? `Dr. ${profile.first_name} ${profile.last_name}`
+      : (staff.user.email ?? undefined);
+  }
+
   /** Mirror triage payload vitals into clinical.vital_signs when patient is known. */
   private async persistTriageVitalsRow(
     visit: Visit,
@@ -697,6 +782,36 @@ export class VisitsService implements OnModuleInit {
     });
   }
 
+  /**
+   * Explicitly defer the consult fee to final checkout instead of collecting
+   * it now. Distinct from "never charged": DEFERRED is a visible, chosen
+   * state rather than an implicit fallback, but is billed the same way —
+   * checkout.service.ts folds any non-PAID consult fee into the final bill.
+   */
+  async deferConsultFee(id: string): Promise<Visit> {
+    const visit = await this.findOne(id);
+    if (!['CHECKED_IN', 'AWAITING_PAYMENT'].includes(visit.stage)) {
+      throw new BadRequestException(
+        'Consultation fee can only be deferred before the patient sees a doctor.',
+      );
+    }
+    if (visit.billing?.consultFeeStatus === 'PAID') {
+      throw new BadRequestException('Consultation fee is already paid.');
+    }
+    return this.patch(id, {
+      stage: 'CHECKED_IN',
+      billing: {
+        ...(visit.billing ?? { total: 0, mode: 'CASH' }),
+        total: visit.billing?.total ?? 0,
+        mode: 'CASH',
+        consultFeeStatus: 'DEFERRED',
+        consultFeeAmount: visit.billing?.consultFeeAmount,
+        invoiceId: visit.billing?.invoiceId,
+        invoiceNumber: visit.billing?.invoiceNumber,
+      },
+    });
+  }
+
   /** Finance desk: issue draft consult invoice + collect cash (or mark after M-Pesa). */
   async collectConsultFee(
     id: string,
@@ -913,8 +1028,23 @@ export class VisitsService implements OnModuleInit {
             prescriptionNumber: rx.prescriptionNumber ?? undefined,
             sentAt: new Date().toISOString(),
           };
-        } catch {
-          // Visit still proceeds to billing; pharmacist can create Rx manually
+        } catch (err) {
+          // Visit still proceeds to billing; pharmacist can create Rx manually —
+          // but the gap must stay visible instead of silently vanishing.
+          const message = err instanceof Error ? err.message : String(err);
+          this.log.warn(
+            `Visit ${visit.id}: formal prescription creation failed — pharmacist must create it manually. ${message}`,
+          );
+          await this.audit.recordMutation({
+            userId: actorUserId,
+            action: 'UPDATE',
+            entityType: 'visits.outpatient_visit',
+            entityId: visit.id,
+            newValues: {
+              event: 'PRESCRIPTION_CREATION_FAILED',
+              reason: message,
+            },
+          });
         }
       }
     }
@@ -1016,14 +1146,29 @@ export class VisitsService implements OnModuleInit {
 
       let consultationId: string | null = null;
 
+      // Match an existing row for this visit (walk-in journey) or, when the
+      // visit originated from a scheduled appointment, by appointment_id —
+      // avoids creating a duplicate Consultations row on every re-save.
+      const matchWhere: Array<{
+        visit_id?: string;
+        appointment_id?: string;
+        deleted_at: null;
+      }> = [];
+      if (visit.id) matchWhere.push({ visit_id: visit.id, deleted_at: null });
       if (visit.appointmentId) {
+        matchWhere.push({
+          appointment_id: visit.appointmentId,
+          deleted_at: null,
+        });
+      }
+      if (matchWhere.length) {
         const existing = await this.prisma.consultations.findFirst({
-          where: { appointment_id: visit.appointmentId, deleted_at: null },
+          where: { OR: matchWhere },
         });
         if (existing) {
           await this.prisma.consultations.update({
             where: { id: existing.id },
-            data,
+            data: { ...data, visit_id: visit.id || existing.visit_id },
           });
           consultationId = existing.id;
         }
@@ -1037,6 +1182,7 @@ export class VisitsService implements OnModuleInit {
             doctor_id: doctorId,
             created_by: actorUserId,
             appointment_id: visit.appointmentId || null,
+            visit_id: visit.id || null,
             consultation_date: new Date(),
           },
         });
@@ -1572,9 +1718,7 @@ export class VisitsService implements OnModuleInit {
 
   private async persistNew(visit: Visit): Promise<Visit> {
     const patientId = await this.visits.findPatientIdByMrn(visit.mrn);
-    const uuidOk = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      visit.id,
-    );
+    const uuidOk = UUID_RE.test(visit.id);
 
     const row = await this.visits.create({
       id: uuidOk ? visit.id : undefined,

@@ -2,7 +2,8 @@
  * Prisma appointment repository — clinical.appointments (db.sql).
  */
 
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
+import type { Prisma } from '../../../../generated/prisma';
 import { PrismaService } from '../../../../database/prisma/prisma.service';
 import type { AppointmentsQueryDto } from '../../dto';
 import { Appointment } from '../../domain/appointment.entity';
@@ -22,9 +23,41 @@ export class PrismaAppointmentRepository implements IAppointmentRepository {
     });
 
     if (existing) {
-      const row = await this.prisma.appointments.update({
-        where: { id: entity.getId() },
+      const scheduleChanged =
+        existing.doctor_id !== entity.getDoctorId() ||
+        existing.appointment_date.getTime() !==
+          entity.getAppointmentDate().getTime() ||
+        existing.start_time.getTime() !== entity.getStartTime().getTime() ||
+        existing.end_time.getTime() !== entity.getEndTime().getTime();
+      return this.prisma.$transaction(async (tx) => {
+        // Only re-check on an actual schedule change — don't retroactively
+        // block an unrelated edit (e.g. notes) on an appointment that was
+        // already double-booked before this check existed.
+        if (scheduleChanged && entity.getStatus() !== 'CANCELLED') {
+          await this.assertNoConflict(tx, entity, entity.getId());
+        }
+        const row = await tx.appointments.update({
+          where: { id: entity.getId() },
+          data: {
+            appointment_date: entity.getAppointmentDate(),
+            start_time: entity.getStartTime(),
+            end_time: entity.getEndTime(),
+            status: entity.getStatus(),
+            appointment_type: entity.getName().getValue(),
+            reason: entity.getDescription() ?? null,
+            notes: entity.getNotes() ?? null,
+          },
+        });
+        return this.toDomain(row);
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await this.assertNoConflict(tx, entity);
+      const row = await tx.appointments.create({
         data: {
+          patient_id: entity.getPatientId(),
+          doctor_id: entity.getDoctorId(),
           appointment_date: entity.getAppointmentDate(),
           start_time: entity.getStartTime(),
           end_time: entity.getEndTime(),
@@ -32,26 +65,42 @@ export class PrismaAppointmentRepository implements IAppointmentRepository {
           appointment_type: entity.getName().getValue(),
           reason: entity.getDescription() ?? null,
           notes: entity.getNotes() ?? null,
+          created_by: entity.getCreatedBy(),
         },
       });
       return this.toDomain(row);
-    }
-
-    const row = await this.prisma.appointments.create({
-      data: {
-        patient_id: entity.getPatientId(),
-        doctor_id: entity.getDoctorId(),
-        appointment_date: entity.getAppointmentDate(),
-        start_time: entity.getStartTime(),
-        end_time: entity.getEndTime(),
-        status: entity.getStatus(),
-        appointment_type: entity.getName().getValue(),
-        reason: entity.getDescription() ?? null,
-        notes: entity.getNotes() ?? null,
-        created_by: entity.getCreatedBy(),
-      },
     });
-    return this.toDomain(row);
+  }
+
+  /**
+   * Reject a create/reschedule that would double-book the doctor: another
+   * non-cancelled appointment for the same doctor, same date, whose
+   * [start_time, end_time) window overlaps the incoming one. Runs inside the
+   * same transaction as the write to shrink (not fully eliminate, absent a
+   * DB-level exclusion constraint) the race between two concurrent requests.
+   */
+  private async assertNoConflict(
+    tx: Prisma.TransactionClient,
+    entity: Appointment,
+    excludeId?: string,
+  ): Promise<void> {
+    const conflict = await tx.appointments.findFirst({
+      where: {
+        doctor_id: entity.getDoctorId(),
+        deleted_at: null,
+        status: { not: 'CANCELLED' },
+        appointment_date: entity.getAppointmentDate(),
+        start_time: { lt: entity.getEndTime() },
+        end_time: { gt: entity.getStartTime() },
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+      },
+      select: { id: true },
+    });
+    if (conflict) {
+      throw new ConflictException(
+        'This doctor already has an appointment that overlaps this time slot.',
+      );
+    }
   }
 
   public async delete(id: string): Promise<void> {

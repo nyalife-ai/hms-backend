@@ -166,8 +166,13 @@ export class PharmacyJourneyUseCase {
       }),
       this.prisma.prescriptions.count({ where }),
     ]);
+    const stockByMed = await this.loadAvailableStockByMedication(
+      rows.flatMap((r) =>
+        r.pharmacy_prescription_lines_prescription_id.map((l) => l.medication_id),
+      ),
+    );
     return {
-      items: rows.map((r) => this.mapPrescription(r)),
+      items: rows.map((r) => this.mapPrescription(r, stockByMed)),
       total,
       page,
       limit,
@@ -195,7 +200,32 @@ export class PharmacyJourneyUseCase {
       },
     });
     if (!r) throw new NotFoundException('Prescription not found');
-    return this.mapPrescription(r);
+    const stockByMed = await this.loadAvailableStockByMedication(
+      r.pharmacy_prescription_lines_prescription_id.map((l) => l.medication_id),
+    );
+    return this.mapPrescription(r, stockByMed);
+  }
+
+  /** Sum of on-hand, non-expired batch stock per medication (FEFO-eligible). */
+  private async loadAvailableStockByMedication(
+    medicationIds: string[],
+  ): Promise<Map<string, number>> {
+    const ids = [...new Set(medicationIds)];
+    if (!ids.length) return new Map();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const groups = await this.prisma.batches.groupBy({
+      by: ['medication_id'],
+      where: {
+        medication_id: { in: ids },
+        expiry_date: { gte: today },
+        quantity_on_hand: { gt: 0 },
+      },
+      _sum: { quantity_on_hand: true },
+    });
+    return new Map(
+      groups.map((g) => [g.medication_id, Number(g._sum.quantity_on_hand ?? 0)]),
+    );
   }
 
   public async createPrescription(input: {
@@ -552,7 +582,7 @@ export class PharmacyJourneyUseCase {
         core_profiles_user_id: { first_name: string; last_name: string }[];
       } | null;
     }>;
-  }) {
+  }, stockByMed?: Map<string, number>) {
     const pp = r.patient.user.core_profiles_user_id[0];
     const dp = r.rel_prescribed_by.user.core_profiles_user_id[0];
     return {
@@ -587,6 +617,7 @@ export class PharmacyJourneyUseCase {
         dispensedBy: l.dispensed_by,
         dispensedByName: profileName(l.rel_dispensed_by),
         dispensedAt: l.dispensed_at?.toISOString() ?? null,
+        availableQuantity: stockByMed?.get(l.medication_id) ?? 0,
       })),
     };
   }

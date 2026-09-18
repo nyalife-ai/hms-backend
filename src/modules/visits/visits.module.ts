@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../../database/prisma/prisma.module';
+import { AuditModule } from '../audit/audit.module';
 import { AuthModule } from '../auth/auth.module';
 import { BillingModule } from '../billing/billing.module';
 import { FollowUpsModule } from '../follow-ups/follow-ups.module';
@@ -13,6 +14,7 @@ import { PrismaVisitsRepository } from './repositories/prisma-visits.repository'
   imports: [
     PrismaModule,
     AuthModule,
+    AuditModule,
     BillingModule,
     PharmacyModule,
     FollowUpsModule,

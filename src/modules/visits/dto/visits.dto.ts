@@ -243,6 +243,17 @@ export class TriageAssessmentDto {
   redFlags?: string[];
 }
 
+export class ReassignDoctorDto {
+  @ApiProperty({ description: 'New doctor staff profile id' })
+  @IsString()
+  doctorStaffId!: string;
+
+  @ApiPropertyOptional({ description: 'Why the doctor is being changed' })
+  @IsOptional()
+  @IsString()
+  reason?: string;
+}
+
 export class TriageDto {
   @ApiProperty({ type: VitalsDto })
   @ValidateNested()

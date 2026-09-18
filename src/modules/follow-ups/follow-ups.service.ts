@@ -261,11 +261,14 @@ export class FollowUpsService {
   private async enrichMany(
     items: Array<ReturnType<typeof FollowUpMapper.toResponse>>,
   ): Promise<Array<ReturnType<typeof FollowUpMapper.toResponse>>> {
+    // consultation.visit_id (surfaced by the repository) is the reliable
+    // source now — only fall back to the appointment-payload heuristic for
+    // rows that don't already have it (e.g. pre-migration historical rows).
     const apptIds = [
       ...new Set(
         items
-          .map((i) => i.appointmentId)
-          .filter((id): id is string => Boolean(id)),
+          .filter((i) => !i.visitId && i.appointmentId)
+          .map((i) => i.appointmentId as string),
       ),
     ];
     if (!apptIds.length) {
@@ -288,9 +291,9 @@ export class FollowUpsService {
 
     return items.map((i) => ({
       ...i,
-      visitId: i.appointmentId
-        ? (visitByAppt.get(i.appointmentId) ?? null)
-        : (i.visitId ?? null),
+      visitId:
+        i.visitId ??
+        (i.appointmentId ? (visitByAppt.get(i.appointmentId) ?? null) : null),
     }));
   }
 

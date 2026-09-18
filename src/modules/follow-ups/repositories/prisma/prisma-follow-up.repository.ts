@@ -92,7 +92,7 @@ export class PrismaFollowUpRepository implements IFollowUpRepository {
     const row = await this.prisma.followUps.create({
       data: {
         patient_id: entity.getPatientId(),
-        consultation_id: entity.getConsultationId(),
+        consultation_id: entity.getConsultationId() ?? null,
         follow_up_date: entity.getFollowUpDate(),
         follow_up_type: entity.getFollowUpType() ?? null,
         reason: entity.getReason(),
@@ -335,7 +335,7 @@ export class PrismaFollowUpRepository implements IFollowUpRepository {
         name: FollowUpName.create(label),
         description: row.notes ?? undefined,
         patientId: row.patient_id,
-        consultationId: row.consultation_id,
+        consultationId: row.consultation_id ?? undefined,
         followUpDate: row.follow_up_date,
         followUpType: row.follow_up_type,
         reason: row.reason,
@@ -346,6 +346,7 @@ export class PrismaFollowUpRepository implements IFollowUpRepository {
           patientName,
           patientMrn: row.patient?.patient_number ?? '',
           appointmentId: row.consultation?.appointment_id ?? null,
+          visitId: row.consultation?.visit_id ?? null,
           doctorId: row.consultation?.doctor_id ?? '',
           doctorName: doctorName ? `Dr. ${doctorName}` : '',
         },

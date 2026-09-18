@@ -29,7 +29,12 @@ export class UpdateDepartmentUseCase {
         existing.getId(),
         {
           name: dto.name ? DepartmentName.create(dto.name) : existing.getName(),
+          code: dto.code ?? existing.getCode(),
+          type: dto.type ?? existing.getType(),
           description: dto.description ?? existing.getDescription(),
+          headName: dto.headName ?? existing.getHeadName(),
+          headPosition: dto.headPosition ?? existing.getHeadPosition(),
+          isActive: dto.isActive ?? existing.getIsActive(),
         },
         existing.getCreatedAt(),
         new Date(),

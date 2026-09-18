@@ -26,21 +26,20 @@ export class CreateFollowUpUseCase {
           (await this.repository.findLatestConsultationId(dto.patientId)) ??
           undefined;
       }
-      if (!consultationId) {
-        throw new BadRequestException(
-          'consultationId is required when the patient has no prior consultation',
-        );
-      }
+      // A brand-new patient legitimately has no consultation yet — the
+      // follow-up is created against the patient alone in that case.
       if (!dto.createdBy) {
         throw new BadRequestException('createdBy is required');
       }
 
-      const existing = await this.repository.findByConsultationAndDate(
-        consultationId,
-        new Date(dto.followUpDate),
-      );
-      if (existing) {
-        return Result.success(existing);
+      if (consultationId) {
+        const existing = await this.repository.findByConsultationAndDate(
+          consultationId,
+          new Date(dto.followUpDate),
+        );
+        if (existing) {
+          return Result.success(existing);
+        }
       }
 
       const entity = FollowUp.create({

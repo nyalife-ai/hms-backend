@@ -14,7 +14,6 @@ import { ApiBearerAuth, ApiOperation, ApiProperty, ApiPropertyOptional, ApiTags 
 import {
   IsArray,
   IsBoolean,
-  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -32,6 +31,7 @@ import {
 } from '../auth/role-sets';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { CreatePatientDto } from '../patients/dto';
 import { OpsService } from './ops.service';
 
 class CreateAppointmentDto {
@@ -62,20 +62,6 @@ class CreateInvoiceDto {
   @ApiProperty() @IsString() patientId!: string;
   @ApiProperty() @IsNumber() @Min(1) amount!: number;
   @ApiProperty() @IsString() description!: string;
-}
-
-class CreatePatientDto {
-  @ApiProperty() @IsString() firstName!: string;
-  @ApiProperty() @IsString() lastName!: string;
-  @ApiProperty({ enum: ['Male', 'Female', 'Other'] })
-  @IsIn(['Male', 'Female', 'Other'])
-  gender!: 'Male' | 'Female' | 'Other';
-  @ApiProperty() @IsString() phone!: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() dateOfBirth?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() allergies?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() chronicDiseases?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() emergencyContactName?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() emergencyContactPhone?: string;
 }
 
 class CreateStaffDto {

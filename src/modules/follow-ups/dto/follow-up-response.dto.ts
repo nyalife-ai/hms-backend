@@ -12,7 +12,7 @@ export class FollowUpResponseDto {
   @ApiProperty() patientId!: string;
   @ApiProperty() patientName!: string;
   @ApiProperty() patientMrn!: string;
-  @ApiProperty() consultationId!: string;
+  @ApiPropertyOptional({ nullable: true }) consultationId?: string;
   @ApiPropertyOptional({ nullable: true }) appointmentId?: string | null;
   /** Soft-linked outpatient visit for the consultation journey UI */
   @ApiPropertyOptional({ nullable: true }) visitId?: string | null;

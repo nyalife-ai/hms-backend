@@ -19,7 +19,15 @@ export class CreateDepartmentUseCase {
 
   public async execute(dto: CreateDepartmentDto): Promise<Result<Department, string>> {
     try {
-      const entity = Department.create({ name: dto.name, description: dto.description });
+      const entity = Department.create({
+        name: dto.name,
+        code: dto.code,
+        type: dto.type,
+        description: dto.description,
+        headName: dto.headName,
+        headPosition: dto.headPosition,
+        isActive: dto.isActive,
+      });
       const saved = await this.repository.save(entity);
       return Result.success(saved);
     } catch (err) {

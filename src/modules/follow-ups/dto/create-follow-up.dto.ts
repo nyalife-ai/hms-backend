@@ -21,7 +21,7 @@ export class CreateFollowUpDto {
 
   @ApiPropertyOptional({
     description:
-      'Required unless the patient has at least one consultation (latest is used)',
+      'Defaults to the patient’s latest consultation when omitted. Left unset for a patient with no prior consultation.',
   })
   @IsOptional()
   @IsUUID()

@@ -116,6 +116,7 @@ describe('PharmacyJourneyUseCase', () => {
         create: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn(),
+        groupBy: jest.fn().mockResolvedValue([]),
       },
       stockMovements: { create: jest.fn() },
       purchaseOrders: {

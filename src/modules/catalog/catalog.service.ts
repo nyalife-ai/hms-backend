@@ -364,10 +364,10 @@ export class CatalogService {
         return d >= today;
       })
       .map((f) => {
-        const dp = f.consultation.doctor.user.core_profiles_user_id[0];
+        const dp = f.consultation?.doctor.user.core_profiles_user_id[0];
         const doctorName = dp
           ? `Dr. ${dp.first_name} ${dp.last_name}`
-          : f.consultation.doctor.user.email;
+          : (f.consultation?.doctor.user.email ?? '');
         return {
           id: f.id,
           kind: 'follow-up' as const,
@@ -378,8 +378,8 @@ export class CatalogService {
           status: f.status,
           reason: f.reason,
           consultationId: f.consultation_id,
-          appointmentId: f.consultation.appointment_id ?? null,
-          visitId: null as string | null,
+          appointmentId: f.consultation?.appointment_id ?? null,
+          visitId: f.consultation?.visit_id ?? null,
           href: `/follow-ups?highlight=${f.id}`,
         };
       });
@@ -732,7 +732,12 @@ export class CatalogService {
     const skip = (page - 1) * limit;
 
     if (!this.prisma.isConnected) {
-      let items = FALLBACK_DOCTORS.map((d) => ({ ...d, userId: d.id }));
+      let items = FALLBACK_DOCTORS.map((d) => ({
+        ...d,
+        userId: d.id,
+        currentlyInConsultation: false,
+        waitingCount: 0,
+      }));
       const q = options?.search?.trim().toLowerCase();
       if (q) {
         items = items.filter(
@@ -781,7 +786,7 @@ export class CatalogService {
         : {}),
     };
 
-    const [rows, total] = await Promise.all([
+    const [rows, total, activeVisits] = await Promise.all([
       this.prisma.staffProfiles.findMany({
         where,
         include: {
@@ -797,7 +802,30 @@ export class CatalogService {
         take: limit,
       }),
       this.prisma.staffProfiles.count({ where }),
+      // Small, bounded set (only currently-active visits) — grouped in
+      // memory below rather than one JSON-path query per doctor.
+      this.prisma.outpatientVisits.findMany({
+        where: { stage: { in: ['WAITING_DOCTOR', 'IN_CONSULTATION'] } },
+        select: { stage: true, payload: true },
+      }),
     ]);
+
+    const loadByDoctor = new Map<
+      string,
+      { inConsultation: boolean; waiting: number }
+    >();
+    for (const visit of activeVisits) {
+      const doctorStaffId = (visit.payload as { doctorStaffId?: string } | null)
+        ?.doctorStaffId;
+      if (!doctorStaffId) continue;
+      const entry = loadByDoctor.get(doctorStaffId) ?? {
+        inConsultation: false,
+        waiting: 0,
+      };
+      if (visit.stage === 'IN_CONSULTATION') entry.inConsultation = true;
+      else entry.waiting += 1;
+      loadByDoctor.set(doctorStaffId, entry);
+    }
 
     const items = rows.map((row) => {
       const profile = row.user.core_profiles_user_id[0];
@@ -808,13 +836,23 @@ export class CatalogService {
         first && !first.startsWith('Dr')
           ? `Dr. ${first} ${last}`.trim()
           : `${first} ${last}`.trim() || row.user.email || 'Doctor';
+      const load = loadByDoctor.get(row.id);
+      const currentlyInConsultation = load?.inConsultation ?? false;
+      const waitingCount = load?.waiting ?? 0;
+      const status = currentlyInConsultation
+        ? 'In consultation'
+        : waitingCount > 0
+          ? `${waitingCount} patient${waitingCount === 1 ? '' : 's'} waiting`
+          : 'Available now';
       return {
         id: row.id,
         userId: row.user_id,
         name: titled,
         specialty: row.specialization || row.position || role || 'General',
-        hours: 'Mon – Fri (08:00 – 17:00)',
+        hours: status,
         available: row.is_active,
+        currentlyInConsultation,
+        waitingCount,
         phone: profile?.phone ?? '',
         email: displayEmail(row.user.email),
       };

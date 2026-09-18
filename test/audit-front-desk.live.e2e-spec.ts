@@ -116,7 +116,7 @@ describe('Live DB — Audit + front desk check-in', () => {
           .send({
             firstName: 'Audit',
             lastName: `Live${suffix}`,
-            gender: 'Female',
+            gender: 'FEMALE',
             phone,
           });
         expect([200, 201]).toContain(patient.status);

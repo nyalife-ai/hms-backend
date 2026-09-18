@@ -23,26 +23,26 @@ export class InsuranceController {
   constructor(private readonly insurance: InsuranceService) {}
 
   @Get('providers')
-  @Roles('ADMIN', 'ACCOUNTANT')
+  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
   @ApiOperation({ summary: 'List insurance providers and integration channels' })
   providers() {
     return this.insurance.listProviders();
   }
 
   @Post('eligibility')
-  @Roles('ADMIN', 'ACCOUNTANT')
+  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
   eligibility(@Body() body: EligibilityDto) {
     return this.insurance.verifyEligibility(body.providerId, body.memberNumber);
   }
 
   @Post('otp/send')
-  @Roles('ADMIN', 'ACCOUNTANT')
+  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
   sendOtp(@Body() body: OtpSendDto) {
     return this.insurance.sendOtp(body.providerId, body.sessionId);
   }
 
   @Post('otp/verify')
-  @Roles('ADMIN', 'ACCOUNTANT')
+  @Roles('ADMIN', 'ACCOUNTANT', 'RECEPTIONIST')
   verifyOtp(@Body() body: OtpVerifyDto) {
     return this.insurance.verifyOtp(
       body.providerId,

@@ -9,7 +9,7 @@ import type {
   DepartmentsQueryDto,
   UpdateDepartmentDto,
 } from '../../dto';
-import { Department } from '../../domain/department.entity';
+import { Department, type DepartmentType } from '../../domain/department.entity';
 import { DepartmentName } from '../../domain/value-objects/department-name.vo';
 import type {
   IDepartmentRepository,
@@ -30,21 +30,34 @@ export class PrismaDepartmentRepository implements IDepartmentRepository {
         where: { id: entity.getId() },
         data: {
           name,
+          ...(entity.getCode() ? { code: entity.getCode() } : {}),
+          ...(entity.getType() ? { type: entity.getType() } : {}),
           description: entity.getDescription() ?? null,
+          head_name: entity.getHeadName() ?? null,
+          head_position: entity.getHeadPosition() ?? null,
+          ...(entity.getIsActive() !== undefined
+            ? { is_active: entity.getIsActive() }
+            : {}),
         },
       });
       return this.toDomain(row);
     }
-    const code = name
+    const autoCode = name
       .toUpperCase()
       .replace(/[^A-Z0-9]/g, '')
       .slice(0, 6) || 'DEPT';
+    const code =
+      entity.getCode()?.toUpperCase().slice(0, 10) ||
+      `${autoCode}${Date.now().toString(36).slice(-4)}`.slice(0, 10);
     const row = await this.prisma.departments.create({
       data: {
         name,
-        code: `${code}${Date.now().toString(36).slice(-4)}`.slice(0, 10),
-        type: 'CLINICAL',
+        code,
+        type: entity.getType() ?? 'CLINICAL',
         description: entity.getDescription() ?? null,
+        head_name: entity.getHeadName() ?? null,
+        head_position: entity.getHeadPosition() ?? null,
+        is_active: entity.getIsActive() ?? true,
       },
     });
     return this.toDomain(row);
@@ -110,7 +123,12 @@ export class PrismaDepartmentRepository implements IDepartmentRepository {
   protected toDomain(row: {
     id: string;
     name: string;
+    code: string;
+    type: string;
     description: string | null;
+    head_name: string | null;
+    head_position: string | null;
+    is_active: boolean;
     created_at: Date;
     updated_at: Date;
   }): Department {
@@ -118,7 +136,12 @@ export class PrismaDepartmentRepository implements IDepartmentRepository {
       row.id,
       {
         name: DepartmentName.create(row.name),
+        code: row.code,
+        type: row.type as DepartmentType,
         description: row.description ?? undefined,
+        headName: row.head_name ?? undefined,
+        headPosition: row.head_position ?? undefined,
+        isActive: row.is_active,
       },
       row.created_at,
       row.updated_at,

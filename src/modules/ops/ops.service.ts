@@ -9,6 +9,7 @@ import { AppointmentsService } from '../appointments/appointments.service';
 import { CONVERSATION_TYPES } from '../communication/constants/messaging.constants';
 import { MessagingService } from '../communication/services/messaging.service';
 import { IpdJourneyUseCase } from '../inpatient/use-cases/ipd-journey.usecase';
+import type { CreatePatientDto } from '../patients/dto';
 import { PatientsService } from '../patients/patients.service';
 import { RadiologyService } from '../radiology/radiology.service';
 
@@ -227,49 +228,14 @@ export class OpsService {
     });
   }
 
-  async createPatient(input: {
-    firstName: string;
-    lastName: string;
-    gender: 'Male' | 'Female' | 'Other';
-    phone: string;
-    dateOfBirth?: string;
-    allergies?: string;
-    chronicDiseases?: string;
-    emergencyContactName?: string;
-    emergencyContactPhone?: string;
-    createdBy: string;
-  }) {
+  async createPatient(input: CreatePatientDto & { createdBy: string }) {
     this.requireDb();
-    void input.createdBy;
-    const genderDb =
-      input.gender === 'Female'
-        ? 'FEMALE'
-        : input.gender === 'Other'
-          ? 'OTHER'
-          : 'MALE';
-    const created = await this.patientsService.create({
-      firstName: input.firstName,
-      lastName: input.lastName,
-      phone: input.phone,
-      gender: genderDb,
-      dateOfBirth: input.dateOfBirth,
-      allergies: input.allergies,
-      chronicDiseases: input.chronicDiseases,
-    });
-
-    const kinName = input.emergencyContactName?.trim();
-    const kinPhone = input.emergencyContactPhone?.trim();
-    if (kinName || kinPhone) {
-      await this.prisma.emergencyContacts.create({
-        data: {
-          patient_id: created.id,
-          name: kinName || 'Next of kin',
-          phone: kinPhone || '—',
-          relationship: 'NEXT_OF_KIN',
-          is_primary: true,
-        },
-      });
-    }
+    // createFromDto() atomically creates the User + Profile + Patient +
+    // (when supplied) the EmergencyContacts row in one transaction — do
+    // not duplicate the emergency-contact insert here. The extra
+    // `createdBy` property is harmless: createFromDto() reads named
+    // fields off the dto, it never spreads it into a Prisma call.
+    const created = await this.patientsService.create(input);
 
     return this.prisma.patients.findFirstOrThrow({
       where: { id: created.id },

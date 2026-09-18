@@ -14,8 +14,13 @@ export type CatalogDoctor = {
   userId: string;
   name: string;
   specialty: string;
+  /** Short current-load status for display (not a hardcoded schedule). */
   hours: string;
   available: boolean;
+  /** Doctor currently has a visit in IN_CONSULTATION stage. */
+  currentlyInConsultation: boolean;
+  /** Number of visits currently queued for this doctor (WAITING_DOCTOR stage). */
+  waitingCount: number;
   phone: string;
   email: string;
 };

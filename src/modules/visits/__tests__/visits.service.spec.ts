@@ -118,6 +118,7 @@ describe('VisitsService', () => {
     ensureFromConsultation: jest.fn().mockResolvedValue({ id: 'fu1' }),
   };
   const events = { emit: jest.fn() };
+  const audit = { recordMutation: jest.fn().mockResolvedValue(undefined) };
 
   let service: VisitsService;
 
@@ -133,6 +134,7 @@ describe('VisitsService', () => {
       pharmacyJourney as never,
       followUps as never,
       events as unknown as EventEmitter2,
+      audit as never,
     );
   });
 

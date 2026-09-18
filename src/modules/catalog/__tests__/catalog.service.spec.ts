@@ -40,7 +40,7 @@ describe('CatalogService', () => {
         findFirst: jest.fn(),
       },
       outpatientVisits: {
-        findMany: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn(),
         count: jest.fn(),
       },

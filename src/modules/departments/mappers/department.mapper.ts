@@ -12,7 +12,12 @@ export class DepartmentMapper {
     return {
       id: entity.getId(),
       name: entity.getName().getValue(),
+      code: entity.getCode(),
+      type: entity.getType(),
       description: entity.getDescription(),
+      headName: entity.getHeadName(),
+      headPosition: entity.getHeadPosition(),
+      isActive: entity.getIsActive(),
       createdAt: entity.getCreatedAt(),
       updatedAt: entity.getUpdatedAt(),
     };

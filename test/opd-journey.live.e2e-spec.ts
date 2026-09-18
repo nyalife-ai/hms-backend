@@ -54,7 +54,7 @@ describe('Live DB — OPD journey', () => {
           .send({
             firstName: 'Journey',
             lastName,
-            gender: 'Female',
+            gender: 'FEMALE',
             phone,
           });
         expect([200, 201]).toContain(patient.status);
@@ -112,6 +112,9 @@ describe('Live DB — OPD journey', () => {
             doctorName: 'E2E Doctor',
             nurseName: 'E2E Nurse',
             doctorStaffId: doctor!.id,
+            reasonForVisit: 'E2E cough and fever',
+            chiefComplaint: 'Cough and fever for 3 days',
+            priority: 'NORMAL',
           });
         expect([200, 201]).toContain(triage.status);
         expect(triage.body.stage).toBe('WAITING_DOCTOR');
@@ -198,6 +201,12 @@ describe('Live DB — OPD journey', () => {
           .get(`/follow-ups?search=${encodeURIComponent(lastName)}&limit=20`)
           .set(auth);
         expect(followUps.status).toBe(200);
+        const followUpItems = followUps.body.items ?? followUps.body;
+        expect(Array.isArray(followUpItems) ? followUpItems.length : 0).toBeGreaterThan(0);
+        // Regression: linked-consultation deep link must resolve to this
+        // outpatient visit (walk-in journey), not fall back to the patient
+        // profile — see clinical.consultations.visit_id.
+        expect(followUpItems[0].visitId).toBe(visitId);
 
         const billed = await request(http())
           .post(`/visits/${visitId}/billing`)

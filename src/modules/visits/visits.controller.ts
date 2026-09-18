@@ -23,6 +23,7 @@ import {
   FinalizeBillingDto,
   LabResultsDto,
   OrderLabsDto,
+  ReassignDoctorDto,
   SaveClinicalOrdersDto,
   SaveClinicalRecordDto,
   TriageDto,
@@ -117,6 +118,20 @@ export class VisitsController {
     return this.visits.recordTriage(id, body, user);
   }
 
+  @Patch(':id/reassign-doctor')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'NURSE')
+  @ApiOperation({
+    summary:
+      'Correct the doctor assigned at triage (allowed until the consultation is complete)',
+  })
+  reassignDoctor(
+    @Param('id') id: string,
+    @Body() body: ReassignDoctorDto,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    return this.visits.reassignDoctor(id, body, user);
+  }
+
   @Post(':id/charge-consult-fee')
   @Roles('ADMIN', 'SUPER_ADMIN', 'ACCOUNTANT')
   @ApiOperation({
@@ -135,6 +150,15 @@ export class VisitsController {
   @ApiOperation({ summary: 'Waive consultation fee for a visit' })
   waiveConsultFee(@Param('id') id: string) {
     return this.visits.waiveConsultFee(id);
+  }
+
+  @Post(':id/defer-consult-fee')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'ACCOUNTANT')
+  @ApiOperation({
+    summary: 'Defer consultation fee to final checkout instead of collecting now',
+  })
+  deferConsultFee(@Param('id') id: string) {
+    return this.visits.deferConsultFee(id);
   }
 
   @Post(':id/collect-consult-fee')

@@ -64,11 +64,16 @@ export class DispenseMedicationUseCase {
         },
       });
       if (existing) {
-        return { dispensed: 0, warnings: [] };
+        return {
+          dispensed: 0,
+          warnings: [],
+          fullyDispensedMedicationIds: new Set<string>(),
+        };
       }
 
       const warnings: string[] = [];
       let dispensed = 0;
+      const fullyDispensedMedicationIds = new Set<string>();
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
@@ -167,6 +172,8 @@ export class DispenseMedicationUseCase {
           warnings.push(
             `Partial stock for "${line.medication}" — short ${remaining} unit(s).`,
           );
+        } else {
+          fullyDispensedMedicationIds.add(medicationId);
         }
       }
 
@@ -181,20 +188,29 @@ export class DispenseMedicationUseCase {
         });
       }
 
-      return { dispensed, warnings };
+      return { dispensed, warnings, fullyDispensedMedicationIds };
     });
 
-    await this.syncVisitAndFormalRx(input.visitId, input.performedBy);
-    return result;
+    await this.syncVisitAndFormalRx(
+      input.visitId,
+      input.performedBy,
+      result.fullyDispensedMedicationIds,
+    );
+    return { dispensed: result.dispensed, warnings: result.warnings };
   }
 
   /**
    * After visit stock is moved, close the linked formal Rx (no second decrement)
-   * and mark visit.pharmacy.dispensed so the checkout queue clears.
+   * and mark visit.pharmacy.dispensed so the checkout queue clears. Only
+   * lines whose medication was actually fully dispensed (no shortfall
+   * warning) are marked DISPENSED — a partial/failed line stays PENDING so
+   * the formal Rx record doesn't silently claim more than what really left
+   * the shelf.
    */
   private async syncVisitAndFormalRx(
     visitId: string,
     performedBy: string,
+    fullyDispensedMedicationIds: Set<string>,
   ): Promise<void> {
     try {
       if (!this.prisma.outpatientVisits?.findUnique) return;
@@ -212,7 +228,7 @@ export class DispenseMedicationUseCase {
           ? pharmacy.prescriptionId
           : null;
 
-      if (prescriptionId) {
+      if (prescriptionId && fullyDispensedMedicationIds.size) {
         const rx = await this.prisma.prescriptions.findFirst({
           where: { id: prescriptionId, deleted_at: null },
         });
@@ -222,18 +238,33 @@ export class DispenseMedicationUseCase {
           rx.status !== 'DISPENSED' &&
           rx.status !== 'CANCELLED'
         ) {
-          await this.prisma.prescriptionLines.updateMany({
+          const pendingLines = await this.prisma.prescriptionLines.findMany({
             where: { prescription_id: prescriptionId, status: 'PENDING' },
-            data: {
-              status: 'DISPENSED',
-              dispensed_by: performedBy,
-              dispensed_at: new Date(),
-            },
+            select: { id: true, medication_id: true },
           });
-          await this.prisma.prescriptions.update({
-            where: { id: prescriptionId },
-            data: { status: 'DISPENSED' },
-          });
+          const lineIdsToDispense = pendingLines
+            .filter((l) => fullyDispensedMedicationIds.has(l.medication_id))
+            .map((l) => l.id);
+
+          if (lineIdsToDispense.length) {
+            await this.prisma.prescriptionLines.updateMany({
+              where: { id: { in: lineIdsToDispense } },
+              data: {
+                status: 'DISPENSED',
+                dispensed_by: performedBy,
+                dispensed_at: new Date(),
+              },
+            });
+            const remainingPending = await this.prisma.prescriptionLines.count({
+              where: { prescription_id: prescriptionId, status: 'PENDING' },
+            });
+            await this.prisma.prescriptions.update({
+              where: { id: prescriptionId },
+              data: {
+                status: remainingPending === 0 ? 'DISPENSED' : 'PARTIALLY_DISPENSED',
+              },
+            });
+          }
         }
       }
 
