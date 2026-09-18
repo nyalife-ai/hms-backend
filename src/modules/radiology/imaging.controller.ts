@@ -2,7 +2,9 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -346,6 +348,17 @@ export class ImagingController {
       'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${safeName}"`,
     });
     return new StreamableFile(image.buffer);
+  }
+
+  @Delete('images/:id')
+  @Roles(...RAD_CONFIG)
+  @HttpCode(204)
+  @ApiOperation({ summary: 'Delete an uploaded image/attachment' })
+  async deleteImage(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    await this.ops.deleteImage(id, user.id);
   }
 }
 

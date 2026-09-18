@@ -113,11 +113,13 @@ describe('RadiologyOperationsUseCase — image upload/download', () => {
           created_at: new Date('2026-09-18T00:00:00Z'),
         }),
         findFirst: jest.fn(),
+        delete: jest.fn().mockResolvedValue({ id: 'img1' }),
       },
     };
     storage = {
       put: jest.fn().mockResolvedValue({ key: 'radiology/req1/x-scan.png' }),
       get: jest.fn().mockResolvedValue(Buffer.from('bytes')),
+      delete: jest.fn().mockResolvedValue(true),
       signedUrl: jest.fn().mockResolvedValue('https://signed.example/scan.png'),
     };
     ops = new RadiologyOperationsUseCase(prisma, audit as never, storage);
@@ -226,5 +228,31 @@ describe('RadiologyOperationsUseCase — image upload/download', () => {
   it('throws NotFoundException for an unknown image id', async () => {
     prisma.images.findFirst.mockResolvedValue(null);
     await expect(ops.getImageDownload('missing')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('deletes the stored object, then the DB row, and audits it', async () => {
+    prisma.images.findFirst.mockResolvedValue({
+      id: 'img1',
+      request_id: 'req1',
+      file_path: 'radiology/req1/x-scan.png',
+      file_name: 'scan.png',
+      mime_type: 'image/png',
+    });
+    await ops.deleteImage('img1', 'u1');
+    expect(storage.delete).toHaveBeenCalledWith('radiology/req1/x-scan.png');
+    expect(prisma.images.delete).toHaveBeenCalledWith({ where: { id: 'img1' } });
+    expect(audit.recordMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        action: 'DELETE',
+        entityType: 'radiology.images',
+        entityId: 'img1',
+      }),
+    );
+  });
+
+  it('throws NotFoundException when deleting an unknown image id', async () => {
+    prisma.images.findFirst.mockResolvedValue(null);
+    await expect(ops.deleteImage('missing', 'u1')).rejects.toBeInstanceOf(NotFoundException);
   });
 });

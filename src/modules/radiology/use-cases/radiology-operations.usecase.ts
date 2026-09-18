@@ -638,6 +638,22 @@ export class RadiologyOperationsUseCase {
     };
   }
 
+  /** Remove an uploaded image — deletes the stored object, then the DB row. */
+  public async deleteImage(imageId: string, actorUserId: string) {
+    const image = await this.getImageRow(imageId);
+    if (this.storage) {
+      await this.storage.delete(image.file_path);
+    }
+    await this.prisma.images.delete({ where: { id: imageId } });
+    await this.audit.recordMutation({
+      userId: actorUserId,
+      action: 'DELETE',
+      entityType: 'radiology.images',
+      entityId: imageId,
+      oldValues: { requestId: image.request_id, fileName: image.file_name },
+    });
+  }
+
   /** Render the current finalized/amended report as a branded DOCX. */
   public async generateReportDocx(requestId: string): Promise<Buffer> {
     const r = await this.prisma.radiologyRequests.findFirst({
