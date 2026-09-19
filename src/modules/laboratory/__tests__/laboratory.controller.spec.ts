@@ -104,4 +104,52 @@ describe('LaboratoryController', () => {
     await invoke('listResults');
     await invoke('getResultReport');
   });
+
+  it('uploads an image with uploadedBy from current user', async () => {
+    const file = {
+      buffer: Buffer.from('fake-bytes'),
+      originalname: 'film.png',
+      mimetype: 'image/png',
+      size: 10,
+    };
+    await controller.uploadImage(id, file, user, { description: 'Blood film' });
+    expect(ops.uploadImage).toHaveBeenCalledWith(id, {
+      buffer: file.buffer,
+      originalname: 'film.png',
+      mimetype: 'image/png',
+      size: 10,
+      description: 'Blood film',
+      uploadedBy: 'u1',
+    });
+  });
+
+  it('rejects an image upload with no file', () => {
+    expect(() => controller.uploadImage(id, undefined, user, {})).toThrow('File is required');
+  });
+
+  it('gets image download metadata', async () => {
+    await controller.downloadImage('img1');
+    expect(ops.getImageDownload).toHaveBeenCalledWith('img1');
+  });
+
+  it('streams image content with the right headers', async () => {
+    ops.getImageBuffer = jest.fn().mockResolvedValue({
+      buffer: Buffer.from('bytes'),
+      fileName: 'film.png',
+      mimeType: 'image/png',
+    });
+    const res = { set: jest.fn() } as never;
+    const result = await controller.streamImage('img1', res);
+    expect(ops.getImageBuffer).toHaveBeenCalledWith('img1');
+    expect((res as { set: jest.Mock }).set).toHaveBeenCalledWith({
+      'Content-Type': 'image/png',
+      'Content-Disposition': 'inline; filename="film.png"',
+    });
+    expect(result.constructor.name).toBe('StreamableFile');
+  });
+
+  it('deletes an image with the current user as actor', async () => {
+    await controller.deleteImage('img1', user);
+    expect(ops.deleteImage).toHaveBeenCalledWith('img1', 'u1');
+  });
 });

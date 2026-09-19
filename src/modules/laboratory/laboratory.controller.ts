@@ -3,17 +3,27 @@
  */
 
 import {
+  BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
   Query,
+  Res,
+  StreamableFile,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import type { Response } from 'express';
 import { CurrentUser } from '../../common/decorators/user.decorator';
 import type { AuthUserPublic, HmsRole } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -29,7 +39,14 @@ import {
   LaboratoryTestTypesQueryDto,
 } from './dto/laboratory-list-query.dto';
 import { LabJourneyUseCase } from './use-cases/lab-journey.usecase';
-import { LabOperationsUseCase } from './use-cases/lab-operations.usecase';
+import { LabOperationsUseCase, MAX_LAB_IMAGE_BYTES } from './use-cases/lab-operations.usecase';
+
+type UploadedLabImageFile = {
+  buffer?: Buffer;
+  originalname?: string;
+  mimetype?: string;
+  size?: number;
+};
 
 const LAB_READ: HmsRole[] = [
   'ADMIN',
@@ -257,6 +274,7 @@ export class LaboratoryController {
       parameterName: string;
       unitOfMeasurement?: string;
       normalReferenceRange?: string;
+      groupName?: string;
       displayOrder?: number;
     },
   ) {
@@ -273,6 +291,7 @@ export class LaboratoryController {
       parameterName?: string;
       unitOfMeasurement?: string | null;
       normalReferenceRange?: string | null;
+      groupName?: string | null;
       displayOrder?: number;
       isActive?: boolean;
     },
@@ -305,6 +324,21 @@ export class LaboratoryController {
   @Roles(...LAB_READ)
   getRequest(@Param('id', ParseUUIDPipe) id: string) {
     return this.ops.getRequest(id);
+  }
+
+  @Get('requests/:id/report/docx')
+  @Roles(...LAB_READ)
+  @ApiOperation({ summary: 'Download the standard clinical laboratory report as a DOCX' })
+  async downloadReportDocx(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const buffer = await this.ops.generateReportDocx(id);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'Content-Disposition': `attachment; filename="laboratory-report-${id}.docx"`,
+    });
+    return new StreamableFile(buffer);
   }
 
   @Post('requests/:id/release-to-doctor')
@@ -372,6 +406,79 @@ export class LaboratoryController {
     @CurrentUser() user: AuthUserPublic,
   ) {
     return this.journey.cancelRequest(id, user.id);
+  }
+
+  // ── Image attachments ──────────────────────────────────────
+
+  @Post('requests/:id/images')
+  @Roles(...LAB_TECH)
+  @ApiOperation({ summary: 'Upload a clinical image/attachment for this request' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', format: 'binary' } },
+      required: ['file'],
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_LAB_IMAGE_BYTES },
+    }),
+  )
+  uploadImage(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: UploadedLabImageFile | undefined,
+    @CurrentUser() user: AuthUserPublic,
+    @Body() body: { description?: string },
+  ) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('File is required');
+    }
+    return this.ops.uploadImage(id, {
+      buffer: file.buffer,
+      originalname: file.originalname || 'image',
+      mimetype: file.mimetype,
+      size: file.size,
+      description: body.description,
+      uploadedBy: user.id,
+    });
+  }
+
+  @Get('images/:id/download')
+  @Roles(...LAB_READ)
+  @ApiOperation({ summary: 'Get image download metadata / signed URL' })
+  downloadImage(@Param('id', ParseUUIDPipe) id: string) {
+    return this.ops.getImageDownload(id);
+  }
+
+  @Get('images/:id/content')
+  @Roles(...LAB_READ)
+  @ApiOperation({ summary: 'Stream image content (authenticated)' })
+  async streamImage(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const image = await this.ops.getImageBuffer(id);
+    const inline = image.mimeType.startsWith('image/') || image.mimeType === 'application/pdf';
+    const safeName = image.fileName.replace(/"/g, '');
+    res.set({
+      'Content-Type': image.mimeType,
+      'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${safeName}"`,
+    });
+    return new StreamableFile(image.buffer);
+  }
+
+  @Delete('images/:id')
+  @Roles(...LAB_TECH)
+  @HttpCode(204)
+  @ApiOperation({ summary: 'Delete an uploaded image/attachment' })
+  async deleteImage(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUserPublic,
+  ) {
+    await this.ops.deleteImage(id, user.id);
   }
 
   @Post('requests/:id/samples')

@@ -33,6 +33,7 @@ describe('RadiologyOperationsUseCase.generateReportDocx', () => {
     scan_type: { scan_type: 'Pelvic Ultrasound', department: null },
     radiology_findings_request_id: [{ findings_text: '<p>Normal study.</p>' }],
     radiology_reports_request_id: [] as unknown[],
+    radiology_images_request_id: [] as unknown[],
   };
 
   beforeEach(() => {
@@ -88,6 +89,75 @@ describe('RadiologyOperationsUseCase.generateReportDocx', () => {
     expect(buffer.length).toBeGreaterThan(1000);
     // A valid .docx is a zip archive — starts with the "PK" local file header signature.
     expect(buffer.subarray(0, 2).toString('ascii')).toBe('PK');
+  });
+
+  it('embeds attached images fetched from storage as a trailing appendix', async () => {
+    const png = Buffer.from(
+      '89504e470d0a1a0a0000000d494844520000000a0000000a0802000000025a5f92' +
+        '0000000a49444154789c6360000002000155aa0500000000049454e44ae426082',
+      'hex',
+    );
+    const storage = { get: jest.fn().mockResolvedValue(png) };
+    const opsWithStorage = new RadiologyOperationsUseCase(prisma, audit as never, storage as never);
+    prisma.radiologyRequests.findFirst.mockResolvedValue({
+      ...baseRequest,
+      radiology_reports_request_id: [
+        {
+          status: 'FINAL',
+          version: 1,
+          final_impression: '<p>No acute abnormality.</p>',
+          conclusion: null,
+          recommendations: null,
+          sections_data: null,
+          template_id: null,
+          signed_at: null,
+          finalized_at: new Date('2026-09-18T00:00:00Z'),
+          finalized_by: 'rad-user-1',
+        },
+      ],
+      radiology_images_request_id: [
+        {
+          file_path: 'radiology/req1/x-scan.png',
+          file_name: 'scan.png',
+          mime_type: 'image/png',
+          modality: 'Ultrasound',
+          series_description: null,
+        },
+      ],
+    });
+
+    const buffer = await opsWithStorage.generateReportDocx('req1');
+    expect(storage.get).toHaveBeenCalledWith('radiology/req1/x-scan.png');
+    expect(buffer.length).toBeGreaterThan(1000);
+  });
+
+  it('renders an in-document notice instead of crashing when an image fetch fails', async () => {
+    const storage = { get: jest.fn().mockRejectedValue(new Error('object not found')) };
+    const opsWithStorage = new RadiologyOperationsUseCase(prisma, audit as never, storage as never);
+    prisma.radiologyRequests.findFirst.mockResolvedValue({
+      ...baseRequest,
+      radiology_reports_request_id: [
+        {
+          status: 'FINAL',
+          version: 1,
+          final_impression: null,
+          conclusion: null,
+          recommendations: null,
+          sections_data: null,
+          template_id: null,
+          signed_at: null,
+          finalized_at: new Date('2026-09-18T00:00:00Z'),
+          finalized_by: null,
+        },
+      ],
+      radiology_images_request_id: [
+        { file_path: 'radiology/req1/missing.png', file_name: 'missing.png', mime_type: 'image/png' },
+      ],
+    });
+
+    const buffer = await opsWithStorage.generateReportDocx('req1');
+    expect(Buffer.isBuffer(buffer)).toBe(true);
+    expect(buffer.length).toBeGreaterThan(0);
   });
 });
 

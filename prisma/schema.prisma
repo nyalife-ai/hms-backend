@@ -61,6 +61,7 @@ model User {
   laboratory_results_verified_by Results[] @relation(name: "Results_User_verified_by")
   radiology_requests_requested_by RadiologyRequests[] @relation(name: "RadiologyRequests_User_requested_by")
   radiology_images_uploaded_by Images[] @relation(name: "Images_User_uploaded_by")
+  laboratory_images_uploaded_by LaboratoryImages[] @relation(name: "LaboratoryImages_User_uploaded_by")
   radiology_reports_finalized_by Reports[] @relation(name: "Reports_User_finalized_by")
   billing_journal_entries_created_by JournalEntries[] @relation(name: "JournalEntries_User_created_by")
   billing_journal_entries_posted_by JournalEntries[] @relation(name: "JournalEntries_User_posted_by")
@@ -956,6 +957,7 @@ model TestParameters {
   parameter_name String @db.VarChar(100)
   unit_of_measurement String? @db.VarChar(30)
   normal_reference_range String? @db.VarChar(100)
+  group_name String? @db.VarChar(100)
   display_order Int @default(0)
   is_active Boolean @default(true)
   created_at DateTime @db.Timestamptz(6) @default(now())
@@ -985,6 +987,7 @@ model LaboratoryRequests {
   rel_requested_by User @relation(fields: [requested_by], references: [id], name: "LaboratoryRequests_User_requested_by")
   laboratory_samples_request_id Samples[] @relation(name: "Samples_LaboratoryRequests_request_id")
   laboratory_results_request_id Results[] @relation(name: "Results_LaboratoryRequests_request_id")
+  laboratory_images_request_id LaboratoryImages[] @relation(name: "LaboratoryImages_LaboratoryRequests_request_id")
   @@map("requests")
   @@schema("laboratory")
 }
@@ -1027,6 +1030,22 @@ model Results {
   rel_performed_by User? @relation(fields: [performed_by], references: [id], name: "Results_User_performed_by")
   rel_verified_by User? @relation(fields: [verified_by], references: [id], name: "Results_User_verified_by")
   @@map("results")
+  @@schema("laboratory")
+}
+model LaboratoryImages {
+  id String @db.Uuid @id @default(uuid())
+  request_id String @db.Uuid
+  file_path String @db.VarChar(500)
+  file_name String? @db.VarChar(255)
+  mime_type String? @db.VarChar(100)
+  description String? @db.VarChar(255)
+  file_size BigInt?
+  uploaded_by String @db.Uuid
+  created_at DateTime @db.Timestamptz(6) @default(now())
+  request LaboratoryRequests @relation(fields: [request_id], references: [id], name: "LaboratoryImages_LaboratoryRequests_request_id", onDelete: Cascade)
+  rel_uploaded_by User @relation(fields: [uploaded_by], references: [id], name: "LaboratoryImages_User_uploaded_by")
+  @@index([request_id], map: "idx_laboratory_image_request")
+  @@map("laboratory_images")
   @@schema("laboratory")
 }
 

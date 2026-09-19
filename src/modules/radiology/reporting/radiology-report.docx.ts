@@ -25,6 +25,7 @@ import {
   ImageRun,
   LevelFormat,
   Packer,
+  PageBreak,
   Paragraph,
   ShadingType,
   Table,
@@ -34,6 +35,7 @@ import {
   VerticalAlign,
   WidthType,
 } from 'docx';
+import { buildImageAppendix, type ReportAttachment } from '../../../platform/documents/image-appendix.util';
 import { BULLET_REF, htmlToParagraphs, NUMBER_REF } from './html-to-docx';
 
 const BRAND_PINK = 'F02878';
@@ -86,6 +88,7 @@ export type RadiologyReportDocxOptions = {
     referringDoctorName?: string | null;
     referringDoctorTitle?: string | null;
   };
+  attachments?: ReportAttachment[];
 };
 
 function heading(text: string): Paragraph {
@@ -328,6 +331,12 @@ export async function generateRadiologyReportDocx(
         ],
       }),
     );
+  }
+
+  const appendix = buildImageAppendix('RADIOLOGY IMAGES', options.attachments ?? []);
+  if (appendix.length) {
+    body.push(new Paragraph({ children: [new PageBreak()] }));
+    body.push(...appendix);
   }
 
   const doc = new Document({

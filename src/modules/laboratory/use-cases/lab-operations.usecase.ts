@@ -9,17 +9,47 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
+  Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../../database/prisma/prisma.service';
+import { STORAGE_PROVIDER, type StorageProvider } from '../../../platform/storage';
 import { HmsAuditWriter } from '../../audit/hms-audit.writer';
 import {
   clinicalServiceKind,
   isSystemFeeCode,
 } from '../../catalog/clinical-service.util';
 import { resolveRevenueAccountCode } from '../../billing/domain/service-revenue-account';
+import { generateLaboratoryReportDocx } from '../reporting/laboratory-report.docx';
+import type { LabPanel, LaboratoryReportData } from '../reporting/laboratory-report-data';
+import type { ReportAttachment } from '../../../platform/documents/image-appendix.util';
+
+export const MAX_LAB_IMAGE_BYTES = 25 * 1024 * 1024;
+
+const FACILITY_SETTING_KEYS = [
+  'hospital_name',
+  'contact_address',
+  'hospital_address',
+  'contact_phone',
+  'hospital_phone',
+  'contact_email',
+  'hospital_email',
+] as const;
+
+const FACILITY_DEFAULTS: Record<(typeof FACILITY_SETTING_KEYS)[number], string> = {
+  hospital_name: "NyaLife Women's Clinic",
+  contact_address: '',
+  hospital_address: '7514-00200, Nairobi',
+  contact_phone: '',
+  hospital_phone: '+254746516514',
+  contact_email: '',
+  hospital_email: 'info@nyalifewomensclinic.com',
+};
 
 export const LAB_PRIORITIES = ['NORMAL', 'URGENT', 'STAT'] as const;
 export const LAB_REQUEST_STATUSES = [
@@ -78,6 +108,9 @@ export class LabOperationsUseCase {
   public constructor(
     private readonly prisma: PrismaService,
     private readonly audit: HmsAuditWriter,
+    @Optional()
+    @Inject(STORAGE_PROVIDER)
+    private readonly storage?: StorageProvider,
   ) {}
 
   // ── Overview ──────────────────────────────────────────────
@@ -467,6 +500,7 @@ export class LabOperationsUseCase {
     parameterName: string;
     unitOfMeasurement?: string;
     normalReferenceRange?: string;
+    groupName?: string;
     displayOrder?: number;
     actorUserId?: string;
   }) {
@@ -482,6 +516,7 @@ export class LabOperationsUseCase {
         parameter_name: name,
         unit_of_measurement: input.unitOfMeasurement?.trim() || null,
         normal_reference_range: input.normalReferenceRange?.trim() || null,
+        group_name: input.groupName?.trim() || null,
         display_order: input.displayOrder ?? 0,
         is_active: true,
       },
@@ -502,6 +537,7 @@ export class LabOperationsUseCase {
       parameterName?: string;
       unitOfMeasurement?: string | null;
       normalReferenceRange?: string | null;
+      groupName?: string | null;
       displayOrder?: number;
       isActive?: boolean;
       actorUserId?: string;
@@ -524,6 +560,7 @@ export class LabOperationsUseCase {
         ...(input.normalReferenceRange !== undefined
           ? { normal_reference_range: input.normalReferenceRange }
           : {}),
+        ...(input.groupName !== undefined ? { group_name: input.groupName } : {}),
         ...(input.displayOrder !== undefined
           ? { display_order: input.displayOrder }
           : {}),
@@ -693,6 +730,7 @@ export class LabOperationsUseCase {
     const results = r.laboratory_results_request_id.map((res) =>
       this.mapResult(res),
     );
+    const images = await this.listImages(id);
     return {
       ...this.mapRequest(r),
       patientPhone: profile?.phone ?? null,
@@ -733,6 +771,7 @@ export class LabOperationsUseCase {
           testName: t.testName,
         })),
       ),
+      images,
     };
   }
 
@@ -1475,6 +1514,7 @@ export class LabOperationsUseCase {
     parameter_name: string;
     unit_of_measurement: string | null;
     normal_reference_range: string | null;
+    group_name?: string | null;
     display_order: number;
     is_active: boolean;
     test_type?: { test_name: string };
@@ -1486,6 +1526,7 @@ export class LabOperationsUseCase {
       parameterName: p.parameter_name,
       unitOfMeasurement: p.unit_of_measurement,
       normalReferenceRange: p.normal_reference_range,
+      groupName: p.group_name ?? null,
       displayOrder: p.display_order,
       isActive: p.is_active,
     };
@@ -1832,5 +1873,319 @@ export class LabOperationsUseCase {
       isActive: row.is_active,
       kind: clinicalServiceKind(row.category),
     };
+  }
+
+  // ── Image attachments ──────────────────────────────────────
+
+  private mapLabImage(row: {
+    id: string;
+    file_name: string | null;
+    mime_type: string | null;
+    description: string | null;
+    file_size: bigint | null;
+    created_at: Date;
+  }) {
+    return {
+      id: row.id,
+      fileName: row.file_name,
+      mimeType: row.mime_type,
+      description: row.description,
+      fileSize: row.file_size != null ? Number(row.file_size) : null,
+      createdAt: row.created_at.toISOString(),
+    };
+  }
+
+  public async listImages(requestId: string) {
+    const rows = await this.prisma.laboratoryImages.findMany({
+      where: { request_id: requestId },
+      orderBy: { created_at: 'asc' },
+    });
+    return rows.map((r) => this.mapLabImage(r));
+  }
+
+  /** Real multipart upload — mirrors radiology's uploadImage (see radiology-operations.usecase.ts). */
+  public async uploadImage(
+    requestId: string,
+    input: {
+      buffer: Buffer;
+      originalname: string;
+      mimetype?: string;
+      size?: number;
+      description?: string;
+      uploadedBy: string;
+    },
+  ) {
+    const request = await this.prisma.laboratoryRequests.findFirst({ where: { id: requestId } });
+    if (!request) throw new NotFoundException('Lab request not found');
+    if (!this.storage) {
+      throw new ServiceUnavailableException('Storage is not configured');
+    }
+    if (!input.buffer?.length) {
+      throw new BadRequestException('File is required');
+    }
+    const size = input.size ?? input.buffer.length;
+    if (size > MAX_LAB_IMAGE_BYTES) {
+      throw new BadRequestException('File exceeds the 25MB limit');
+    }
+
+    const safeName = (input.originalname || 'image')
+      .replace(/[^\w.\-]+/g, '_')
+      .slice(0, 180);
+    const key = `laboratory/${requestId}/${randomUUID()}-${safeName}`;
+    await this.storage.put(key, input.buffer, { contentType: input.mimetype });
+
+    const row = await this.prisma.laboratoryImages.create({
+      data: {
+        request_id: requestId,
+        file_path: key,
+        file_name: input.originalname || safeName,
+        mime_type: input.mimetype ?? null,
+        description: input.description?.trim() || null,
+        file_size: BigInt(size),
+        uploaded_by: input.uploadedBy,
+      },
+    });
+    await this.audit.recordMutation({
+      userId: input.uploadedBy,
+      action: 'CREATE',
+      entityType: 'laboratory.images',
+      entityId: row.id,
+      newValues: { requestId, fileName: row.file_name, fileSize: size },
+    });
+    return this.mapLabImage(row);
+  }
+
+  private async getLabImageRow(imageId: string) {
+    const image = await this.prisma.laboratoryImages.findFirst({ where: { id: imageId } });
+    if (!image) throw new NotFoundException('Image not found');
+    return image;
+  }
+
+  public async getImageDownload(imageId: string) {
+    const image = await this.getLabImageRow(imageId);
+    if (!this.storage) {
+      throw new ServiceUnavailableException('Storage is not configured');
+    }
+    let url: string | null = null;
+    try {
+      url = await this.storage.signedUrl(image.file_path, { expiresInSeconds: 300, operation: 'get' });
+    } catch {
+      // Local/in-memory storage drivers don't produce a fetchable URL — the
+      // caller falls back to streaming via getImageBuffer/content.
+    }
+    return { ...this.mapLabImage(image), url };
+  }
+
+  public async getImageBuffer(imageId: string) {
+    const image = await this.getLabImageRow(imageId);
+    if (!this.storage) {
+      throw new ServiceUnavailableException('Storage is not configured');
+    }
+    const buffer = await this.storage.get(image.file_path);
+    return {
+      buffer,
+      fileName: image.file_name || 'image',
+      mimeType: image.mime_type || 'application/octet-stream',
+    };
+  }
+
+  public async deleteImage(imageId: string, actorUserId: string) {
+    const image = await this.getLabImageRow(imageId);
+    if (this.storage) {
+      await this.storage.delete(image.file_path);
+    }
+    await this.prisma.laboratoryImages.delete({ where: { id: imageId } });
+    await this.audit.recordMutation({
+      userId: actorUserId,
+      action: 'DELETE',
+      entityType: 'laboratory.images',
+      entityId: imageId,
+      oldValues: { requestId: image.request_id, fileName: image.file_name },
+    });
+  }
+
+  // ── Report generation ───────────────────────────────────────
+
+  /**
+   * Standard Clinical Laboratory Report — only ever renders a COMPLETED
+   * request (every ordered parameter has a verified result), matching the
+   * same "authoritative finalized state only" gate radiology's report
+   * export uses.
+   */
+  public async generateReportDocx(requestId: string): Promise<Buffer> {
+    const r = await this.prisma.laboratoryRequests.findFirst({
+      where: { id: requestId },
+      include: {
+        ...this.requestInclude(),
+        laboratory_samples_request_id: { orderBy: { collected_at: 'asc' }, take: 1 },
+        laboratory_results_request_id: {
+          include: { parameter: { include: { test_type: true } }, rel_verified_by: true },
+          orderBy: { created_at: 'asc' },
+        },
+        laboratory_images_request_id: { orderBy: { created_at: 'asc' } },
+      },
+    });
+    if (!r) throw new NotFoundException('Lab request not found');
+    if (r.status !== 'COMPLETED') {
+      throw new BadRequestException(
+        `Cannot export a report while status is ${r.status} (all results must be verified first)`,
+      );
+    }
+
+    const ordered = await this.resolveOrderedPanels(r.notes);
+    const parsed = this.parseNotes(r.notes);
+    const profile = r.patient?.user.core_profiles_user_id?.[0];
+    const doctor = r.requesting_doctor;
+    let requestingDoctorDepartment: string | null = null;
+    if (doctor?.department_id) {
+      const dept = await this.prisma.departments.findFirst({
+        where: { id: doctor.department_id },
+        select: { name: true },
+      });
+      requestingDoctorDepartment = dept?.name ?? null;
+    }
+    if (!requestingDoctorDepartment) {
+      requestingDoctorDepartment = doctor?.specialization?.trim() || doctor?.position?.trim() || null;
+    }
+
+    const resultsByParameterId = new Map(
+      r.laboratory_results_request_id.map((res) => [res.parameter_id, res]),
+    );
+    const panels: LabPanel[] = ordered.map((panel) => ({
+      panelName: panel.testName,
+      category: panel.category,
+      analytes: panel.parameters.map((p) => {
+        const result = resultsByParameterId.get(p.id);
+        return {
+          parameterName: p.parameterName,
+          unit: p.unitOfMeasurement,
+          referenceRange: p.normalReferenceRange,
+          observedValue: result?.result_value ?? null,
+          interpretation: (result?.interpretation as LabPanel['analytes'][number]['interpretation']) ?? null,
+          groupName: p.groupName ?? null,
+        };
+      }),
+    }));
+
+    const verifiedResults = r.laboratory_results_request_id
+      .filter((res) => res.verified_at)
+      .sort((a, b) => (b.verified_at?.getTime() ?? 0) - (a.verified_at?.getTime() ?? 0));
+    const verifier = verifiedResults[0]?.rel_verified_by
+      ? await this.prisma.staffProfiles.findFirst({
+          where: { user_id: verifiedResults[0].verified_by! },
+          include: { user: { include: { core_profiles_user_id: true } } },
+        })
+      : null;
+
+    const settingsRows = await this.prisma.settings.findMany({
+      where: { key: { in: [...FACILITY_SETTING_KEYS, 'lab_report_methodology_note'] } },
+    });
+    const settings = Object.fromEntries(settingsRows.map((s) => [s.key, s.value])) as Partial<
+      Record<(typeof FACILITY_SETTING_KEYS)[number], string>
+    >;
+    const facilityValue = (
+      primary: (typeof FACILITY_SETTING_KEYS)[number],
+      fallback: (typeof FACILITY_SETTING_KEYS)[number],
+    ): string =>
+      settings[primary] || settings[fallback] || FACILITY_DEFAULTS[primary] || FACILITY_DEFAULTS[fallback];
+
+    const attachments: ReportAttachment[] = this.storage
+      ? await Promise.all(
+          r.laboratory_images_request_id.map(async (img): Promise<ReportAttachment> => {
+            try {
+              const buffer = await this.storage!.get(img.file_path);
+              return {
+                buffer,
+                mimeType: img.mime_type,
+                fileName: img.file_name || 'image',
+                caption: img.description,
+              };
+            } catch {
+              return {
+                mimeType: img.mime_type,
+                fileName: img.file_name || 'image',
+                fetchError: 'file could not be retrieved from storage',
+              };
+            }
+          }),
+        )
+      : [];
+
+    const sampleTypes = [
+      ...new Set(r.laboratory_samples_request_id.map((s) => s.sample_type).filter(Boolean)),
+    ];
+    const firstSample = r.laboratory_samples_request_id[0];
+
+    const data: LaboratoryReportData = {
+      facility: {
+        name: facilityValue('hospital_name', 'hospital_name'),
+        addressLine: facilityValue('contact_address', 'hospital_address'),
+        contactLine: [facilityValue('contact_phone', 'hospital_phone'), facilityValue('contact_email', 'hospital_email')]
+          .filter(Boolean)
+          .join(' · '),
+      },
+      patient: {
+        name: this.profileName(r.patient?.user.core_profiles_user_id) || r.patient?.patient_number || '—',
+        patientNumber: r.patient?.patient_number ?? '—',
+        age: `${ageFromDob(profile?.date_of_birth ?? null)} Year(s)`,
+        sex: profile?.gender || '—',
+        phone: profile?.phone ?? null,
+        address: [profile?.address, profile?.city].filter(Boolean).join(', ') || null,
+        pincode: profile?.postal_code ?? null,
+      },
+      request: {
+        requestNumber: r.request_number || r.id,
+        priority: r.priority,
+      },
+      patientIdentifier: r.patient?.patient_number ?? r.patient_id,
+      referringProvider: {
+        name: this.profileName(doctor?.user.core_profiles_user_id) || null,
+        department: requestingDoctorDepartment,
+      },
+      registration: {
+        registeredOn: r.request_date.toLocaleString('en-GB', {
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+      },
+      collection: {
+        collectedOn: firstSample
+          ? firstSample.collected_at.toLocaleString('en-GB', {
+              day: '2-digit',
+              month: 'short',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+            })
+          : null,
+        sampleTypes,
+      },
+      reporting: {
+        reportedOn: (verifiedResults[0]?.verified_at ?? r.updated_at).toLocaleString('en-GB', {
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+      },
+      panels,
+      pathologistRemark: parsed.observations?.trim() || parsed.conclusion?.trim() || null,
+      // Facility-configurable via Settings("lab_report_methodology_note") — never a hardcoded default,
+      // since inventing real clinical/methodology wording would misrepresent the lab's actual process.
+      methodologyNote:
+        settingsRows.find((s) => s.key === 'lab_report_methodology_note')?.value?.trim() || null,
+      verifier: {
+        name: this.profileName(verifier?.user.core_profiles_user_id) || null,
+        qualification: verifier?.qualification || verifier?.position || null,
+      },
+      identifierValue: r.request_number || r.id,
+      attachments,
+    };
+
+    return generateLaboratoryReportDocx(data);
   }
 }

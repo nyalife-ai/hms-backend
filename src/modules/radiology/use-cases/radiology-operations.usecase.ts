@@ -19,6 +19,7 @@ import { STORAGE_PROVIDER, type StorageProvider } from '../../../platform/storag
 import { HmsAuditWriter } from '../../audit/hms-audit.writer';
 import { resolveRevenueAccountCode } from '../../billing/domain/service-revenue-account';
 import { generateRadiologyReportDocx } from '../reporting/radiology-report.docx';
+import type { ReportAttachment } from '../../../platform/documents/image-appendix.util';
 
 export const MAX_RADIOLOGY_IMAGE_BYTES = 25 * 1024 * 1024;
 
@@ -665,6 +666,7 @@ export class RadiologyOperationsUseCase {
         },
         radiology_findings_request_id: { orderBy: { created_at: 'desc' }, take: 1 },
         radiology_reports_request_id: { orderBy: { created_at: 'desc' } },
+        radiology_images_request_id: { orderBy: { created_at: 'asc' } },
       },
     });
     if (!r) throw new NotFoundException('Radiology request not found');
@@ -706,6 +708,28 @@ export class RadiologyOperationsUseCase {
 
     const age = ageFromDob(profile?.date_of_birth ?? null);
     const findingsText = r.radiology_findings_request_id[0]?.findings_text ?? null;
+
+    const attachments: ReportAttachment[] = this.storage
+      ? await Promise.all(
+          r.radiology_images_request_id.map(async (img): Promise<ReportAttachment> => {
+            try {
+              const buffer = await this.storage!.get(img.file_path);
+              return {
+                buffer,
+                mimeType: img.mime_type,
+                fileName: img.file_name || 'image',
+                caption: [img.modality, img.series_description].filter(Boolean).join(' · ') || null,
+              };
+            } catch {
+              return {
+                mimeType: img.mime_type,
+                fileName: img.file_name || 'image',
+                fetchError: 'file could not be retrieved from storage',
+              };
+            }
+          }),
+        )
+      : [];
 
     return generateRadiologyReportDocx({
       facility: {
@@ -754,6 +778,7 @@ export class RadiologyOperationsUseCase {
           this.profileName(r.requesting_doctor?.user.core_profiles_user_id) || null,
         referringDoctorTitle: null,
       },
+      attachments,
     });
   }
 

@@ -6,6 +6,7 @@ import {
   BadRequestException,
   ConflictException,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { LabOperationsUseCase } from '../use-cases/lab-operations.usecase';
 
@@ -101,6 +102,12 @@ describe('LabOperationsUseCase', () => {
       results: {
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
+      },
+      laboratoryImages: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn(),
+        create: jest.fn(),
+        delete: jest.fn(),
       },
       outpatientVisits: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -1117,5 +1124,261 @@ describe('LabOperationsUseCase', () => {
         data: expect.objectContaining({ revenue_account_id: null }),
       }),
     );
+  });
+});
+
+describe('LabOperationsUseCase — image attachments', () => {
+  const audit = { recordMutation: jest.fn().mockResolvedValue(undefined) };
+  let prisma: any;
+  let storage: any;
+  let ops: LabOperationsUseCase;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    prisma = {
+      laboratoryRequests: { findFirst: jest.fn().mockResolvedValue({ id: 'req1' }) },
+      laboratoryImages: {
+        create: jest.fn().mockResolvedValue({
+          id: 'img1',
+          file_name: 'film.png',
+          mime_type: 'image/png',
+          description: null,
+          file_size: BigInt(11),
+          created_at: new Date('2026-09-19T00:00:00Z'),
+        }),
+        findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+        delete: jest.fn().mockResolvedValue({ id: 'img1' }),
+      },
+    };
+    storage = {
+      put: jest.fn().mockResolvedValue({ key: 'laboratory/req1/x-film.png' }),
+      get: jest.fn().mockResolvedValue(Buffer.from('bytes')),
+      delete: jest.fn().mockResolvedValue(true),
+      signedUrl: jest.fn().mockResolvedValue('https://signed.example/film.png'),
+    };
+    ops = new LabOperationsUseCase(prisma, audit as never, storage);
+  });
+
+  it('uploads a file to storage under a namespaced key and audits it', async () => {
+    const buffer = Buffer.from('image-bytes');
+    await ops.uploadImage('req1', {
+      buffer,
+      originalname: 'film.png',
+      mimetype: 'image/png',
+      size: buffer.length,
+      uploadedBy: 'u1',
+    });
+
+    expect(storage.put).toHaveBeenCalledWith(
+      expect.stringMatching(/^laboratory\/req1\/.+-film\.png$/),
+      buffer,
+      { contentType: 'image/png' },
+    );
+    expect(prisma.laboratoryImages.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ request_id: 'req1', file_name: 'film.png', uploaded_by: 'u1' }),
+      }),
+    );
+    expect(audit.recordMutation).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'CREATE', entityType: 'laboratory.images' }),
+    );
+  });
+
+  it('throws NotFoundException when the request does not exist', async () => {
+    prisma.laboratoryRequests.findFirst.mockResolvedValue(null);
+    await expect(
+      ops.uploadImage('missing', { buffer: Buffer.from('x'), originalname: 'a.png', uploadedBy: 'u1' }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('rejects a file over the size limit', async () => {
+    await expect(
+      ops.uploadImage('req1', {
+        buffer: Buffer.alloc(10),
+        originalname: 'film.png',
+        size: 26 * 1024 * 1024,
+        uploadedBy: 'u1',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('throws when no storage provider is configured', async () => {
+    const opsNoStorage = new LabOperationsUseCase(prisma, audit as never, undefined);
+    await expect(
+      opsNoStorage.uploadImage('req1', { buffer: Buffer.from('x'), originalname: 'a.png', uploadedBy: 'u1' }),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('returns signed URL download metadata', async () => {
+    prisma.laboratoryImages.findFirst.mockResolvedValue({
+      id: 'img1',
+      file_path: 'laboratory/req1/x-film.png',
+      file_name: 'film.png',
+      mime_type: 'image/png',
+      description: null,
+      file_size: BigInt(1234),
+      created_at: new Date('2026-09-19T00:00:00Z'),
+    });
+    const result = await ops.getImageDownload('img1');
+    expect(result.url).toBe('https://signed.example/film.png');
+    expect(result.fileSize).toBe(1234);
+  });
+
+  it('streams the raw content buffer', async () => {
+    prisma.laboratoryImages.findFirst.mockResolvedValue({
+      id: 'img1',
+      file_path: 'laboratory/req1/x-film.png',
+      file_name: 'film.png',
+      mime_type: 'image/png',
+    });
+    const result = await ops.getImageBuffer('img1');
+    expect(storage.get).toHaveBeenCalledWith('laboratory/req1/x-film.png');
+    expect(result.buffer).toEqual(Buffer.from('bytes'));
+  });
+
+  it('deletes the stored object, then the DB row, and audits it', async () => {
+    prisma.laboratoryImages.findFirst.mockResolvedValue({
+      id: 'img1',
+      request_id: 'req1',
+      file_path: 'laboratory/req1/x-film.png',
+      file_name: 'film.png',
+    });
+    await ops.deleteImage('img1', 'u1');
+    expect(storage.delete).toHaveBeenCalledWith('laboratory/req1/x-film.png');
+    expect(prisma.laboratoryImages.delete).toHaveBeenCalledWith({ where: { id: 'img1' } });
+    expect(audit.recordMutation).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'DELETE', entityType: 'laboratory.images' }),
+    );
+  });
+
+  it('throws NotFoundException for an unknown image id', async () => {
+    prisma.laboratoryImages.findFirst.mockResolvedValue(null);
+    await expect(ops.getImageDownload('missing')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('LabOperationsUseCase.generateReportDocx', () => {
+  const audit = { recordMutation: jest.fn().mockResolvedValue(undefined) };
+  let prisma: any;
+  let ops: LabOperationsUseCase;
+
+  const baseRequest = {
+    id: 'req1',
+    request_number: 'LAB-TEST01',
+    priority: 'NORMAL',
+    status: 'COMPLETED',
+    request_date: new Date('2026-09-19T08:00:00Z'),
+    updated_at: new Date('2026-09-19T09:00:00Z'),
+    notes: JSON.stringify({ orderedTestTypeIds: ['tt1'] }),
+    patient: {
+      patient_number: 'PT-001',
+      user: {
+        core_profiles_user_id: [
+          { first_name: 'Ada', last_name: 'Test', date_of_birth: new Date('1995-01-01'), gender: 'Female', phone: '0700', address: '1 Test St', city: 'Nairobi', postal_code: '00100' },
+        ],
+      },
+    },
+    requesting_doctor: {
+      department_id: null,
+      specialization: null,
+      position: null,
+      user: { core_profiles_user_id: [{ first_name: 'Ref', last_name: 'Doc' }] },
+    },
+    laboratory_samples_request_id: [
+      { sample_type: 'Whole Blood', collected_at: new Date('2026-09-19T08:10:00Z') },
+    ],
+    laboratory_results_request_id: [
+      {
+        parameter_id: 'p1',
+        result_value: '11.7',
+        interpretation: 'LOW',
+        verified_by: 'ver1',
+        verified_at: new Date('2026-09-19T08:50:00Z'),
+        rel_verified_by: { id: 'ver1' },
+      },
+    ],
+    laboratory_images_request_id: [] as unknown[],
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    prisma = {
+      laboratoryRequests: { findFirst: jest.fn() },
+      testTypes: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'tt1',
+            test_name: 'Complete Blood Count',
+            category: 'Haematology',
+            laboratory_test_parameters_test_type_id: [
+              {
+                id: 'p1',
+                test_type_id: 'tt1',
+                parameter_name: 'Haemoglobin',
+                unit_of_measurement: 'g/dL',
+                normal_reference_range: '12.0-16.0',
+                display_order: 0,
+                is_active: true,
+              },
+            ],
+          },
+        ]),
+      },
+      settings: { findMany: jest.fn().mockResolvedValue([]) },
+      staffProfiles: { findFirst: jest.fn().mockResolvedValue(null) },
+      departments: { findFirst: jest.fn() },
+    };
+    ops = new LabOperationsUseCase(prisma, audit as never);
+  });
+
+  it('throws NotFoundException when the request does not exist', async () => {
+    prisma.laboratoryRequests.findFirst.mockResolvedValue(null);
+    await expect(ops.generateReportDocx('missing')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('throws BadRequestException when the request is not COMPLETED', async () => {
+    prisma.laboratoryRequests.findFirst.mockResolvedValue({ ...baseRequest, status: 'IN_PROGRESS' });
+    await expect(ops.generateReportDocx('req1')).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('renders a non-empty DOCX buffer for a completed request', async () => {
+    prisma.laboratoryRequests.findFirst.mockResolvedValue(baseRequest);
+    prisma.staffProfiles.findFirst.mockResolvedValue({
+      qualification: 'Medical Laboratory Technologist',
+      position: null,
+      user: { core_profiles_user_id: [{ first_name: 'Jane', last_name: 'Tech' }] },
+    });
+
+    const buffer = await ops.generateReportDocx('req1');
+    expect(Buffer.isBuffer(buffer)).toBe(true);
+    expect(buffer.length).toBeGreaterThan(1000);
+    expect(buffer.subarray(0, 2).toString('ascii')).toBe('PK');
+  });
+
+  it('renders correctly when parameters carry an admin-configured group_name', async () => {
+    prisma.testTypes.findMany.mockResolvedValue([
+      {
+        id: 'tt1',
+        test_name: 'Complete Blood Count',
+        category: 'Haematology',
+        laboratory_test_parameters_test_type_id: [
+          {
+            id: 'p1',
+            test_type_id: 'tt1',
+            parameter_name: 'Haemoglobin',
+            unit_of_measurement: 'g/dL',
+            normal_reference_range: '12.0-16.0',
+            group_name: 'Erythrocytes',
+            display_order: 0,
+            is_active: true,
+          },
+        ],
+      },
+    ]);
+    prisma.laboratoryRequests.findFirst.mockResolvedValue(baseRequest);
+    const buffer = await ops.generateReportDocx('req1');
+    expect(Buffer.isBuffer(buffer)).toBe(true);
+    expect(buffer.length).toBeGreaterThan(1000);
   });
 });

@@ -12,6 +12,10 @@
       {
         "include": "modules/radiology/reporting/assets/**/*",
         "watchAssets": true
+      },
+      {
+        "include": "modules/laboratory/reporting/assets/**/*",
+        "watchAssets": true
       }
     ],
     "watchAssets": true
