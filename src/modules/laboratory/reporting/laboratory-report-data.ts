@@ -61,8 +61,16 @@ export type LaboratoryReportData = {
     reportedOn: string;
   };
   panels: LabPanel[];
-  pathologistRemark: string | null;
+  clinicalObservations: string | null;
+  professionalConclusion: string | null;
+  clinicalNotes: string | null;
   methodologyNote: string | null;
+  /** The staff member who performed/entered the results. */
+  performer: {
+    name: string | null;
+    title: string | null;
+  };
+  /** The staff member who verified the results (result-verification gate). */
   verifier: {
     name: string | null;
     qualification: string | null;

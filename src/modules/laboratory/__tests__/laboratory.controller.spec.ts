@@ -152,4 +152,26 @@ describe('LaboratoryController', () => {
     await controller.deleteImage('img1', user);
     expect(ops.deleteImage).toHaveBeenCalledWith('img1', 'u1');
   });
+
+  it('downloads the docx report with the right headers', async () => {
+    ops.generateReportDocx = jest.fn().mockResolvedValue(Buffer.from('docx-bytes'));
+    const res = { set: jest.fn() } as never;
+    await controller.downloadReportDocx(id, res);
+    expect(ops.generateReportDocx).toHaveBeenCalledWith(id);
+    expect((res as { set: jest.Mock }).set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      }),
+    );
+  });
+
+  it('downloads the pdf report with the right headers', async () => {
+    ops.generateReportPdf = jest.fn().mockResolvedValue(Buffer.from('pdf-bytes'));
+    const res = { set: jest.fn() } as never;
+    await controller.downloadReportPdf(id, res);
+    expect(ops.generateReportPdf).toHaveBeenCalledWith(id);
+    expect((res as { set: jest.Mock }).set).toHaveBeenCalledWith(
+      expect.objectContaining({ 'Content-Type': 'application/pdf' }),
+    );
+  });
 });

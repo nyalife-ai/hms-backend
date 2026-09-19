@@ -26,6 +26,7 @@ import {
 } from '../../catalog/clinical-service.util';
 import { resolveRevenueAccountCode } from '../../billing/domain/service-revenue-account';
 import { generateLaboratoryReportDocx } from '../reporting/laboratory-report.docx';
+import { convertDocxToPdf } from '../../../platform/documents/docx-to-pdf.util';
 import type { LabPanel, LaboratoryReportData } from '../reporting/laboratory-report-data';
 import type { ReportAttachment } from '../../../platform/documents/image-appendix.util';
 
@@ -2077,6 +2078,16 @@ export class LabOperationsUseCase {
         })
       : null;
 
+    const performedResults = r.laboratory_results_request_id
+      .filter((res) => res.performed_at)
+      .sort((a, b) => (b.performed_at?.getTime() ?? 0) - (a.performed_at?.getTime() ?? 0));
+    const performer = performedResults[0]?.performed_by
+      ? await this.prisma.staffProfiles.findFirst({
+          where: { user_id: performedResults[0].performed_by! },
+          include: { user: { include: { core_profiles_user_id: true } } },
+        })
+      : null;
+
     const settingsRows = await this.prisma.settings.findMany({
       where: { key: { in: [...FACILITY_SETTING_KEYS, 'lab_report_methodology_note'] } },
     });
@@ -2173,11 +2184,17 @@ export class LabOperationsUseCase {
         }),
       },
       panels,
-      pathologistRemark: parsed.observations?.trim() || parsed.conclusion?.trim() || null,
+      clinicalObservations: parsed.observations?.trim() || null,
+      professionalConclusion: parsed.conclusion?.trim() || null,
+      clinicalNotes: parsed.text?.trim() || null,
       // Facility-configurable via Settings("lab_report_methodology_note") — never a hardcoded default,
       // since inventing real clinical/methodology wording would misrepresent the lab's actual process.
       methodologyNote:
         settingsRows.find((s) => s.key === 'lab_report_methodology_note')?.value?.trim() || null,
+      performer: {
+        name: this.profileName(performer?.user.core_profiles_user_id) || null,
+        title: performer?.position || performer?.qualification || null,
+      },
       verifier: {
         name: this.profileName(verifier?.user.core_profiles_user_id) || null,
         qualification: verifier?.qualification || verifier?.position || null,
@@ -2187,5 +2204,16 @@ export class LabOperationsUseCase {
     };
 
     return generateLaboratoryReportDocx(data);
+  }
+
+  /**
+   * Renders the exact same document as `generateReportDocx`, converted to
+   * PDF server-side (LibreOffice) — this is the only PDF path so the two
+   * formats can never visually diverge the way a second, independent PDF
+   * renderer would risk.
+   */
+  public async generateReportPdf(requestId: string): Promise<Buffer> {
+    const docx = await this.generateReportDocx(requestId);
+    return convertDocxToPdf(docx);
   }
 }

@@ -142,20 +142,20 @@ function analyteRow(a: LaboratoryReportData['panels'][number]['analytes'][number
   });
 }
 
-function pathologistRemarkRow(remark: string): TableRow {
+function labeledInlineRow(label: string, text: string): TableRow {
   return new TableRow({
     children: [
       new TableCell({
         width: { size: 38, type: WidthType.PERCENTAGE },
         borders: ALL_NONE,
         margins: { top: 100, bottom: 40, left: 40, right: 40 },
-        children: [new Paragraph({ children: [new TextRun({ text: 'Pathologist Remark', bold: true, size: 18, color: TEXT_DARK })] })],
+        children: [new Paragraph({ children: [new TextRun({ text: label, bold: true, size: 18, color: TEXT_DARK })] })],
       }),
       new TableCell({
         columnSpan: 3,
         borders: ALL_NONE,
         margins: { top: 100, bottom: 40, left: 40, right: 40 },
-        children: [new Paragraph({ children: [new TextRun({ text: remark, size: 18, color: TEXT_DARK })] })],
+        children: [new Paragraph({ children: [new TextRun({ text, size: 18, color: TEXT_DARK })] })],
       }),
     ],
   });
@@ -391,18 +391,17 @@ export async function generateLaboratoryReportDocx(data: LaboratoryReportData): 
     thinRule(GOLD_RULE),
   ];
 
-  data.panels.forEach((panel, i) => {
+  data.panels.forEach((panel) => {
     body.push(...panelBlock(panel));
-    if (i === data.panels.length - 1 && data.pathologistRemark) {
-      body.push(
-        new Table({
-          width: { size: 100, type: WidthType.PERCENTAGE },
-          borders: ALL_NONE,
-          rows: [pathologistRemarkRow(data.pathologistRemark)],
-        }),
-      );
-    }
   });
+
+  const remarkRows: TableRow[] = [];
+  if (data.clinicalObservations) remarkRows.push(labeledInlineRow('Clinical Observations', data.clinicalObservations));
+  if (data.professionalConclusion) remarkRows.push(labeledInlineRow('Professional Conclusion', data.professionalConclusion));
+  if (data.clinicalNotes) remarkRows.push(labeledInlineRow('Clinical Notes', data.clinicalNotes));
+  if (remarkRows.length) {
+    body.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: ALL_NONE, rows: remarkRows }));
+  }
 
   if (data.methodologyNote) {
     body.push(
@@ -414,23 +413,51 @@ export async function generateLaboratoryReportDocx(data: LaboratoryReportData): 
     );
   }
 
-  body.push(new Paragraph({ spacing: { before: 400 }, children: [] }));
-  if (data.verifier.name) {
+  const signatureColumns: Array<{ name: string | null; lines: string[] }> = [
+    {
+      name: data.performer.name,
+      lines: ['Laboratory Technician Signature', data.performer.title || ''].filter(Boolean),
+    },
+    {
+      name: data.referringProvider.name,
+      lines: [data.referringProvider.department || '', 'Ordering physician · Department'].filter(Boolean),
+    },
+    {
+      name: data.verifier.name,
+      lines: ['Verified By', data.verifier.qualification || 'Result verification'].filter(Boolean),
+    },
+  ].filter((c) => c.name);
+
+  if (signatureColumns.length) {
+    body.push(new Paragraph({ spacing: { before: 400 }, children: [] }));
     body.push(
-      new Paragraph({
-        alignment: AlignmentType.RIGHT,
-        spacing: { after: 20 },
-        children: [new TextRun({ text: data.verifier.name, bold: true, size: 20, color: TEXT_DARK })],
+      new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: ALL_NONE,
+        rows: [
+          new TableRow({
+            children: signatureColumns.map(
+              (col) =>
+                new TableCell({
+                  width: { size: Math.floor(100 / signatureColumns.length), type: WidthType.PERCENTAGE },
+                  borders: ALL_NONE,
+                  verticalAlign: VerticalAlign.TOP,
+                  children: [
+                    new Paragraph({
+                      spacing: { after: 20 },
+                      children: [new TextRun({ text: col.name || '', bold: true, size: 18, color: TEXT_DARK })],
+                    }),
+                    ...col.lines.map(
+                      (line) =>
+                        new Paragraph({ children: [new TextRun({ text: line, size: 15, color: MUTED })] }),
+                    ),
+                  ],
+                }),
+            ),
+          }),
+        ],
       }),
     );
-    if (data.verifier.qualification) {
-      body.push(
-        new Paragraph({
-          alignment: AlignmentType.RIGHT,
-          children: [new TextRun({ text: data.verifier.qualification, size: 16, color: MUTED })],
-        }),
-      );
-    }
   }
 
   const appendix = buildImageAppendix('ATTACHED CLINICAL IMAGES', data.attachments);

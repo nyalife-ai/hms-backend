@@ -341,6 +341,21 @@ export class LaboratoryController {
     return new StreamableFile(buffer);
   }
 
+  @Get('requests/:id/report/pdf')
+  @Roles(...LAB_READ)
+  @ApiOperation({ summary: 'Download the standard clinical laboratory report as a PDF' })
+  async downloadReportPdf(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const buffer = await this.ops.generateReportPdf(id);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="laboratory-report-${id}.pdf"`,
+    });
+    return new StreamableFile(buffer);
+  }
+
   @Post('requests/:id/release-to-doctor')
   @Roles(...LAB_VERIFY)
   @ApiOperation({
